@@ -3488,6 +3488,139 @@ select.schema-input {
     transform: translateY(1px);
 }
 
+/* Repo item editors ------------------------------------------------------- */
+.modal-editor {
+    max-width: 640px;
+}
+
+.modal-editor-tall {
+    width: 80vw;
+    height: 80vh;
+    max-width: 980px;
+    max-height: 880px;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-doc-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+}
+
+.doc-editor {
+    flex: 1;
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    resize: none;
+    min-height: 0;
+}
+
+.doc-preview {
+    flex: 1;
+    overflow: auto;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 22px;
+    font-family:
+        'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    color: var(--text-1);
+    margin: 0;
+}
+
+.modal-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.modal-title-icon {
+    color: var(--accent-cyan);
+    flex-shrink: 0;
+}
+
+.modal-field-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.connection-field-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.connection-field-grid .modal-field {
+    margin-top: 0 !important;
+}
+
+/* Context editor table */
+.ctx-table {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    overflow: hidden;
+}
+
+.ctx-row {
+    display: grid;
+    grid-template-columns: 1.2fr 1.5fr auto 28px;
+    gap: 6px;
+    padding: 4px 6px;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+}
+
+.ctx-row:last-child {
+    border-bottom: none;
+}
+
+.ctx-header {
+    background: var(--bg-1);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-3);
+    font-weight: 700;
+    padding: 7px 10px;
+}
+
+.ctx-secret-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-3);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    transition: border-color 80ms ease, background 80ms ease;
+}
+
+.ctx-secret-toggle:hover {
+    background: var(--bg-3);
+}
+
+.ctx-empty {
+    padding: 16px;
+    background: var(--bg-2);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--text-3);
+    font-size: 12px;
+    text-align: center;
+}
+
 .modal-field-hint {
     margin-top: 4px;
     font-size: 11px;

@@ -25,8 +25,18 @@ import VisualMapperModal, {
     type MapperState,
     type MappingRow,
 } from './canvas/VisualMapperModal';
+import ConnectionEditorModal from './workflow-ui/editors/ConnectionEditorModal';
+import ContextEditorModal from './workflow-ui/editors/ContextEditorModal';
+import DocumentEditorModal from './workflow-ui/editors/DocumentEditorModal';
+import RoutineEditorModal from './workflow-ui/editors/RoutineEditorModal';
 import type { Column } from './pipeline-types';
 import type { ComponentDef, NodeKind as PaletteKind } from './workflow-ui/palette-data';
+import type {
+    ConnectionPayload,
+    ContextPayload,
+    DocumentPayload,
+    RoutinePayload,
+} from './repo-types';
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData } from './pipeline-types';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
@@ -651,6 +661,119 @@ export default function App() {
         [repo],
     );
 
+    // Repo-item editor modal state (connections / contexts / docs / routines)
+    type EditorState =
+        | { kind: 'connection'; itemId: string | null; parentId: string }
+        | { kind: 'context'; itemId: string | null; parentId: string }
+        | { kind: 'document'; itemId: string | null; parentId: string }
+        | { kind: 'routine'; itemId: string | null; parentId: string }
+        | null;
+    const [repoEditor, setRepoEditor] = useState<EditorState>(null);
+
+    const handleNewConnection = useCallback(
+        (parentId: string) => setRepoEditor({ kind: 'connection', itemId: null, parentId }),
+        [],
+    );
+    const handleNewContext = useCallback(
+        (parentId: string) => setRepoEditor({ kind: 'context', itemId: null, parentId }),
+        [],
+    );
+    const handleNewDocument = useCallback(
+        (parentId: string) => setRepoEditor({ kind: 'document', itemId: null, parentId }),
+        [],
+    );
+    const handleNewRoutine = useCallback(
+        (parentId: string) => setRepoEditor({ kind: 'routine', itemId: null, parentId }),
+        [],
+    );
+
+    const handleOpenRepoItem = useCallback((item: RepoItem) => {
+        if (item.type === 'connection')
+            setRepoEditor({
+                kind: 'connection',
+                itemId: item.id,
+                parentId: item.parentId ?? 'connections',
+            });
+        else if (item.type === 'context')
+            setRepoEditor({
+                kind: 'context',
+                itemId: item.id,
+                parentId: item.parentId ?? 'contexts',
+            });
+        else if (item.type === 'doc')
+            setRepoEditor({
+                kind: 'document',
+                itemId: item.id,
+                parentId: item.parentId ?? 'docs',
+            });
+        else if (item.type === 'routine')
+            setRepoEditor({
+                kind: 'routine',
+                itemId: item.id,
+                parentId: item.parentId ?? 'routines',
+            });
+    }, []);
+
+    const editingRepoItem = useMemo(
+        () => (repoEditor?.itemId ? repo.find(i => i.id === repoEditor.itemId) ?? null : null),
+        [repoEditor, repo],
+    );
+
+    const upsertRepoItem = useCallback(
+        (
+            type: 'connection' | 'context' | 'doc' | 'routine',
+            name: string,
+            payload: unknown,
+        ) => {
+            if (!repoEditor) return;
+            if (repoEditor.itemId) {
+                setRepo(r =>
+                    r.map(i =>
+                        i.id === repoEditor.itemId
+                            ? { ...i, name, payload: payload as RepoItem['payload'] }
+                            : i,
+                    ),
+                );
+            } else {
+                const id =
+                    type[0] +
+                    '_' +
+                    Date.now().toString(36) +
+                    '_' +
+                    Math.random().toString(36).slice(2, 6);
+                setRepo(r => [
+                    ...r,
+                    {
+                        id,
+                        name,
+                        type,
+                        parentId: repoEditor.parentId,
+                        payload: payload as RepoItem['payload'],
+                    },
+                ]);
+            }
+            setRepoEditor(null);
+        },
+        [repoEditor],
+    );
+
+    const handleSaveConnection = useCallback(
+        (name: string, payload: ConnectionPayload) => upsertRepoItem('connection', name, payload),
+        [upsertRepoItem],
+    );
+    const handleSaveContext = useCallback(
+        (name: string, payload: ContextPayload) => upsertRepoItem('context', name, payload),
+        [upsertRepoItem],
+    );
+    const handleSaveDocument = useCallback(
+        (name: string, payload: DocumentPayload) => upsertRepoItem('doc', name, payload),
+        [upsertRepoItem],
+    );
+    const handleSaveRoutine = useCallback(
+        (name: string, payload: RoutinePayload) => upsertRepoItem('routine', name, payload),
+        [upsertRepoItem],
+    );
+
     const openJobIds = useMemo(() => new Set(jobs.map(j => j.id)), [jobs]);
 
     return (
@@ -676,8 +799,13 @@ export default function App() {
                     activeJobId={activeJobId}
                     openJobIds={openJobIds}
                     onOpenPipeline={handleOpenPipeline}
+                    onOpenItem={handleOpenRepoItem}
                     onNewPipeline={openNewPipelineModal}
                     onNewFolder={handleNewFolderInRepo}
+                    onNewConnection={handleNewConnection}
+                    onNewContext={handleNewContext}
+                    onNewDocument={handleNewDocument}
+                    onNewRoutine={handleNewRoutine}
                     onRenameRepoItem={handleRenameRepoItem}
                     onDuplicateRepoItem={handleDuplicateRepoItem}
                     onDeleteRepoItem={handleDeleteRepoItem}
@@ -747,6 +875,35 @@ export default function App() {
                     edge={editingEdge}
                     onSave={handleEdgeEditSave}
                     onCancel={() => setEditingEdgeId(null)}
+                />
+            ) : null}
+
+            {repoEditor?.kind === 'connection' ? (
+                <ConnectionEditorModal
+                    item={editingRepoItem}
+                    onSave={handleSaveConnection}
+                    onCancel={() => setRepoEditor(null)}
+                />
+            ) : null}
+            {repoEditor?.kind === 'context' ? (
+                <ContextEditorModal
+                    item={editingRepoItem}
+                    onSave={handleSaveContext}
+                    onCancel={() => setRepoEditor(null)}
+                />
+            ) : null}
+            {repoEditor?.kind === 'document' ? (
+                <DocumentEditorModal
+                    item={editingRepoItem}
+                    onSave={handleSaveDocument}
+                    onCancel={() => setRepoEditor(null)}
+                />
+            ) : null}
+            {repoEditor?.kind === 'routine' ? (
+                <RoutineEditorModal
+                    item={editingRepoItem}
+                    onSave={handleSaveRoutine}
+                    onCancel={() => setRepoEditor(null)}
                 />
             ) : null}
 

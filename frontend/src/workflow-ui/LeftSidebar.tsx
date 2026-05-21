@@ -11,8 +11,13 @@ type Props = {
     activeJobId: string;
     openJobIds: Set<string>;
     onOpenPipeline: (id: string) => void;
+    onOpenItem: (item: RepoItem) => void;
     onNewPipeline: (parentId: string) => void;
     onNewFolder: (parentId: string) => void;
+    onNewConnection: (parentId: string) => void;
+    onNewContext: (parentId: string) => void;
+    onNewDocument: (parentId: string) => void;
+    onNewRoutine: (parentId: string) => void;
     onRenameRepoItem: (id: string, newName: string) => void;
     onDuplicateRepoItem: (id: string) => void;
     onDeleteRepoItem: (id: string) => void;
@@ -23,8 +28,13 @@ export default function LeftSidebar({
     activeJobId,
     openJobIds,
     onOpenPipeline,
+    onOpenItem,
     onNewPipeline,
     onNewFolder,
+    onNewConnection,
+    onNewContext,
+    onNewDocument,
+    onNewRoutine,
     onRenameRepoItem,
     onDuplicateRepoItem,
     onDeleteRepoItem,
@@ -64,8 +74,13 @@ export default function LeftSidebar({
                         activeJobId={activeJobId}
                         openJobIds={openJobIds}
                         onOpenPipeline={onOpenPipeline}
+                        onOpenItem={onOpenItem}
                         onNewPipeline={onNewPipeline}
                         onNewFolder={onNewFolder}
+                        onNewConnection={onNewConnection}
+                        onNewContext={onNewContext}
+                        onNewDocument={onNewDocument}
+                        onNewRoutine={onNewRoutine}
                         onRename={onRenameRepoItem}
                         onDuplicate={onDuplicateRepoItem}
                         onDelete={onDeleteRepoItem}

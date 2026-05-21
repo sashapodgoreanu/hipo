@@ -28,8 +28,13 @@ type Props = {
     activeJobId: string;
     openJobIds: Set<string>;
     onOpenPipeline: (id: string) => void;
+    onOpenItem: (item: RepoItem) => void;
     onNewPipeline: (parentId: string) => void;
     onNewFolder: (parentId: string) => void;
+    onNewConnection: (parentId: string) => void;
+    onNewContext: (parentId: string) => void;
+    onNewDocument: (parentId: string) => void;
+    onNewRoutine: (parentId: string) => void;
     onRename: (id: string, newName: string) => void;
     onDuplicate: (id: string) => void;
     onDelete: (id: string) => void;
@@ -71,12 +76,28 @@ export default function ProjectTree(props: Props) {
         activeJobId,
         openJobIds,
         onOpenPipeline,
+        onOpenItem,
         onNewPipeline,
         onNewFolder,
+        onNewConnection,
+        onNewContext,
+        onNewDocument,
+        onNewRoutine,
         onRename,
         onDuplicate,
         onDelete,
     } = props;
+
+    // Walk up to find which root folder this item lives under.
+    const rootFolderOf = (itemId: string): string | null => {
+        let current = items.find(i => i.id === itemId);
+        while (current) {
+            if (current.parentId === 'root') return current.id;
+            if (!current.parentId) return null;
+            current = items.find(i => i.id === current!.parentId);
+        }
+        return null;
+    };
 
     const [expanded, setExpanded] = useState<Set<string>>(
         () => new Set(items.filter(i => i.type === 'project' || i.type === 'folder').map(i => i.id)),
@@ -130,43 +151,93 @@ export default function ProjectTree(props: Props) {
         });
     };
 
-    const buildFolderMenu = (item: RepoItem): MenuItem[] => [
-        { kind: 'header', key: 'h', label: TYPE_LABEL[item.type] + ': ' + item.name },
-        {
-            kind: 'item',
-            key: 'new-pipeline',
-            label: 'New pipeline…',
-            icon: <FileCog size={ICON_SIZE} />,
-            onClick: () => onNewPipeline(item.id),
-        },
-        {
+    const buildFolderMenu = (item: RepoItem): MenuItem[] => {
+        const root = item.type === 'project' ? null : rootFolderOf(item.id) ?? item.id;
+        const isPipelinesScope = item.id === 'pipelines' || root === 'pipelines';
+        const isConnectionsScope = item.id === 'connections' || root === 'connections';
+        const isContextsScope = item.id === 'contexts' || root === 'contexts';
+        const isRoutinesScope = item.id === 'routines' || root === 'routines';
+        const isDocsScope = item.id === 'docs' || root === 'docs';
+
+        const newItems: MenuItem[] = [];
+        if (item.type === 'project' || isPipelinesScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-pipeline',
+                label: 'New pipeline…',
+                icon: <FileCog size={ICON_SIZE} />,
+                onClick: () => onNewPipeline(item.id),
+            });
+        }
+        if (item.type === 'project' || isConnectionsScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-connection',
+                label: 'New connection…',
+                icon: <FileCog size={ICON_SIZE} />,
+                onClick: () => onNewConnection(item.id),
+            });
+        }
+        if (item.type === 'project' || isContextsScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-context',
+                label: 'New context…',
+                icon: <FileCog size={ICON_SIZE} />,
+                onClick: () => onNewContext(item.id),
+            });
+        }
+        if (item.type === 'project' || isRoutinesScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-routine',
+                label: 'New routine…',
+                icon: <FileCog size={ICON_SIZE} />,
+                onClick: () => onNewRoutine(item.id),
+            });
+        }
+        if (item.type === 'project' || isDocsScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-document',
+                label: 'New document…',
+                icon: <FileCog size={ICON_SIZE} />,
+                onClick: () => onNewDocument(item.id),
+            });
+        }
+        newItems.push({
             kind: 'item',
             key: 'new-folder',
             label: 'New folder',
             icon: <FolderPlus size={ICON_SIZE} />,
             onClick: () => onNewFolder(item.id),
-        },
-        { kind: 'separator', key: 's1' },
-        {
-            kind: 'item',
-            key: 'rename',
-            label: 'Rename',
-            icon: <Pencil size={ICON_SIZE} />,
-            shortcut: 'F2',
-            onClick: () => startRename(item.id),
-            disabled: item.type === 'project',
-        },
-        {
-            kind: 'item',
-            key: 'delete',
-            label: 'Delete',
-            icon: <Trash2 size={ICON_SIZE} />,
-            shortcut: 'Del',
-            onClick: () => onDelete(item.id),
-            danger: true,
-            disabled: item.type === 'project',
-        },
-    ];
+        });
+
+        return [
+            { kind: 'header', key: 'h', label: TYPE_LABEL[item.type] + ': ' + item.name },
+            ...newItems,
+            { kind: 'separator', key: 's1' },
+            {
+                kind: 'item',
+                key: 'rename',
+                label: 'Rename',
+                icon: <Pencil size={ICON_SIZE} />,
+                shortcut: 'F2',
+                onClick: () => startRename(item.id),
+                disabled: item.type === 'project',
+            },
+            {
+                kind: 'item',
+                key: 'delete',
+                label: 'Delete',
+                icon: <Trash2 size={ICON_SIZE} />,
+                shortcut: 'Del',
+                onClick: () => onDelete(item.id),
+                danger: true,
+                disabled: item.type === 'project',
+            },
+        ];
+    };
 
     const buildItemMenu = (item: RepoItem): MenuItem[] => [
         { kind: 'header', key: 'h', label: TYPE_LABEL[item.type] + ': ' + item.name },
@@ -227,9 +298,11 @@ export default function ProjectTree(props: Props) {
             if (isRenaming) return;
             if (isContainer) toggle(item.id);
             else if (item.type === 'pipeline') onOpenPipeline(item.id);
+            else onOpenItem(item);
         };
         const onDoubleClick = () => {
             if (item.type === 'pipeline') onOpenPipeline(item.id);
+            else if (!isContainer) onOpenItem(item);
         };
 
         return (
