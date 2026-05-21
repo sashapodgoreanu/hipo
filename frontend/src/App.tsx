@@ -507,7 +507,10 @@ export default function App() {
         <div className="app">
             <header className="topbar">
                 <div className="brand">
-                    <span className="brand-mark">◇</span> Duckle
+                    <span className="brand-mark" aria-hidden="true">
+                        D
+                    </span>
+                    Duckle
                 </div>
                 <div className="topbar-sep" aria-hidden="true" />
                 <EngineSelector value={engine} onChange={setEngine} />
