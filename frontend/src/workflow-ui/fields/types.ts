@@ -52,6 +52,10 @@ export type AutodetectResult = {
     sampleRows?: Record<string, unknown>[];
 };
 
+export type AutodetectFn = (
+    props: Record<string, unknown>,
+) => Promise<AutodetectResult>;
+
 export type PortDef = {
     id: string;
     label: string;
@@ -71,7 +75,7 @@ export type ComponentManifest = {
     description?: string;
     sections: FormSection[];
     schemaSource: SchemaSource;
-    autodetect?: () => Promise<AutodetectResult>;
+    autodetect?: AutodetectFn;
     ports?: NodePorts;
 };
 

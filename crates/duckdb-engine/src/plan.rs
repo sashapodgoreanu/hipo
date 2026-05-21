@@ -47,6 +47,49 @@ pub struct CompiledPipeline {
     pub leaves: Vec<String>,
 }
 
+/// Compile only the subgraph upstream of (and including) `target_id`.
+/// Sinks downstream of the target are dropped — the target becomes the
+/// new "leaf" whose preview the caller can fetch. Used by the
+/// "Run from here" right-click action.
+pub fn compile_partial(
+    pipeline: &PipelineDoc,
+    target_id: &str,
+) -> Result<CompiledPipeline, EngineError> {
+    // Make sure the target actually exists.
+    if !pipeline.nodes.iter().any(|n| n.id == target_id) {
+        return Err(EngineError::Config(format!(
+            "Target node '{}' not found",
+            target_id
+        )));
+    }
+    // BFS backwards from target along data edges.
+    let mut keep: std::collections::HashSet<String> = std::collections::HashSet::new();
+    keep.insert(target_id.to_string());
+    let mut frontier = vec![target_id.to_string()];
+    while let Some(id) = frontier.pop() {
+        for edge in pipeline.edges.iter().filter(|e| is_data_edge(e) && e.target == id) {
+            if keep.insert(edge.source.clone()) {
+                frontier.push(edge.source.clone());
+            }
+        }
+    }
+    let filtered = PipelineDoc {
+        nodes: pipeline
+            .nodes
+            .iter()
+            .filter(|n| keep.contains(&n.id))
+            .cloned()
+            .collect(),
+        edges: pipeline
+            .edges
+            .iter()
+            .filter(|e| keep.contains(&e.source) && keep.contains(&e.target))
+            .cloned()
+            .collect(),
+    };
+    compile(&filtered)
+}
+
 pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> {
     let node_index: HashMap<&str, &PipelineNode> = pipeline
         .nodes

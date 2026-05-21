@@ -19,7 +19,13 @@ import EngineSelector, { type EngineId } from './workflow-ui/EngineSelector';
 import { useTheme } from './theme';
 import { loadPersisted, savePersisted } from './persistence';
 import { resolveOutputSchema } from './schema-resolve';
-import { runPipeline, type RunResult } from './tauri-bridge';
+import {
+    cancelPipeline,
+    runPipeline,
+    runPipelinePartial,
+    type PipelineEvent,
+    type RunResult,
+} from './tauri-bridge';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
 import {
     getWorkspacePath,
@@ -520,29 +526,88 @@ export default function App() {
 
     const [runResult, setRunResult] = useState<RunResult | null>(null);
 
+    const handleEvent = useCallback(
+        (evt: PipelineEvent) => {
+            setRunResult(prev => {
+                const next: RunResult = prev
+                    ? { ...prev, nodes: { ...prev.nodes } }
+                    : {
+                          status: 'ok',
+                          duration_ms: 0,
+                          nodes: {},
+                          preview: [],
+                      };
+                switch (evt.type) {
+                    case 'started':
+                        return { status: 'ok', duration_ms: 0, nodes: {}, preview: [] };
+                    case 'stage_started':
+                        next.nodes[evt.node_id] = { status: 'running', kind: evt.kind };
+                        break;
+                    case 'stage_finished':
+                        next.nodes[evt.node_id] = {
+                            status: evt.status,
+                            kind: evt.kind,
+                            rows: evt.rows,
+                            duration_ms: evt.duration_ms,
+                            error: evt.error,
+                        };
+                        break;
+                    case 'cancelled':
+                        next.status = 'cancelled';
+                        break;
+                    case 'finished':
+                        next.status = evt.status;
+                        next.duration_ms = evt.duration_ms;
+                        break;
+                }
+                return next;
+            });
+        },
+        [],
+    );
+
+    const finishRun = useCallback(
+        (start: number, result: RunResult | null) => {
+            if (result) {
+                setRunResult(result);
+            } else {
+                setRunResult({
+                    status: 'error',
+                    duration_ms: Math.round(performance.now() - start),
+                    nodes: {},
+                    preview: [],
+                    error:
+                        'Pipeline execution is only available in the desktop app. Launch with `cargo run -p duckle-desktop`.',
+                });
+            }
+        },
+        [],
+    );
+
     const handleRun = useCallback(() => {
         setIsRunning(true);
         setRunResult(null);
         const start = performance.now();
-        void runPipeline(nodes, edges)
-            .then(result => {
-                if (result) {
-                    setRunResult(result);
-                } else {
-                    setRunResult({
-                        status: 'error',
-                        duration_ms: Math.round(performance.now() - start),
-                        nodes: {},
-                        preview: [],
-                        error:
-                            'Pipeline execution is only available in the desktop app. Launch with `cargo run -p duckle-desktop`.',
-                    });
-                }
-            })
+        void runPipeline(nodes, edges, handleEvent)
+            .then(result => finishRun(start, result))
             .finally(() => setIsRunning(false));
-    }, [nodes, edges]);
+    }, [nodes, edges, handleEvent, finishRun]);
 
-    const handleStop = useCallback(() => setIsRunning(false), []);
+    const handleRunFromHere = useCallback(
+        (nodeId: string) => {
+            setIsRunning(true);
+            setRunResult(null);
+            const start = performance.now();
+            void runPipelinePartial(nodes, edges, nodeId, handleEvent)
+                .then(result => finishRun(start, result))
+                .finally(() => setIsRunning(false));
+        },
+        [nodes, edges, handleEvent, finishRun],
+    );
+
+    const handleStop = useCallback(() => {
+        void cancelPipeline();
+    }, []);
 
     const nodeLabels = useMemo(() => {
         const m: Record<string, string> = {};
@@ -686,6 +751,7 @@ export default function App() {
                 }
 
                 case 'run-from-here':
+                    handleRunFromHere(nodeId);
                     break;
 
                 case 'copy-id':
@@ -700,7 +766,7 @@ export default function App() {
                     break;
             }
         },
-        [nodes, selectedId, setNodes, setEdges, markDirty],
+        [nodes, selectedId, setNodes, setEdges, markDirty, handleRunFromHere],
     );
 
     const handlePaneAction = useCallback(

@@ -1,4 +1,4 @@
-import type { ComponentManifest, AutodetectResult, AutodetectFn } from './types';
+import type { ComponentManifest, AutodetectFn } from './types';
 import type { Column } from '../../pipeline-types';
 import { synthesizeManifest, portsForComponent } from './manifest-synth';
 import { PALETTE } from '../palette-data';
@@ -46,12 +46,6 @@ const JSON_SAMPLE_SCHEMA: Column[] = [
     { name: 'received_at', type: 'timestamp', nullable: false },
 ];
 
-function mockAutodetect(schema: Column[], rows?: Record<string, unknown>[]): AutodetectFn {
-    return async () => {
-        await new Promise(r => setTimeout(r, 300));
-        return { columns: schema, sampleRows: rows };
-    };
-}
 
 function realOrMockAutodetect(
     format: string,

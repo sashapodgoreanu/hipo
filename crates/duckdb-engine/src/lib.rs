@@ -16,6 +16,7 @@ use duckle_metadata::{Column, DataType};
 use duckle_plugin_sdk::{Inspection, InspectError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use thiserror::Error;
@@ -51,6 +52,7 @@ const PREVIEW_LIMIT: usize = 8;
 #[derive(Debug, Clone)]
 pub struct DuckdbEngine {
     conn: Arc<Mutex<Connection>>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl DuckdbEngine {
@@ -64,7 +66,20 @@ impl DuckdbEngine {
         let _ = conn.execute_batch("INSTALL json; LOAD json;");
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            cancel: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Request that any in-flight pipeline run halts at the next stage
+    /// boundary. Single-stage queries can't be interrupted mid-flight
+    /// in this build; they finish before we honor the flag.
+    pub fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Clear a pending cancel — done at the start of every new run.
+    pub fn clear_cancel(&self) {
+        self.cancel.store(false, Ordering::Relaxed);
     }
 
     /// Run an arbitrary closure with the underlying connection. Locked
@@ -370,6 +385,37 @@ pub(crate) fn sql_escape(s: &str) -> String {
 
 // ---- Pipeline execution ------------------------------------------------
 
+/// Streaming events emitted while a pipeline runs. Tauri's `Channel`
+/// ferries these to the frontend so the UI can light up node badges
+/// stage-by-stage without waiting for the final result.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PipelineEvent {
+    Started {
+        total_stages: u32,
+    },
+    StageStarted {
+        node_id: String,
+        label: String,
+        kind: String,
+    },
+    StageFinished {
+        node_id: String,
+        kind: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rows: Option<u64>,
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    Cancelled,
+    Finished {
+        status: String,
+        duration_ms: u64,
+    },
+}
+
 #[derive(Debug, Serialize)]
 pub struct RunResult {
     pub status: String,
@@ -403,12 +449,32 @@ pub struct NodePreview {
 const PREVIEW_ROW_LIMIT: usize = 50;
 
 impl DuckdbEngine {
-    /// Execute a pipeline end-to-end: compile to SQL, create temp views
-    /// for every non-sink, run each sink, and snapshot a preview of any
-    /// leaf node that has no downstream sink.
+    /// Execute a pipeline end-to-end with no event stream.
     pub fn execute_pipeline(&self, doc: &PipelineDoc) -> RunResult {
+        self.execute_pipeline_with_events(doc, None::<&str>, |_| {})
+    }
+
+    /// Execute a pipeline emitting [`PipelineEvent`]s through the given
+    /// callback. If `target` is `Some`, runs only the subgraph upstream
+    /// of (and including) that node — the "run from here" path.
+    pub fn execute_pipeline_with_events<F>(
+        &self,
+        doc: &PipelineDoc,
+        target: Option<&str>,
+        mut on_event: F,
+    ) -> RunResult
+    where
+        F: FnMut(PipelineEvent),
+    {
         let total_start = Instant::now();
-        let compiled = match plan::compile(doc) {
+        self.clear_cancel();
+
+        let compiled_result = if let Some(target_id) = target {
+            plan::compile_partial(doc, target_id)
+        } else {
+            plan::compile(doc)
+        };
+        let compiled = match compiled_result {
             Ok(c) => c,
             Err(e) => {
                 return RunResult {
@@ -421,11 +487,16 @@ impl DuckdbEngine {
             }
         };
 
+        on_event(PipelineEvent::Started {
+            total_stages: compiled.stages.len() as u32,
+        });
+
         let mut nodes: std::collections::BTreeMap<String, NodeRunStatus> = Default::default();
         let mut overall_error: Option<String> = None;
+        let mut was_cancelled = false;
 
-        // First pass: drop any leftover views from a prior run so we
-        // don't read stale data.
+        // Drop any leftover views from a prior run so we don't read
+        // stale data.
         self.with_connection(|conn| {
             for stage in &compiled.stages {
                 if stage.kind == StageKind::View {
@@ -438,10 +509,26 @@ impl DuckdbEngine {
         });
 
         for stage in &compiled.stages {
+            if self.cancel.load(Ordering::Relaxed) {
+                was_cancelled = true;
+                on_event(PipelineEvent::Cancelled);
+                break;
+            }
+
+            let kind_label = match stage.kind {
+                StageKind::Sink => "sink",
+                StageKind::View => "view",
+            };
+
+            on_event(PipelineEvent::StageStarted {
+                node_id: stage.node_id.clone(),
+                label: stage.label.clone(),
+                kind: kind_label.into(),
+            });
+
             let started = Instant::now();
             let result = self.with_connection(|conn| {
                 if stage.kind == StageKind::Sink {
-                    // execute() returns rows-affected for INSERTs/COPYs.
                     let rows = conn.execute(&stage.sql, [])?;
                     Ok::<u64, duckdb::Error>(rows as u64)
                 } else {
@@ -450,25 +537,32 @@ impl DuckdbEngine {
                 }
             });
             let elapsed_ms = started.elapsed().as_millis() as u64;
+
             match result {
                 Ok(rows) => {
+                    let rows_opt = if stage.kind == StageKind::Sink {
+                        Some(rows)
+                    } else {
+                        None
+                    };
                     nodes.insert(
                         stage.node_id.clone(),
                         NodeRunStatus {
                             status: "ok".into(),
-                            kind: Some(match stage.kind {
-                                StageKind::Sink => "sink".into(),
-                                StageKind::View => "view".into(),
-                            }),
-                            rows: if stage.kind == StageKind::Sink {
-                                Some(rows)
-                            } else {
-                                None
-                            },
+                            kind: Some(kind_label.into()),
+                            rows: rows_opt,
                             duration_ms: Some(elapsed_ms),
                             error: None,
                         },
                     );
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: kind_label.into(),
+                        status: "ok".into(),
+                        rows: rows_opt,
+                        duration_ms: elapsed_ms,
+                        error: None,
+                    });
                 }
                 Err(err) => {
                     let msg = err.to_string();
@@ -476,15 +570,20 @@ impl DuckdbEngine {
                         stage.node_id.clone(),
                         NodeRunStatus {
                             status: "error".into(),
-                            kind: Some(match stage.kind {
-                                StageKind::Sink => "sink".into(),
-                                StageKind::View => "view".into(),
-                            }),
+                            kind: Some(kind_label.into()),
                             rows: None,
                             duration_ms: Some(elapsed_ms),
                             error: Some(msg.clone()),
                         },
                     );
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: kind_label.into(),
+                        status: "error".into(),
+                        rows: None,
+                        duration_ms: elapsed_ms,
+                        error: Some(msg.clone()),
+                    });
                     overall_error.get_or_insert(format!("{}: {}", stage.label, msg));
                     break;
                 }
@@ -493,7 +592,7 @@ impl DuckdbEngine {
 
         // Collect previews for leaves that successfully ran a view.
         let mut preview = Vec::new();
-        if overall_error.is_none() {
+        if overall_error.is_none() && !was_cancelled {
             for leaf_id in &compiled.leaves {
                 let Some(stage) = compiled.stages.iter().find(|s| s.node_id == *leaf_id) else {
                     continue;
@@ -507,8 +606,21 @@ impl DuckdbEngine {
             }
         }
 
+        let final_status = if was_cancelled {
+            "cancelled"
+        } else if overall_error.is_some() {
+            "error"
+        } else {
+            "ok"
+        };
+
+        on_event(PipelineEvent::Finished {
+            status: final_status.into(),
+            duration_ms: total_start.elapsed().as_millis() as u64,
+        });
+
         RunResult {
-            status: if overall_error.is_some() { "error".into() } else { "ok".into() },
+            status: final_status.into(),
             duration_ms: total_start.elapsed().as_millis() as u64,
             nodes,
             preview,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Clock, FileText, Info, X } from 'lucide-react';
+import { Clock, Info, X } from 'lucide-react';
 import type { FileFilter } from '../../tauri-dialog';
 
 type Props = {

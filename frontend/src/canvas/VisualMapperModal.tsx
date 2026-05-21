@@ -7,7 +7,6 @@ import {
     Plus,
     RotateCcw,
     Save,
-    Trash2,
     X,
     Zap,
 } from 'lucide-react';

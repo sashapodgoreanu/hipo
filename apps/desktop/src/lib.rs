@@ -4,12 +4,13 @@
 //! invoke commands to the frontend.
 
 use duckle_connectors::CsvConnector;
-use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc, RunResult};
+use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc, PipelineEvent, RunResult};
 use duckle_metadata::Schema;
 use duckle_plugin_sdk::{InspectError, SchemaInspector};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::sync::OnceLock;
+use tauri::ipc::Channel;
 use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -26,7 +27,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             autodetect_schema,
-            run_pipeline
+            run_pipeline,
+            run_pipeline_partial,
+            cancel_pipeline
         ])
         .run(tauri::generate_context!())
         .expect("error while running duckle");
@@ -112,10 +115,51 @@ fn format_inspect_error(err: InspectError) -> String {
 /// nodes + edges as JSON; compiles to SQL; executes via DuckDB; returns
 /// per-node status + preview rows for any leaf node that didn't feed a
 /// sink.
+///
+/// `on_event` is a Tauri Channel — every stage start / stage finish /
+/// cancellation is pushed through it so the frontend can light up
+/// status badges in real time.
 #[tauri::command]
-async fn run_pipeline(pipeline: PipelineDoc) -> Result<RunResult, String> {
+async fn run_pipeline(
+    pipeline: PipelineDoc,
+    on_event: Channel<PipelineEvent>,
+) -> Result<RunResult, String> {
     let engine = engine()?;
-    tokio::task::spawn_blocking(move || engine.execute_pipeline(&pipeline))
-        .await
-        .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        engine.execute_pipeline_with_events(&pipeline, None, |evt| {
+            let _ = on_event.send(evt);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Same as `run_pipeline` but only executes the subgraph upstream of
+/// (and including) `target_node_id`. The target becomes the leaf and
+/// returns a preview.
+#[tauri::command]
+async fn run_pipeline_partial(
+    pipeline: PipelineDoc,
+    target_node_id: String,
+    on_event: Channel<PipelineEvent>,
+) -> Result<RunResult, String> {
+    let engine = engine()?;
+    let target = target_node_id;
+    tokio::task::spawn_blocking(move || {
+        engine.execute_pipeline_with_events(&pipeline, Some(target.as_str()), |evt| {
+            let _ = on_event.send(evt);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Signal the engine to stop at the next stage boundary. The current
+/// stage (if mid-flight) still finishes; subsequent stages are
+/// skipped.
+#[tauri::command]
+fn cancel_pipeline() -> Result<(), String> {
+    let engine = engine()?;
+    engine.request_cancel();
+    Ok(())
 }

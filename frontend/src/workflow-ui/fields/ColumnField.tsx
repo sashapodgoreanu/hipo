@@ -8,7 +8,7 @@ type Props = {
     onChange: (v: string) => void;
 };
 
-export function ColumnField({ field, value, onChange }: Props) {
+export function ColumnField({ field: _field, value, onChange }: Props) {
     const { upstreamSchema } = useContext(FieldContext);
 
     if (upstreamSchema.length === 0) {
