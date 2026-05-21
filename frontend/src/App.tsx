@@ -21,6 +21,7 @@ import { loadPersisted, savePersisted } from './persistence';
 import { resolveOutputSchema } from './schema-resolve';
 import {
     cancelPipeline,
+    compilePipelineSql,
     runPipeline,
     runPipelinePartial,
     type PipelineEvent,
@@ -652,6 +653,66 @@ export default function App() {
         setValidateRequest(n => n + 1);
     }, []);
 
+    const activeJobName = useMemo(
+        () => jobs.find(j => j.id === activeJobId)?.name ?? 'pipeline',
+        [jobs, activeJobId],
+    );
+
+    const downloadFile = useCallback((filename: string, content: string, mime: string) => {
+        const blob = new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, []);
+
+    const buildSqlText = useCallback(async (): Promise<string | null> => {
+        const stages = await compilePipelineSql(nodes, edges);
+        if (!stages) return null;
+        return stages
+            .map(
+                s =>
+                    `-- ${s.kind.toUpperCase()} · ${s.label} (${s.node_id})\n${s.sql};\n`,
+            )
+            .join('\n');
+    }, [nodes, edges]);
+
+    const handleCopySql = useCallback(async () => {
+        const text = await buildSqlText();
+        if (!text) {
+            await navigator.clipboard?.writeText(
+                '-- SQL compilation requires the desktop app (cargo run -p duckle-desktop).',
+            );
+            return;
+        }
+        await navigator.clipboard?.writeText(text);
+    }, [buildSqlText]);
+
+    const handleExportSql = useCallback(async () => {
+        const text = await buildSqlText();
+        if (!text) return;
+        downloadFile(`${activeJobName}.sql`, text, 'application/sql');
+    }, [buildSqlText, downloadFile, activeJobName]);
+
+    const handleExportJson = useCallback(() => {
+        const payload = {
+            version: 1,
+            name: activeJobName,
+            nodes,
+            edges,
+            exportedAt: new Date().toISOString(),
+        };
+        downloadFile(
+            `${activeJobName}.duckle.json`,
+            JSON.stringify(payload, null, 2),
+            'application/json',
+        );
+    }, [nodes, edges, activeJobName, downloadFile]);
+
     const handleAutoLayout = useCallback(() => {
         setNodes(ns =>
             ns.map((n, i) => ({
@@ -1080,6 +1141,9 @@ export default function App() {
                         onSave={handleSave}
                         onValidate={handleValidate}
                         onAutoLayout={handleAutoLayout}
+                        onCopySql={handleCopySql}
+                        onExportJson={handleExportJson}
+                        onExportSqlFile={handleExportSql}
                     />
                     <EditorTabs
                         engine={engine}

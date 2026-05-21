@@ -4,7 +4,9 @@
 //! invoke commands to the frontend.
 
 use duckle_connectors::CsvConnector;
-use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc, PipelineEvent, RunResult};
+use duckle_duckdb_engine::{
+    compile_pipeline_sql, DuckdbEngine, PipelineDoc, PipelineEvent, RunResult, StageSql,
+};
 use duckle_metadata::Schema;
 use duckle_plugin_sdk::{InspectError, SchemaInspector};
 use serde::Serialize;
@@ -29,7 +31,8 @@ pub fn run() {
             autodetect_schema,
             run_pipeline,
             run_pipeline_partial,
-            cancel_pipeline
+            cancel_pipeline,
+            compile_pipeline
         ])
         .run(tauri::generate_context!())
         .expect("error while running duckle");
@@ -162,4 +165,12 @@ fn cancel_pipeline() -> Result<(), String> {
     let engine = engine()?;
     engine.request_cancel();
     Ok(())
+}
+
+/// Compile a pipeline to DuckDB SQL without executing. Used by the
+/// "Copy SQL" / "Export SQL" features so users can copy the generated
+/// statements out of the app.
+#[tauri::command]
+fn compile_pipeline(pipeline: PipelineDoc) -> Result<Vec<StageSql>, String> {
+    compile_pipeline_sql(&pipeline).map_err(|e| e.to_string())
 }

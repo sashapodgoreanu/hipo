@@ -448,6 +448,35 @@ pub struct NodePreview {
 
 const PREVIEW_ROW_LIMIT: usize = 50;
 
+/// SQL for a single stage of a compiled pipeline. Returned by the
+/// `compile_pipeline` Tauri command so the frontend can show the
+/// generated SQL or copy it to the clipboard without executing.
+#[derive(Debug, Serialize)]
+pub struct StageSql {
+    pub node_id: String,
+    pub label: String,
+    pub kind: String,
+    pub sql: String,
+}
+
+/// Free function — doesn't need an engine to compile a pipeline.
+pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineError> {
+    let compiled = plan::compile(doc)?;
+    Ok(compiled
+        .stages
+        .into_iter()
+        .map(|s| StageSql {
+            node_id: s.node_id,
+            label: s.label,
+            kind: match s.kind {
+                StageKind::Sink => "sink".into(),
+                StageKind::View => "view".into(),
+            },
+            sql: s.sql,
+        })
+        .collect())
+}
+
 impl DuckdbEngine {
     /// Execute a pipeline end-to-end with no event stream.
     pub fn execute_pipeline(&self, doc: &PipelineDoc) -> RunResult {

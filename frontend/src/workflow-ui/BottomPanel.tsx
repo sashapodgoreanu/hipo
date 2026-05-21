@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { RunResult } from '../tauri-bridge';
 import type { ValidationResult } from '../validation';
+import { friendlyError } from '../errors';
 
 type TabId = 'problems' | 'output' | 'console';
 
@@ -199,7 +200,7 @@ function ProblemsTab({
                     key={'r_' + nodeId}
                     severity="error"
                     title={nodeLabels[nodeId] ?? nodeId}
-                    detail={st.error ?? 'Execution failed.'}
+                    detail={friendlyError(st.error) || 'Execution failed.'}
                     code="run-error"
                 />
             ))}
@@ -299,13 +300,17 @@ function OutputTab({
                             {st.duration_ms !== undefined ? st.duration_ms + ' ms' : ''}
                         </span>
                         {st.error ? (
-                            <span className="bottom-output-error">{st.error}</span>
+                            <span className="bottom-output-error">
+                                {friendlyError(st.error)}
+                            </span>
                         ) : null}
                     </div>
                 ))}
             </div>
             {runResult.error ? (
-                <div className="bottom-output-error-banner">{runResult.error}</div>
+                <div className="bottom-output-error-banner">
+                    {friendlyError(runResult.error)}
+                </div>
             ) : null}
             {runResult.preview.length > 0 ? (
                 <div className="bottom-output-previews">

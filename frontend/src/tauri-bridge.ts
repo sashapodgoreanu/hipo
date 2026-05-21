@@ -126,3 +126,25 @@ export async function cancelPipeline(): Promise<void> {
         console.warn('cancelPipeline failed', err);
     }
 }
+
+export type StageSql = {
+    node_id: string;
+    label: string;
+    kind: 'view' | 'sink';
+    sql: string;
+};
+
+export async function compilePipelineSql(
+    nodes: Node<DuckleNodeData>[],
+    edges: Edge[],
+): Promise<StageSql[] | null> {
+    if (!isTauri()) return null;
+    try {
+        return await invoke<StageSql[]>('compile_pipeline', {
+            pipeline: { nodes, edges },
+        });
+    } catch (err) {
+        console.warn('compilePipelineSql failed', err);
+        return null;
+    }
+}
