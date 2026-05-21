@@ -3,7 +3,7 @@ import type { Edge, Node } from '@xyflow/react';
 import { CheckCircle2, MousePointer2, Workflow } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows } from '../schema-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
-import type { RepoItem } from '../repo-types';
+import type { ConnectionPayload, RepoItem, RoutinePayload } from '../repo-types';
 import SchemaEditor from './SchemaEditor';
 import FieldRenderer from './fields/FieldRenderer';
 import { FieldContext } from './fields/FieldContext';
@@ -162,7 +162,44 @@ export default function PropertiesPanel({
             </div>
 
             <FieldContext.Provider
-                value={{ upstreamSchema, nodeSchema: declaredSchema, repoItems }}
+                value={{
+                    upstreamSchema,
+                    nodeSchema: declaredSchema,
+                    repoItems,
+                    onPickConnection: (payload: ConnectionPayload) => {
+                        if (!selected) return;
+                        const next = { ...(selected.data.properties ?? {}) };
+                        const keys: (keyof ConnectionPayload)[] = [
+                            'host',
+                            'port',
+                            'database',
+                            'username',
+                            'password',
+                            'bucket',
+                            'region',
+                            'accessKey',
+                            'secretKey',
+                            'accountName',
+                            'accountKey',
+                            'brokers',
+                            'url',
+                        ];
+                        for (const k of keys) {
+                            const v = payload[k];
+                            if (v !== undefined && v !== '' && v !== null) {
+                                next[k] = v as string | number;
+                            }
+                        }
+                        onUpdate(selected.id, { properties: next });
+                    },
+                    onPickRoutine: (payload: RoutinePayload) => {
+                        if (!selected) return;
+                        const next = { ...(selected.data.properties ?? {}) };
+                        if (payload.code) next.code = payload.code;
+                        if (payload.language) next.language = payload.language;
+                        onUpdate(selected.id, { properties: next });
+                    },
+                }}
             >
                 <div className="properties-content">
                     {tab === 'basic' ? (

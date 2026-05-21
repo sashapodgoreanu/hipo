@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { FieldContext } from './FieldContext';
 import { AGG_FUNCTIONS, type Aggregation, type AggregationFunction } from './types';
 
+
 type Props = {
     value: Aggregation[] | undefined;
     onChange: (v: Aggregation[]) => void;

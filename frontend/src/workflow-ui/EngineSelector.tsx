@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
 
 export type EngineId = 'duckdb' | 'slothdb' | 'native';
@@ -38,13 +39,46 @@ type Props = {
 
 export default function EngineSelector({ value, onChange }: Props) {
     const [open, setOpen] = useState(false);
-    const ref = useRef<HTMLDivElement>(null);
+    const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(
+        null,
+    );
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
     const current = ENGINES.find(e => e.id === value) ?? ENGINES[0]!;
+
+    useLayoutEffect(() => {
+        if (!open) return;
+        const update = () => {
+            const el = triggerRef.current;
+            if (!el) return;
+            const rect = el.getBoundingClientRect();
+            setPosition({
+                top: rect.bottom + 6,
+                left: rect.left,
+                width: Math.max(rect.width, 320),
+            });
+        };
+        update();
+        window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, true);
+        return () => {
+            window.removeEventListener('resize', update);
+            window.removeEventListener('scroll', update, true);
+        };
+    }, [open]);
 
     useEffect(() => {
         if (!open) return;
         const handleClick = (e: MouseEvent) => {
-            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+            const target = e.target as Node;
+            if (
+                triggerRef.current &&
+                !triggerRef.current.contains(target) &&
+                dropdownRef.current &&
+                !dropdownRef.current.contains(target)
+            ) {
+                setOpen(false);
+            }
         };
         const handleKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') setOpen(false);
@@ -58,8 +92,9 @@ export default function EngineSelector({ value, onChange }: Props) {
     }, [open]);
 
     return (
-        <div className="engine-selector" ref={ref}>
+        <div className="engine-selector">
             <button
+                ref={triggerRef}
                 type="button"
                 className="engine-trigger"
                 aria-haspopup="listbox"
@@ -71,36 +106,53 @@ export default function EngineSelector({ value, onChange }: Props) {
                 <span className="engine-trigger-value">{current.label}</span>
                 <ChevronDown size={12} className="engine-trigger-chevron" aria-hidden="true" />
             </button>
-            {open ? (
-                <div className="engine-dropdown" role="listbox" aria-label="Engine">
-                    {ENGINES.map(e => (
-                        <button
-                            key={e.id}
-                            type="button"
-                            role="option"
-                            aria-selected={e.id === value}
-                            className="engine-option"
-                            onClick={() => {
-                                onChange(e.id);
-                                setOpen(false);
-                            }}
-                        >
-                            <span className="engine-dot" style={{ background: e.dot }} aria-hidden />
-                            <div className="engine-option-text">
-                                <div className="engine-option-label">{e.label}</div>
-                                <div className="engine-option-desc">{e.description}</div>
-                            </div>
-                            {e.id === value ? (
-                                <Check
-                                    size={14}
-                                    className="engine-option-check"
-                                    aria-hidden="true"
-                                />
-                            ) : null}
-                        </button>
-                    ))}
-                </div>
-            ) : null}
+            {open && position
+                ? createPortal(
+                      <div
+                          ref={dropdownRef}
+                          className="engine-dropdown engine-dropdown-portal"
+                          role="listbox"
+                          aria-label="Engine"
+                          style={{
+                              top: position.top,
+                              left: position.left,
+                              minWidth: position.width,
+                          }}
+                      >
+                          {ENGINES.map(e => (
+                              <button
+                                  key={e.id}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={e.id === value}
+                                  className="engine-option"
+                                  onClick={() => {
+                                      onChange(e.id);
+                                      setOpen(false);
+                                  }}
+                              >
+                                  <span
+                                      className="engine-dot"
+                                      style={{ background: e.dot }}
+                                      aria-hidden
+                                  />
+                                  <div className="engine-option-text">
+                                      <div className="engine-option-label">{e.label}</div>
+                                      <div className="engine-option-desc">{e.description}</div>
+                                  </div>
+                                  {e.id === value ? (
+                                      <Check
+                                          size={14}
+                                          className="engine-option-check"
+                                          aria-hidden="true"
+                                      />
+                                  ) : null}
+                              </button>
+                          ))}
+                      </div>,
+                      document.body,
+                  )
+                : null}
         </div>
     );
 }

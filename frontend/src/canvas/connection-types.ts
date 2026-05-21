@@ -40,7 +40,7 @@ export const CONNECTION_TYPES: ConnectionTypeMeta[] = [
         id: 'lookup',
         label: 'Lookup',
         group: 'row',
-        description: 'Reference data for joins / tMap lookups. Loaded then keyed.',
+        description: 'Reference data for joins / mapper lookups. Loaded then keyed.',
         color: 'var(--kind-source)',
         dash: '6 4',
         width: 1.6,

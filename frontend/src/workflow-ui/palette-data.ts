@@ -201,7 +201,7 @@ export const PALETTE: Category[] = [
                 id: 'xf.fields',
                 label: 'Fields',
                 components: [
-                    xf('map', 'Map', 'available', 'Talend tMap-style row mapper'),
+                    xf('map', 'Map', 'available', 'Visual row mapper with main + lookup inputs'),
                     xf('project', 'Project / Select', 'available'),
                     xf('cast', 'Cast / Convert Type', 'planned'),
                     xf('rename', 'Rename Columns', 'planned'),

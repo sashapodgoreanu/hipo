@@ -237,7 +237,7 @@ const REJECT_IN: NodePorts['inputs'][number] = {
 export function portsForComponent(comp: ComponentDef): NodePorts {
     const id = comp.id;
 
-    // tMap — 1 main input, up to 3 lookup inputs, main + reject outputs
+    // Mapper — 1 main input, up to 3 lookup inputs, main + reject outputs
     if (id === 'xf.map') {
         return {
             inputs: [
@@ -250,7 +250,7 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         };
     }
 
-    // tFilterRow-style: main input, pass output, filtered output, reject output
+    // Filter rows: main input, pass output, filtered output, reject output
     if (id === 'xf.filter') {
         return {
             inputs: [MAIN_IN],

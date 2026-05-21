@@ -11,7 +11,7 @@ type Props = {
 };
 
 export function ConnectionRefField({ field, value, onChange }: Props) {
-    const { repoItems } = useContext(FieldContext);
+    const { repoItems, onPickConnection } = useContext(FieldContext);
 
     const connections = useMemo(() => {
         const items = repoItems.filter(i => i.type === 'connection');
@@ -35,11 +35,19 @@ export function ConnectionRefField({ field, value, onChange }: Props) {
         );
     }
 
+    const handleChange = (id: string) => {
+        onChange(id);
+        if (id && onPickConnection) {
+            const item = connections.find(c => c.id === id);
+            if (item?.payload) onPickConnection(item.payload as ConnectionPayload);
+        }
+    };
+
     return (
         <select
             className="field-input field-select"
             value={value ?? ''}
-            onChange={e => onChange(e.target.value)}
+            onChange={e => handleChange(e.target.value)}
         >
             <option value="">— pick a saved connection —</option>
             {connections.map(c => {

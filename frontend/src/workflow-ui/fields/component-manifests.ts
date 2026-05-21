@@ -369,7 +369,7 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
         kind: 'transform',
         label: 'Map',
         description:
-            'Talend tMap-style row mapper. Define each output column as an expression over the input row.',
+            'Visual row mapper. Define each output column as an expression over the input row, with optional lookup inputs.',
         schemaSource: 'declared',
         sections: [
             {

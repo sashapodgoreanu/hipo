@@ -1466,13 +1466,22 @@ textarea:focus-visible {
 
 .connection-picker {
     position: fixed;
-    width: 340px;
+    width: 360px;
+    max-height: calc(100vh - 48px);
     background: var(--bg-2);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-2);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     animation: modal-card-in 140ms var(--ease);
+}
+
+.connection-picker-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-2);
 }
 
 .connection-picker-header {
@@ -1640,17 +1649,18 @@ textarea:focus-visible {
 }
 
 .engine-dropdown {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
     background: var(--bg-2);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
-    box-shadow: var(--shadow-1);
+    box-shadow: var(--shadow-2);
     padding: 4px;
     min-width: 320px;
-    z-index: 100;
+    z-index: 1100;
     animation: dropdown-in 90ms ease-out;
+}
+
+.engine-dropdown-portal {
+    position: fixed;
 }
 
 @keyframes dropdown-in {

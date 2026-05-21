@@ -11,7 +11,7 @@ type Props = {
 };
 
 export function RoutineRefField({ field, value, onChange }: Props) {
-    const { repoItems } = useContext(FieldContext);
+    const { repoItems, onPickRoutine } = useContext(FieldContext);
 
     const routines = useMemo(() => {
         const items = repoItems.filter(i => i.type === 'routine');
@@ -35,11 +35,19 @@ export function RoutineRefField({ field, value, onChange }: Props) {
         );
     }
 
+    const handleChange = (id: string) => {
+        onChange(id);
+        if (id && onPickRoutine) {
+            const item = routines.find(r => r.id === id);
+            if (item?.payload) onPickRoutine(item.payload as RoutinePayload);
+        }
+    };
+
     return (
         <select
             className="field-input field-select"
             value={value ?? ''}
-            onChange={e => onChange(e.target.value)}
+            onChange={e => handleChange(e.target.value)}
         >
             <option value="">— pick a saved routine —</option>
             {routines.map(r => {

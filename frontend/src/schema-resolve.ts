@@ -241,7 +241,7 @@ export function resolveUpstreamSchema(
 
 /**
  * Per-input-port schemas — for components with multiple typed inputs
- * (tMap with main + lookups, joins with driving + lookup, etc.).
+ * (mapper with main + lookups, joins with driving + lookup, etc.).
  */
 export function resolveInputPortSchemas(
     nodeId: string,
