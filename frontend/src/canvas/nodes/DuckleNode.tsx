@@ -14,6 +14,7 @@ import { metaFor } from '../connection-types';
 import type { PortDef } from '../../workflow-ui/fields/types';
 import { resolveOutputSchema } from '../../schema-resolve';
 import { useRunStatus } from '../run-status-context';
+import { deriveNodeSubtitle } from '../../node-subtitle';
 
 export type DuckleFlowNode = Node<DuckleNodeData>;
 
@@ -71,7 +72,17 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
                     ) : null}
                 </div>
                 <div className="node-label">{data.label}</div>
-                {data.subtitle ? <div className="node-subtitle">{data.subtitle}</div> : null}
+                {(() => {
+                    // Subtitle reflects the live config (file name, predicate,
+                    // group-by keys, ...), falling back to any seeded subtitle.
+                    const subtitle =
+                        deriveNodeSubtitle(data.componentId, data.properties) ?? data.subtitle;
+                    return subtitle ? (
+                        <div className="node-subtitle" title={subtitle}>
+                            {subtitle}
+                        </div>
+                    ) : null;
+                })()}
                 {effectiveSchema.length > 0 ? (
                     <div className="node-schema-badge">
                         {effectiveSchema.length} col{effectiveSchema.length === 1 ? '' : 's'}

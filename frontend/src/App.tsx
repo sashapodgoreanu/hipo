@@ -85,15 +85,10 @@ const SAMPLE_NODES: Node<DuckleNodeData>[] = [
         position: { x: 60, y: 140 },
         data: {
             label: 'CSV',
-            subtitle: 'orders.csv',
             componentId: 'src.csv',
-            schema: [
-                { name: 'order_id', type: 'int64', nullable: false, primaryKey: true },
-                { name: 'customer_id', type: 'int64', nullable: false },
-                { name: 'status', type: 'string', nullable: false },
-                { name: 'amount', type: 'decimal', nullable: true },
-                { name: 'created_at', type: 'timestamp', nullable: false },
-            ],
+            // No path yet — set one and Autodetect. The subtitle and
+            // schema fill in from the real file, they aren't faked.
+            properties: { hasHeader: true },
         },
     },
     {
@@ -102,8 +97,9 @@ const SAMPLE_NODES: Node<DuckleNodeData>[] = [
         position: { x: 340, y: 140 },
         data: {
             label: 'Filter',
-            subtitle: 'status = "paid"',
             componentId: 'xf.filter',
+            // Valid DuckDB SQL — single quotes for the string literal.
+            properties: { predicate: "status = 'paid'" },
         },
     },
     {
@@ -112,8 +108,8 @@ const SAMPLE_NODES: Node<DuckleNodeData>[] = [
         position: { x: 620, y: 140 },
         data: {
             label: 'Parquet',
-            subtitle: 'orders_paid.parquet',
             componentId: 'snk.parquet',
+            properties: {},
         },
     },
 ];
@@ -931,8 +927,9 @@ export default function App() {
                 type: flowType,
                 position,
                 data: {
+                    // No static subtitle — the canvas derives it live from
+                    // the component's config (file name, predicate, keys…).
                     label: component.label,
-                    subtitle: component.summary,
                     componentId: component.id,
                     properties: manifest ? getDefaults(manifest) : {},
                 },
