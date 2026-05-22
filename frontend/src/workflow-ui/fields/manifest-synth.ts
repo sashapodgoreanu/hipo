@@ -1761,11 +1761,19 @@ function synthCustomCode(comp: ComponentDef): ComponentManifest {
                 fields: [
                     {
                         key: 'routineRef',
-                        label: 'Use saved routine (optional)',
+                        label: 'Use saved SQL routine (optional)',
                         kind: 'routine-ref',
                         accepts: ['sql'],
+                        description: 'Pick a saved SQL routine, or write inline below.',
                     },
-                    { key: 'sql', label: 'SQL', kind: 'expression', rows: 10, required: true, placeholder: 'SELECT *, status FROM input' },
+                    {
+                        key: 'sql',
+                        label: 'SQL',
+                        kind: 'expression',
+                        rows: 10,
+                        placeholder: 'SELECT *, upper(status) AS status FROM input',
+                        description: 'The upstream rows are available as `input`.',
+                    },
                 ],
             },
         ], 'declared');

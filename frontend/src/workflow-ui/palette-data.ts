@@ -229,11 +229,11 @@ export const PALETTE: Category[] = [
                 label: 'Rows',
                 components: [
                     xf('filter', 'Filter Rows', 'available', 'WHERE-style row filter'),
-                    xf('distinct', 'Distinct', 'planned'),
-                    xf('sample', 'Sample', 'planned'),
-                    xf('topn', 'Top N / Limit', 'planned'),
-                    xf('sort', 'Sort', 'planned'),
-                    xf('skip', 'Skip / Offset', 'planned'),
+                    xf('distinct', 'Distinct', 'available', 'Drop duplicate rows'),
+                    xf('sample', 'Sample', 'available', 'Random row sample'),
+                    xf('topn', 'Top N / Limit', 'available', 'Keep the first N rows'),
+                    xf('sort', 'Sort', 'available', 'Order rows'),
+                    xf('skip', 'Skip / Offset', 'available', 'Drop the first N rows'),
                 ],
             },
             {
@@ -580,8 +580,8 @@ export const PALETTE: Category[] = [
                 id: 'code.sql',
                 label: 'SQL',
                 components: [
-                    code('sql', 'Inline SQL', 'planned'),
-                    code('sqltemplate', 'SQL Template', 'planned'),
+                    code('sql', 'Inline SQL', 'available', 'Run a SELECT; upstream is `input`'),
+                    code('sqltemplate', 'SQL Template', 'available', 'Parameterized SQL with ${context.var}'),
                 ],
             },
             {

@@ -377,6 +377,12 @@ fn build_view_sql(
         "xf.lookup" | "xf.lookup.outer" => build_join(inputs, props, "LEFT"),
         "xf.semi" | "xf.semi.join" => build_semi(inputs, props, false),
         "xf.anti" | "xf.anti.join" => build_semi(inputs, props, true),
+        "xf.topn" => build_take(inputs, props, TakeKind::Limit),
+        "xf.skip" => build_take(inputs, props, TakeKind::Offset),
+        "xf.sample" => build_take(inputs, props, TakeKind::Sample),
+        // Custom SQL — runs the user's SELECT as a real stage, with the
+        // upstream exposed as `input`. Makes SQL routines executable too.
+        "code.sql" | "code.sqltemplate" => build_custom_sql(inputs, props),
         // Anything else: pass through (preserves the chain for diagnostics).
         other => {
             if let Some(upstream) = inputs.main() {
@@ -484,6 +490,44 @@ fn build_limit(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String>
         quote_ident(upstream),
         limit
     ))
+}
+
+enum TakeKind {
+    Limit,
+    Offset,
+    Sample,
+}
+
+fn build_take(inputs: &NodeInputs, props: &JsonValue, kind: TakeKind) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
+    let n = props
+        .get("count")
+        .and_then(JsonValue::as_u64)
+        .or_else(|| props.get("limit").and_then(JsonValue::as_u64))
+        .unwrap_or(100);
+    let from = quote_ident(upstream);
+    Ok(match kind {
+        TakeKind::Limit => format!("SELECT * FROM {} LIMIT {}", from, n),
+        TakeKind::Offset => format!("SELECT * FROM {} OFFSET {}", from, n),
+        TakeKind::Sample => format!("SELECT * FROM {} USING SAMPLE {} ROWS", from, n),
+    })
+}
+
+/// Custom SQL stage. The upstream table is exposed as a CTE named
+/// `input`, so a node's SQL like `SELECT * FROM input WHERE x > 1`
+/// just works. With no upstream, the SQL stands alone (e.g. a source
+/// SELECT). build_stage wraps the result in CREATE OR REPLACE TABLE.
+fn build_custom_sql(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let sql = string_prop(props, "sql")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Custom SQL is empty — write a SELECT or pick a SQL routine".to_string())?;
+    Ok(match inputs.main() {
+        Some(upstream) => {
+            format!("WITH input AS (SELECT * FROM {}) {}", quote_ident(upstream), sql)
+        }
+        None => sql,
+    })
 }
 
 fn build_sort(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {

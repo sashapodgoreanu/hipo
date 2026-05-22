@@ -34,6 +34,7 @@ import WindowControls from './workflow-ui/WindowControls';
 import { engineStatus } from './tauri-bridge';
 import { RunStatusContext } from './canvas/run-status-context';
 import { validatePipeline } from './validation';
+import { resolveForRun } from './run-resolve';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
 import {
     deleteItemPayload,
@@ -758,10 +759,13 @@ export default function App() {
         setIsRunning(true);
         setRunResult(null);
         const start = performance.now();
-        void runPipeline(nodes, edges, handleEvent, activeJobId, workspacePathState)
+        // Inline SQL routines + substitute ${context.var} before running;
+        // the canvas keeps the editable, un-substituted values.
+        const runNodes = resolveForRun(nodes, repo);
+        void runPipeline(runNodes, edges, handleEvent, activeJobId, workspacePathState)
             .then(result => finishRun(start, result))
             .finally(() => setIsRunning(false));
-    }, [nodes, edges, handleEvent, finishRun, activeJobId, workspacePathState, validation.errorCount]);
+    }, [nodes, edges, repo, handleEvent, finishRun, activeJobId, workspacePathState, validation.errorCount]);
 
     const handleRunFromHere = useCallback(
         (nodeId: string) => {
@@ -772,8 +776,9 @@ export default function App() {
             setIsRunning(true);
             setRunResult(null);
             const start = performance.now();
+            const runNodes = resolveForRun(nodes, repo);
             void runPipelinePartial(
-                nodes,
+                runNodes,
                 edges,
                 nodeId,
                 handleEvent,
@@ -786,6 +791,7 @@ export default function App() {
         [
             nodes,
             edges,
+            repo,
             handleEvent,
             finishRun,
             activeJobId,

@@ -315,6 +315,38 @@ fn aggregate_accepts_func_output_keys() {
 }
 
 #[test]
+fn custom_sql_runs_with_input_alias() {
+    // A Custom-SQL node runs its SELECT as a real stage, with the
+    // upstream exposed as `input`.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,amount\n1,10\n2,20\n3,5\n");
+    let out = out_path(tmp.path(), "out.csv");
+
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "q1",
+                "code.sql",
+                json!({ "sql": "SELECT id, amount * 2 AS dbl FROM input WHERE amount >= 10" }),
+            ),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "q1"), main_edge("e2", "q1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    // Rows with amount >= 10 → ids 1 and 2.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    let dbl = scalar_string(&format!(
+        "SELECT CAST(dbl AS VARCHAR) FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert_eq!(dbl, "20");
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");
