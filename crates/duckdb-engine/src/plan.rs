@@ -407,6 +407,22 @@ fn build_view_sql(
         "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" => {
             build_quality(inputs, props, component_id, false)
         }
+        "xf.reorder" => build_reorder(inputs, props),
+        "xf.count" => build_count(inputs),
+        "xf.join.cross" => build_cross_join(inputs),
+        "xf.regex" | "xf.trim" | "xf.case" | "xf.length" | "xf.substring" | "xf.concat"
+        | "xf.split" | "xf.format" => build_string(inputs, props, component_id),
+        "xf.num.round" | "xf.num.abs" | "xf.num.mod" | "xf.num.power" | "xf.num.sqrt"
+        | "xf.num.log" => build_numeric(inputs, props, component_id),
+        "xf.dt.parse" | "xf.dt.format" | "xf.dt.extract" | "xf.dt.trunc" | "xf.dt.tz" => {
+            build_datetime(inputs, props, component_id)
+        }
+        "xf.json.parse" | "xf.json.stringify" | "xf.json.path" => {
+            build_json(inputs, props, component_id)
+        }
+        "xf.arr.element" | "xf.arr.distinct" | "xf.arr.explode" => {
+            build_array(inputs, props, component_id)
+        }
         "xf.cast" => build_cast(inputs, props),
         "xf.rename" => build_rename(inputs, props),
         "xf.drop" | "xf.dropcol" => build_drop(inputs, props),
@@ -424,14 +440,18 @@ fn build_view_sql(
         // Custom SQL — runs the user's SELECT as a real stage, with the
         // upstream exposed as `input`. Makes SQL routines executable too.
         "code.sql" | "code.sqltemplate" => build_custom_sql(inputs, props),
-        // Anything else: pass through (preserves the chain for diagnostics).
-        other => {
-            if let Some(upstream) = inputs.main() {
-                Ok(format!("SELECT * FROM {}", quote_ident(upstream)))
-            } else {
-                Err(format!("Component '{}' is not yet executable", other))
-            }
+        // Control-flow nodes don't transform data — pass it through.
+        other if other.starts_with("ctl.") => {
+            let upstream = inputs.main().ok_or_else(|| missing_input_msg(other))?;
+            Ok(format!("SELECT * FROM {}", quote_ident(upstream)))
         }
+        // Everything else isn't executable yet. Fail loudly rather than
+        // silently passing data through unchanged (which would look like
+        // success while doing nothing).
+        other => Err(format!(
+            "'{}' isn't executable on the DuckDB engine yet — it's a preview component.",
+            other
+        )),
     }
 }
 
@@ -771,6 +791,190 @@ fn build_pivot(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String>
         ));
     }
     Ok(sql)
+}
+
+fn missing_input_msg(component: &str) -> String {
+    format!("{} is missing its input connection", component)
+}
+
+/// Emit a per-row column expression: add it as `output` if given, else
+/// replace the source column in place.
+fn apply_col_expr(upstream: &str, column: &str, expr: String, output: Option<String>) -> String {
+    match output.filter(|s| !s.trim().is_empty()) {
+        Some(out) => format!(
+            "SELECT *, {} AS {} FROM {}",
+            expr,
+            quote_ident(out.trim()),
+            quote_ident(upstream)
+        ),
+        None => format!(
+            "SELECT * REPLACE ({} AS {}) FROM {}",
+            expr,
+            quote_ident(column),
+            quote_ident(upstream)
+        ),
+    }
+}
+
+fn require_column(props: &JsonValue) -> Result<String, String> {
+    string_prop(props, "column")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "This transform needs a column".to_string())
+}
+
+fn build_string(inputs: &NodeInputs, props: &JsonValue, component_id: &str) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg(component_id))?;
+    let column = require_column(props)?;
+    let col = quote_ident(&column);
+    let pattern = string_prop(props, "pattern").unwrap_or_default();
+    let replacement = string_prop(props, "replacement").unwrap_or_default();
+    let expr = match component_id {
+        "xf.regex" => format!(
+            "regexp_replace(CAST({} AS VARCHAR), '{}', '{}', 'g')",
+            col,
+            sql_escape(&pattern),
+            sql_escape(&replacement)
+        ),
+        "xf.trim" => format!("trim(CAST({} AS VARCHAR))", col),
+        "xf.case" => match pattern.to_lowercase().as_str() {
+            "lower" => format!("lower(CAST({} AS VARCHAR))", col),
+            "title" | "initcap" | "proper" => format!("initcap(CAST({} AS VARCHAR))", col),
+            _ => format!("upper(CAST({} AS VARCHAR))", col),
+        },
+        "xf.length" => format!("length(CAST({} AS VARCHAR))", col),
+        "xf.substring" => {
+            let start = pattern.trim().parse::<i64>().unwrap_or(1).max(1);
+            match replacement.trim().parse::<i64>() {
+                Ok(len) => format!("substring(CAST({} AS VARCHAR), {}, {})", col, start, len),
+                Err(_) => format!("substring(CAST({} AS VARCHAR), {})", col, start),
+            }
+        }
+        "xf.concat" => format!("concat(CAST({} AS VARCHAR), '{}')", col, sql_escape(&pattern)),
+        "xf.split" => format!("string_split(CAST({} AS VARCHAR), '{}')", col, sql_escape(&pattern)),
+        "xf.format" => format!("printf('{}', {})", sql_escape(&pattern), col),
+        other => return Err(format!("String op '{}' is not implemented", other)),
+    };
+    Ok(apply_col_expr(upstream, &column, expr, string_prop(props, "outputColumn")))
+}
+
+fn build_numeric(inputs: &NodeInputs, props: &JsonValue, component_id: &str) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg(component_id))?;
+    let column = require_column(props)?;
+    let col = quote_ident(&column);
+    let arg = num_prop(props, "argument");
+    let expr = match component_id {
+        "xf.num.round" => format!("round({}, {})", col, arg.unwrap_or_else(|| "0".into())),
+        "xf.num.abs" => format!("abs({})", col),
+        "xf.num.mod" => format!("{} % {}", col, arg.ok_or("Modulo needs a divisor argument")?),
+        "xf.num.power" => format!("power({}, {})", col, arg.unwrap_or_else(|| "2".into())),
+        "xf.num.sqrt" => format!("sqrt({})", col),
+        "xf.num.log" => match arg {
+            Some(base) => format!("log({}, {})", base, col),
+            None => format!("ln({})", col),
+        },
+        other => return Err(format!("Numeric op '{}' is not implemented", other)),
+    };
+    Ok(apply_col_expr(upstream, &column, expr, string_prop(props, "outputColumn")))
+}
+
+fn build_datetime(inputs: &NodeInputs, props: &JsonValue, component_id: &str) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg(component_id))?;
+    let column = require_column(props)?;
+    let col = quote_ident(&column);
+    let fmt = string_prop(props, "format").unwrap_or_else(|| "%Y-%m-%d".into());
+    let unit = string_prop(props, "unit").unwrap_or_else(|| "day".into());
+    let tz = string_prop(props, "timezone").unwrap_or_default();
+    let expr = match component_id {
+        "xf.dt.parse" => format!("strptime(CAST({} AS VARCHAR), '{}')", col, sql_escape(&fmt)),
+        "xf.dt.format" => format!("strftime({}, '{}')", col, sql_escape(&fmt)),
+        "xf.dt.extract" => format!("date_part('{}', {})", sql_escape(&unit), col),
+        "xf.dt.trunc" => format!("date_trunc('{}', {})", sql_escape(&unit), col),
+        "xf.dt.tz" => {
+            if tz.is_empty() {
+                return Err("Timezone convert needs a timezone".into());
+            }
+            format!("{} AT TIME ZONE '{}'", col, sql_escape(&tz))
+        }
+        other => return Err(format!("Date/time op '{}' is not implemented", other)),
+    };
+    Ok(apply_col_expr(upstream, &column, expr, string_prop(props, "outputColumn")))
+}
+
+fn build_json(inputs: &NodeInputs, props: &JsonValue, component_id: &str) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg(component_id))?;
+    let column = require_column(props)?;
+    let col = quote_ident(&column);
+    let path = string_prop(props, "path").unwrap_or_default();
+    let expr = match component_id {
+        "xf.json.parse" => format!("CAST({} AS JSON)", col),
+        "xf.json.stringify" => format!("CAST({} AS VARCHAR)", col),
+        "xf.json.path" => {
+            if path.is_empty() {
+                return Err("JSONPath extract needs a path".into());
+            }
+            format!("json_extract({}, '{}')", col, sql_escape(&path))
+        }
+        other => return Err(format!("JSON op '{}' is not implemented", other)),
+    };
+    Ok(apply_col_expr(upstream, &column, expr, string_prop(props, "outputColumn")))
+}
+
+fn build_array(inputs: &NodeInputs, props: &JsonValue, component_id: &str) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg(component_id))?;
+    let column = require_column(props)?;
+    let col = quote_ident(&column);
+    if component_id == "xf.arr.explode" {
+        // One row per element, keeping the other columns.
+        return Ok(format!(
+            "SELECT unnest({}) AS {}, * EXCLUDE ({}) FROM {}",
+            col,
+            col,
+            col,
+            quote_ident(upstream)
+        ));
+    }
+    let expr = match component_id {
+        "xf.arr.element" => {
+            let idx = props.get("index").and_then(JsonValue::as_i64).unwrap_or(1);
+            format!("{}[{}]", col, idx)
+        }
+        "xf.arr.distinct" => format!("list_distinct({})", col),
+        other => return Err(format!("Array op '{}' is not implemented", other)),
+    };
+    Ok(apply_col_expr(upstream, &column, expr, string_prop(props, "outputColumn")))
+}
+
+fn build_reorder(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.reorder"))?;
+    let cols = columns_list(props, "columns");
+    if cols.is_empty() {
+        return Ok(format!("SELECT * FROM {}", quote_ident(upstream)));
+    }
+    let listed = cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+    // Listed columns first, everything else after — never drops a column.
+    Ok(format!(
+        "SELECT {}, * EXCLUDE ({}) FROM {}",
+        listed,
+        listed,
+        quote_ident(upstream)
+    ))
+}
+
+fn build_count(inputs: &NodeInputs) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.count"))?;
+    Ok(format!("SELECT count(*) AS row_count FROM {}", quote_ident(upstream)))
+}
+
+fn build_cross_join(inputs: &NodeInputs) -> Result<String, String> {
+    let left = inputs.main().ok_or_else(|| "Cross join needs a main input".to_string())?;
+    let right = inputs
+        .first_lookup()
+        .ok_or_else(|| "Cross join needs a lookup input".to_string())?;
+    Ok(format!(
+        "SELECT * FROM {} CROSS JOIN {}",
+        quote_ident(left),
+        quote_ident(right)
+    ))
 }
 
 /// Data-quality validators. `reject = false` yields the passing rows;

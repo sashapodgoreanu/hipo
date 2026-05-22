@@ -427,6 +427,77 @@ fn window_row_number_partitions() {
 }
 
 #[test]
+fn string_case_transforms_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "name\nalice\nbob\n");
+    let out = out_path(tmp.path(), "out.csv");
+
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("c1", "xf.case", json!({ "column": "name", "pattern": "upper" })),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "c1"), main_edge("e2", "c1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    let first = scalar_string(&format!(
+        "SELECT name FROM read_csv_auto('{}') ORDER BY name LIMIT 1",
+        out
+    ));
+    assert_eq!(first, "ALICE");
+}
+
+#[test]
+fn numeric_round_adds_column() {
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "v\n3.14159\n");
+    let out = out_path(tmp.path(), "out.csv");
+
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "r1",
+                "xf.num.round",
+                json!({ "column": "v", "argument": 2, "outputColumn": "rounded" }),
+            ),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "r1"), main_edge("e2", "r1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    let rounded = scalar_string(&format!(
+        "SELECT CAST(rounded AS VARCHAR) FROM read_csv_auto('{}')",
+        out
+    ));
+    assert_eq!(rounded, "3.14");
+}
+
+#[test]
+fn unimplemented_component_fails_loudly_not_silently() {
+    // A not-yet-executable transform must error, not silently pass data
+    // through (which would look like success while doing nothing).
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "a\n1\n");
+
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("x1", "xf.rollup", json!({})),
+        ]),
+        json!([main_edge("e1", "s1", "x1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "error", "unimplemented op should fail, not pass through");
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");
