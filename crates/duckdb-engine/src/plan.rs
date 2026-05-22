@@ -306,6 +306,9 @@ fn build_stage(
         .unwrap_or(JsonValue::Null);
     let mut sink_path: Option<String> = None;
     let mut sink_mode: Option<String> = None;
+    // ATTACH statements for external-DB nodes (DuckDB/SQLite). Each stage
+    // runs in its own CLI process, so fixed aliases are collision-free.
+    let attach = attach_prelude(component_id, &props);
     let (sql, kind, from) = if component_id.starts_with("snk.") {
         let from_view = inputs
             .main()
@@ -313,7 +316,7 @@ fn build_stage(
         sink_path = string_prop(&props, "path").filter(|s| !s.is_empty());
         sink_mode = string_prop(&props, "mode").filter(|s| !s.is_empty());
         (
-            build_sink_sql(component_id, &props, from_view)?,
+            format!("{}{}", attach, build_sink_sql(component_id, &props, from_view)?),
             StageKind::Sink,
             Some(from_view.to_string()),
         )
@@ -324,7 +327,8 @@ fn build_stage(
         // Materialize as a real table so the result persists across the
         // separate CLI invocations the executor uses per stage.
         let mut sql = format!(
-            "CREATE OR REPLACE TABLE {} AS {}",
+            "{}CREATE OR REPLACE TABLE {} AS {}",
+            attach,
             quote_ident(&node.id),
             body
         );
@@ -1692,10 +1696,55 @@ fn build_sqlite_source(props: &JsonValue) -> String {
 }
 
 fn build_duckdb_source(props: &JsonValue) -> String {
-    // For DuckDB sources the runtime ATTACHes the DB in execute. Here
-    // we just produce a SELECT that references the attached schema.
-    let sql = string_prop(props, "sql").unwrap_or_else(|| "SELECT 1 AS placeholder".into());
-    format!("SELECT * FROM ({})", sql)
+    // The DuckDB file is ATTACHed as `duckle_src` (READ_ONLY) by the
+    // stage / inspect prelude; we read from it qualified by that alias.
+    if let Some(table) = string_prop(props, "tableName").filter(|s| !s.is_empty()) {
+        match string_prop(props, "schema").filter(|s| !s.is_empty()) {
+            Some(schema) => format!(
+                "SELECT * FROM duckle_src.{}.{}",
+                quote_ident(&schema),
+                quote_ident(&table)
+            ),
+            None => format!("SELECT * FROM duckle_src.{}", quote_ident(&table)),
+        }
+    } else if let Some(sql) = string_prop(props, "sql").filter(|s| !s.trim().is_empty()) {
+        // Advanced: a custom query. Reference tables as duckle_src.<table>.
+        format!("({})", sql)
+    } else {
+        "SELECT 1 AS placeholder LIMIT 0".into()
+    }
+}
+
+/// ATTACH statements for external-database nodes. The aliases are fixed
+/// (`duckle_src` / `duckle_dst`) — safe because each stage is its own
+/// CLI process.
+fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
+    let db = match string_prop(props, "database").filter(|s| !s.is_empty()) {
+        Some(d) => d,
+        None => return String::new(),
+    };
+    match component_id {
+        "src.duckdb" => format!("ATTACH '{}' AS duckle_src (READ_ONLY); ", sql_escape(&db)),
+        "snk.sqlite" => format!("ATTACH '{}' AS duckle_dst (TYPE SQLITE); ", sql_escape(&db)),
+        "snk.duckdb" => format!("ATTACH '{}' AS duckle_dst; ", sql_escape(&db)),
+        _ => String::new(),
+    }
+}
+
+/// SQLite / DuckDB sink — write the upstream into a table inside the
+/// ATTACHed `duckle_dst` database. DROP+CREATE works for both writers
+/// (the SQLite writer doesn't support CREATE OR REPLACE).
+fn build_db_sink(props: &JsonValue, from_view: &str) -> String {
+    let table = string_prop(props, "tableName")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "output".into());
+    let t = quote_ident(&table);
+    format!(
+        "DROP TABLE IF EXISTS duckle_dst.{}; CREATE TABLE duckle_dst.{} AS (SELECT * FROM {})",
+        t,
+        t,
+        quote_ident(from_view)
+    )
 }
 
 /// Cloud sources (S3 / GCS / Azure Blob / HTTP). DuckDB's httpfs +
@@ -1755,6 +1804,7 @@ fn build_sink_sql(
         "snk.parquet" => Ok(build_parquet_sink(props, from_view)),
         "snk.json" | "snk.jsonl" => Ok(build_json_sink(props, from_view)),
         "snk.s3" | "snk.gcs" | "snk.azureblob" => Ok(build_cloud_sink(props, from_view)),
+        "snk.sqlite" | "snk.duckdb" => Ok(build_db_sink(props, from_view)),
         other => Err(EngineError::Unsupported(format!(
             "Sink '{}' is not yet implemented",
             other

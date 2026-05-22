@@ -91,6 +91,23 @@ fn duckdb_json(sql: &str) -> Vec<Value> {
     serde_json::from_str(s.trim()).unwrap_or_default()
 }
 
+/// Run setup SQL against a specific database file (used to seed a
+/// source DB file for the duckdb-source test).
+fn duckdb_exec(db: &str, sql: &str) {
+    let bin = std::env::var("DUCKLE_DUCKDB_BIN").expect("DUCKLE_DUCKDB_BIN set");
+    let out = std::process::Command::new(bin)
+        .arg(db)
+        .arg("-c")
+        .arg(sql)
+        .output()
+        .expect("run duckdb");
+    assert!(
+        out.status.success(),
+        "setup sql failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 fn count(from: &str) -> i64 {
     let rows = duckdb_json(&format!("SELECT COUNT(*) AS n FROM {}", from));
     rows.first()
@@ -752,6 +769,72 @@ fn cast_single_column_form_changes_type() {
     // 10.9 cast to int -> 11; if the cast were ignored it'd stay 10.9.
     let v = scalar_string(&format!("SELECT CAST(v AS VARCHAR) FROM read_csv_auto('{}')", out));
     assert_eq!(v, "11", "got v={}", v);
+}
+
+#[test]
+fn duckdb_sink_writes_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n");
+    let dbfile = out_path(tmp.path(), "out.duckdb");
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k1", "snk.duckdb", json!({ "database": dbfile, "tableName": "people" })),
+        ]),
+        json!([main_edge("e1", "s1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    let n = scalar_string(&format!(
+        "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.people",
+        dbfile
+    ));
+    assert_eq!(n, "2", "got {}", n);
+}
+
+#[test]
+fn sqlite_sink_writes_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n");
+    let dbfile = out_path(tmp.path(), "out.sqlite");
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k1", "snk.sqlite", json!({ "database": dbfile, "tableName": "people" })),
+        ]),
+        json!([main_edge("e1", "s1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    let n = scalar_string(&format!(
+        "ATTACH '{}' AS s (TYPE SQLITE); SELECT CAST(count(*) AS VARCHAR) AS n FROM s.people",
+        dbfile
+    ));
+    assert_eq!(n, "3", "got {}", n);
+}
+
+#[test]
+fn duckdb_source_reads_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "src.duckdb");
+    duckdb_exec(
+        &srcdb,
+        "CREATE TABLE orders AS SELECT * FROM (VALUES (1,'paid'),(2,'pending'),(3,'paid')) t(id,status)",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.duckdb", json!({ "database": srcdb, "tableName": "orders" })),
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
 }
 
 #[test]

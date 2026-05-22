@@ -215,7 +215,7 @@ impl DuckdbEngine {
         if format == "duckdb" {
             if let Some(db) = options.get("database").and_then(JsonValue::as_str) {
                 p.push_str(&format!(
-                    "ATTACH '{}' AS source_db (READ_ONLY); ",
+                    "ATTACH '{}' AS duckle_src (READ_ONLY); ",
                     sql_escape(db)
                 ));
             }
