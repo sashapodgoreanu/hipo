@@ -76,14 +76,14 @@ Duckle is built to scrub that data clean *before* it reaches your AI:
 
 | | |
 |---|---|
-| 🎯 **Visual, not opaque** | Compile the canvas to SQL you can read. Preview every node's output. |
-| 🪶 **Tiny binary** | ~9 MB app; the engine downloads on first run instead of being bundled. |
-| ⚡ **Native speed** | DuckDB does the heavy lifting — vectorized, columnar, local. |
-| 🗂️ **Git-friendly workspace** | Pipelines and config are plain files in a folder you pick. |
-| 🔌 **Pluggable engines** | DuckDB today; SlothDB optional; a native Rust engine coming. |
-| 🌫️ **AI-data ready** | Dedup, validate, normalize — prep clean datasets for AI / vector DBs. |
-| 🖥️ **Feels native** | Frameless window, dark/light themes, no browser-wrapper vibe. |
-| 🆓 **Open source** | MIT OR Apache-2.0. Yours to use, fork, and extend. |
+| **Visual, not opaque** | Compile the canvas to SQL you can read. Preview every node's output. |
+| **Tiny binary** | ~9 MB app; the engine downloads on first run instead of being bundled. |
+| **Native speed** | DuckDB does the heavy lifting — vectorized, columnar, local. |
+| **Git-friendly workspace** | Pipelines and config are plain files in a folder you pick. |
+| **Pluggable engines** | DuckDB today; SlothDB optional; a native Rust engine coming. |
+| **AI-data ready** | Dedup, validate, normalize — prep clean datasets for AI / vector DBs. |
+| **Feels native** | Frameless window, dark/light themes, no browser-wrapper feel. |
+| **Open source** | MIT OR Apache-2.0. Yours to use, fork, and extend. |
 
 ---
 
@@ -112,9 +112,9 @@ Duckle ships a thin shell and installs its engine on first launch, so the downlo
 
 | Engine | Role | Status | Source |
 |---|---|---|---|
-| **DuckDB** | Default execution engine — analytics, file formats, SQL pushdown. | ✅ Working | Downloaded from [duckdb/duckdb](https://github.com/duckdb/duckdb) releases |
-| **SlothDB** | Optional embedded analytical engine. | 🧪 Installable | Downloaded from [SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb) releases |
-| **Native** | In-process Rust streaming / incremental engine. | 🛠️ Coming soon | Built in |
+| **DuckDB** | Default execution engine — analytics, file formats, SQL pushdown. | Working | Downloaded from [duckdb/duckdb](https://github.com/duckdb/duckdb) releases |
+| **SlothDB** | Optional embedded analytical engine. | Installable | Downloaded from [SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb) releases |
+| **Native** | In-process Rust streaming / incremental engine. | Planned | Built in |
 
 Both engines install through the same guided first-run step, with a progress bar — no manual setup.
 
@@ -130,7 +130,7 @@ Both engines install through the same guided first-run step, with a progress bar
    - Drag a **CSV source** in, point it at [`samples/orders.csv`](samples/orders.csv), hit **Autodetect schema**.
    - Drag a **Filter**, wire it up, add a condition like `status = paid`.
    - Drag a **Parquet sink**, choose an output path.
-   - Press **▶ Run** — watch the nodes light up, then check the **Output** tab.
+   - Press **Run** — watch the nodes light up, then check the **Output** tab.
 
 That's a real, native ETL pipeline — built, run, and verified in under a minute.
 
@@ -138,7 +138,7 @@ That's a real, native ETL pipeline — built, run, and verified in under a minut
 
 ## Screenshots
 
-> 📸 Add your captures to `docs/assets/` as `screenshot-designer.png`, `screenshot-run.png`, and `screenshot-setup.png` and they'll render here.
+> Add your captures to `docs/assets/` as `screenshot-designer.png`, `screenshot-run.png`, and `screenshot-setup.png` and they'll render here.
 
 <!--
 <p align="center">
