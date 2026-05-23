@@ -434,7 +434,7 @@ fn build_view_sql(
         "xf.cdc.diff" => build_cdc_diff(inputs, props),
         // Data-quality validators - the PASS rows. Failures go to the
         // node's __reject table (see build_reject_sql).
-        "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" => {
+        "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" | "qa.schemavalidate" => {
             build_quality(inputs, props, component_id, false)
         }
         "qa.profile" => build_profile(inputs, props),
@@ -1601,8 +1601,17 @@ fn build_quality(
 
 fn quality_pass_predicate(component_id: &str, props: &JsonValue) -> Result<String, String> {
     match component_id {
-        "qa.notnull" => {
-            let cols = columns_list(props, "columns");
+        "qa.notnull" | "qa.schemavalidate" => {
+            // Schema Validate reuses the not-null predicate against the
+            // form's expectedColumns list (the columns the user said the
+            // input must have populated). Any row missing a value in any
+            // of those columns is rejected.
+            let key = if component_id == "qa.schemavalidate" {
+                "expectedColumns"
+            } else {
+                "columns"
+            };
+            let cols = columns_list(props, key);
             if cols.is_empty() {
                 return Ok("TRUE".into());
             }
@@ -1663,7 +1672,7 @@ fn build_reject_sql(
                 predicate
             )))
         }
-        "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" => {
+        "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" | "qa.schemavalidate" => {
             Ok(Some(build_quality(inputs, props, component_id, true)?))
         }
         _ => Ok(None),
@@ -2215,18 +2224,26 @@ fn build_relational_sink(
         .ok_or_else(|| EngineError::Config(format!("{}: table name is required", component_id)))?;
     let schema = string_prop(props, "schemaName").filter(|s| !s.is_empty());
     let mode = string_prop(props, "mode").unwrap_or_else(|| "overwrite".into());
-    if mode != "overwrite" {
-        return Err(EngineError::Config(format!(
-            "{}: write mode '{}' isn't implemented yet (use 'overwrite')",
-            component_id, mode
-        )));
-    }
     let qual = relational_qualified("duckle_dst", component_id, schema.as_deref(), &table);
-    Ok(format!(
-        "DROP TABLE IF EXISTS {q}; CREATE TABLE {q} AS (SELECT * FROM {from})",
-        q = qual,
-        from = quote_ident(from_view)
-    ))
+    match mode.as_str() {
+        "overwrite" => Ok(format!(
+            "DROP TABLE IF EXISTS {q}; CREATE TABLE {q} AS (SELECT * FROM {from})",
+            q = qual,
+            from = quote_ident(from_view)
+        )),
+        // Append inserts into an existing table; the table must already
+        // exist (create-if-missing isn't wired yet because we don't know
+        // the upstream's column types ahead of time without inspecting).
+        "append" => Ok(format!(
+            "INSERT INTO {q} SELECT * FROM {from}",
+            q = qual,
+            from = quote_ident(from_view)
+        )),
+        other => Err(EngineError::Config(format!(
+            "{}: write mode '{}' isn't implemented yet (use 'overwrite' or 'append')",
+            component_id, other
+        ))),
+    }
 }
 
 /// Qualify a table reference under the right naming depth for each

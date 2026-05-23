@@ -1417,6 +1417,92 @@ fn minio_source_reads_via_endpoint() {
 }
 
 #[test]
+fn schema_validate_rejects_rows_missing_required_columns() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,name,email\n1,alice,a@x\n2,,b@x\n3,carol,\n",
+    );
+    let pass = out_path(tmp.path(), "pass.csv");
+    let reject = out_path(tmp.path(), "reject.csv");
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("v1", "qa.schemavalidate", json!({
+                "expectedColumns": ["id", "name", "email"]
+            })),
+            node("ok", "snk.csv", json!({ "path": pass, "hasHeader": true })),
+            node("bad", "snk.csv", json!({ "path": reject, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "s1", "v1"),
+            main_edge("e2", "v1", "ok"),
+            port_edge("e3", "v1", "reject", "bad"),
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    // Row 1 passes (no nulls); rows 2 and 3 reject (name / email null).
+    assert_eq!(count(&format!("read_csv_auto('{}')", pass)), 1);
+    assert_eq!(count(&format!("read_csv_auto('{}')", reject)), 2);
+}
+
+#[test]
+fn pg_sink_append_grows_table() {
+    // Live PG test: an overwrite (3 rows) followed by an append (2 more)
+    // should land 5 rows in the target table.
+    let engine = engine_or_skip!();
+    let (host, port, db, user, pass) = match pg_env() {
+        Some(x) => x,
+        None => {
+            eprintln!("skipping: set DUCKLE_PG_HOST to run against a real PostgreSQL");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let table = format!("duckle_append_{}", std::process::id());
+    let conn = |csv: &str, mode: &str| {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("w", "snk.postgres", json!({
+                    "host": &host, "port": port, "database": &db,
+                    "user": &user, "password": &pass,
+                    "schemaName": "public", "tableName": &table, "mode": mode
+                })),
+            ]),
+            json!([main_edge("e", "s", "w")]),
+        )
+    };
+    let csv1 = write_file(tmp.path(), "in1.csv", "id,name\n1,alice\n2,bob\n3,carol\n");
+    let r1 = engine.execute_pipeline(&conn(&csv1, "overwrite"));
+    assert_eq!(r1.status, "ok", "overwrite failed: {:?}", r1.error);
+
+    let csv2 = write_file(tmp.path(), "in2.csv", "id,name\n4,dan\n5,eve\n");
+    let r2 = engine.execute_pipeline(&conn(&csv2, "append"));
+    assert_eq!(r2.status, "ok", "append failed: {:?}", r2.error);
+
+    // Read back via src.postgres and verify the table now has 5 rows.
+    let out = out_path(tmp.path(), "out.csv");
+    let read_doc = doc(
+        json!([
+            node("r", "src.postgres", json!({
+                "host": host, "port": port, "database": db,
+                "user": user, "password": pass,
+                "schemaName": "public", "tableName": table, "mode": "table"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let r3 = engine.execute_pipeline(&read_doc);
+    assert_eq!(r3.status, "ok", "read failed: {:?}", r3.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 5);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

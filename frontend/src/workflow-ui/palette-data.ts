@@ -542,7 +542,7 @@ export const PALETTE: Category[] = [
                 id: 'qa.validation',
                 label: 'Validation',
                 components: [
-                    qa('schemavalidate', 'Schema Validate', 'planned'),
+                    qa('schemavalidate', 'Schema Validate', 'available', 'Reject rows where any expected column is null'),
                     qa('regex', 'Regex Match', 'available', 'Pass rows matching a pattern; rest to reject'),
                     qa('range', 'Range Check', 'available', 'Pass in-range rows; rest to reject'),
                     qa('notnull', 'Not-Null Check', 'available', 'Pass rows with no nulls; rest to reject'),
