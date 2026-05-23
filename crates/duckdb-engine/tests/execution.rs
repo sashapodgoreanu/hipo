@@ -1503,6 +1503,84 @@ fn pg_sink_append_grows_table() {
 }
 
 #[test]
+fn avro_source_reads_fixture() {
+    // The DuckDB avro extension is read-only and we can't self-generate
+    // a fixture; this test runs when DUCKLE_AVRO_FIXTURE points at an
+    // .avro file. CI doesn't ship a fixture today.
+    let engine = engine_or_skip!();
+    let path = match std::env::var("DUCKLE_AVRO_FIXTURE") {
+        Ok(p) if !p.is_empty() && std::path::Path::new(&p).exists() => p,
+        _ => {
+            eprintln!("skipping: set DUCKLE_AVRO_FIXTURE to an .avro file path");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.avro", json!({ "path": norm(&path) })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "avro read failed: {:?}", result.error);
+    assert!(count(&format!("read_csv_auto('{}')", out)) > 0);
+}
+
+#[test]
+fn pg_sink_truncate_replaces_rows() {
+    // Live PG test: overwrite 3 rows, then truncate-insert 2 rows.
+    // After truncate, the table must end with exactly 2 rows.
+    let engine = engine_or_skip!();
+    let (host, port, db, user, pass) = match pg_env() {
+        Some(x) => x,
+        None => {
+            eprintln!("skipping: set DUCKLE_PG_HOST to run against PostgreSQL");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let table = format!("duckle_trunc_{}", std::process::id());
+    let write = |csv: &str, mode: &str| {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("w", "snk.postgres", json!({
+                    "host": &host, "port": port, "database": &db,
+                    "user": &user, "password": &pass,
+                    "schemaName": "public", "tableName": &table, "mode": mode
+                })),
+            ]),
+            json!([main_edge("e", "s", "w")]),
+        )
+    };
+    let csv1 = write_file(tmp.path(), "in1.csv", "id,name\n1,alice\n2,bob\n3,carol\n");
+    let r1 = engine.execute_pipeline(&write(&csv1, "overwrite"));
+    assert_eq!(r1.status, "ok", "overwrite failed: {:?}", r1.error);
+
+    let csv2 = write_file(tmp.path(), "in2.csv", "id,name\n10,dan\n11,eve\n");
+    let r2 = engine.execute_pipeline(&write(&csv2, "truncate"));
+    assert_eq!(r2.status, "ok", "truncate failed: {:?}", r2.error);
+
+    let out = out_path(tmp.path(), "out.csv");
+    let r3 = engine.execute_pipeline(&doc(
+        json!([
+            node("r", "src.postgres", json!({
+                "host": host, "port": port, "database": db,
+                "user": user, "password": pass,
+                "schemaName": "public", "tableName": table, "mode": "table"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    ));
+    assert_eq!(r3.status, "ok", "read failed: {:?}", r3.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

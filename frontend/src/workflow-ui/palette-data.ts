@@ -89,7 +89,7 @@ export const PALETTE: Category[] = [
                     src('jsonl', 'JSONL / NDJSON', 'available', 'Read newline-delimited JSON'),
                     src('xml', 'XML', 'planned'),
                     src('excel', 'Excel (XLSX)', 'planned'),
-                    src('avro', 'Avro', 'planned'),
+                    src('avro', 'Avro', 'available', 'Read Avro files via the DuckDB avro community extension'),
                     src('parquet', 'Parquet', 'available', 'Read columnar Parquet files'),
                     src('orc', 'ORC', 'planned'),
                     src('fixedwidth', 'Fixed-width', 'planned'),

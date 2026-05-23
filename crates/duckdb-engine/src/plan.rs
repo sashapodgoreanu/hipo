@@ -406,6 +406,7 @@ fn build_view_sql(
         }
         "src.postgres" | "src.cockroach" | "src.mysql" | "src.mariadb"
         | "src.motherduck" => build_relational_source(component_id, props),
+        "src.avro" => Ok(build_avro_source(props)),
         // Pass-through transforms
         "xf.filter" => build_filter(inputs, props),
         // Log Rows - pass data through unchanged; its rows surface in the
@@ -2122,6 +2123,13 @@ fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         "src.mysql" | "src.mariadb" => return db_attach(props, "mysql", 3306, true),
         "snk.mysql" | "snk.mariadb" => return db_attach(props, "mysql", 3306, false),
         "src.motherduck" => return md_attach(props),
+        // The avro reader lives in a community extension. The install
+        // step pre-fetches it, but a fresh DuckDB process still needs
+        // LOAD; INSTALL is idempotent and a safety net when the install
+        // step was skipped.
+        "src.avro" => {
+            return "INSTALL avro FROM community; LOAD avro; ".into();
+        }
         _ => {}
     }
     let db = match string_prop(props, "database").filter(|s| !s.is_empty()) {
@@ -2239,8 +2247,16 @@ fn build_relational_sink(
             q = qual,
             from = quote_ident(from_view)
         )),
+        // Truncate keeps the table's existing schema (and any indexes /
+        // grants on it) and replaces just the rows. Useful when the
+        // table is referenced by downstream views or foreign keys.
+        "truncate" => Ok(format!(
+            "TRUNCATE TABLE {q}; INSERT INTO {q} SELECT * FROM {from}",
+            q = qual,
+            from = quote_ident(from_view)
+        )),
         other => Err(EngineError::Config(format!(
-            "{}: write mode '{}' isn't implemented yet (use 'overwrite' or 'append')",
+            "{}: write mode '{}' isn't implemented yet (use 'overwrite', 'append', or 'truncate')",
             component_id, other
         ))),
     }
@@ -2301,6 +2317,14 @@ fn build_db_sink(props: &JsonValue, from_view: &str) -> String {
         t,
         quote_ident(from_view)
     )
+}
+
+/// Avro source. The `avro` DuckDB community extension exposes
+/// `read_avro` (read-only); the LOAD is in the stage prelude so the
+/// function is available before the SELECT runs.
+fn build_avro_source(props: &JsonValue) -> String {
+    let path = string_prop(props, "path").unwrap_or_default();
+    format!("SELECT * FROM read_avro('{}')", sql_escape(&path))
 }
 
 /// Cloud sources (S3 / GCS / Azure Blob / HTTP). DuckDB's httpfs +
