@@ -523,7 +523,7 @@ fn build_view_sql(
             Ok(build_cloud_source(scheme, props))
         }
         "src.postgres" | "src.cockroach" | "src.mysql" | "src.mariadb"
-        | "src.motherduck" | "src.ducklake" => build_relational_source(component_id, props),
+        | "src.motherduck" | "src.ducklake" | "src.pgvector" => build_relational_source(component_id, props),
         "src.avro" => Ok(build_avro_source(props)),
         "src.excel" => Ok(build_excel_source(props)),
         "src.iceberg" => Ok(build_iceberg_source(props)),
@@ -2462,8 +2462,12 @@ fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
     // Cockroach speaks PG wire so it rides the postgres extension;
     // MariaDB speaks MySQL wire so it rides the mysql extension.
     match component_id {
-        "src.postgres" | "src.cockroach" => return db_attach(props, "postgres", 5432, true),
-        "snk.postgres" | "snk.cockroach" => return db_attach(props, "postgres", 5432, false),
+        "src.postgres" | "src.cockroach" | "src.pgvector" => {
+            return db_attach(props, "postgres", 5432, true);
+        }
+        "snk.postgres" | "snk.cockroach" | "snk.pgvector" => {
+            return db_attach(props, "postgres", 5432, false);
+        }
         "src.mysql" | "src.mariadb" => return db_attach(props, "mysql", 3306, true),
         "snk.mysql" | "snk.mariadb" => return db_attach(props, "mysql", 3306, false),
         "src.motherduck" => return md_attach(props, true),
@@ -2634,6 +2638,7 @@ fn build_relational_sink(
 fn relational_qualified(alias: &str, component_id: &str, schema: Option<&str>, table: &str) -> String {
     let default_schema: Option<&str> = if component_id.ends_with(".postgres")
         || component_id.ends_with(".cockroach")
+        || component_id.ends_with(".pgvector")
     {
         Some("public")
     } else if component_id.ends_with(".motherduck") || component_id.ends_with(".ducklake") {
@@ -3056,7 +3061,7 @@ fn build_sink_sql(
         "snk.s3" | "snk.gcs" | "snk.azureblob" => Ok(build_cloud_sink(props, from_view)),
         "snk.sqlite" | "snk.duckdb" => Ok(build_db_sink(props, from_view)),
         "snk.postgres" | "snk.cockroach" | "snk.mysql" | "snk.mariadb"
-        | "snk.motherduck" | "snk.ducklake" => build_relational_sink(component_id, props, from_view),
+        | "snk.motherduck" | "snk.ducklake" | "snk.pgvector" => build_relational_sink(component_id, props, from_view),
         "snk.excel" => Ok(build_excel_sink(props, from_view)),
         "snk.spatial" => Ok(build_spatial_sink(props, from_view)),
         "snk.iceberg" => Ok(build_iceberg_sink(props, from_view)),

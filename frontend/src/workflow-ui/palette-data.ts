@@ -203,7 +203,7 @@ export const PALETTE: Category[] = [
                 id: 'src.vector',
                 label: 'Vector / AI Databases',
                 components: [
-                    src('pgvector', 'pgvector (Postgres)', 'preview', 'Read embeddings + metadata'),
+                    src('pgvector', 'pgvector (Postgres)', 'available', 'Read embeddings + metadata via DuckDB postgres ATTACH (server must have CREATE EXTENSION vector)'),
                     src('pinecone', 'Pinecone', 'preview', 'Fetch or similarity-search vectors'),
                     src('qdrant', 'Qdrant', 'preview'),
                     src('weaviate', 'Weaviate', 'preview'),
@@ -506,7 +506,7 @@ export const PALETTE: Category[] = [
                 id: 'snk.vector',
                 label: 'Vector / AI Databases',
                 components: [
-                    snk('pgvector', 'pgvector (Postgres)', 'preview', 'Write embeddings to Postgres + pgvector'),
+                    snk('pgvector', 'pgvector (Postgres)', 'available', 'Write embeddings to a Postgres table (server must have CREATE EXTENSION vector)'),
                     snk('pinecone', 'Pinecone', 'preview', 'Upsert vectors + metadata'),
                     snk('qdrant', 'Qdrant', 'preview'),
                     snk('weaviate', 'Weaviate', 'preview'),

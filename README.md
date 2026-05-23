@@ -100,7 +100,8 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Streaming** | Kafka, Pulsar, Redpanda, NATS, Kinesis, Event Hubs, Pub/Sub | Planned |
 | **APIs and SaaS** | REST, GraphQL, gRPC, plus Salesforce, HubSpot, Stripe, Notion, GitHub, and more | Planned |
 | **NoSQL and search** | MongoDB, Cassandra, Redis, DynamoDB, Elasticsearch, OpenSearch | Planned |
-| **Vector / AI databases** | pgvector, Pinecone, Qdrant, Weaviate, Chroma, Milvus, LanceDB | Preview |
+| **Vector / AI databases** | **pgvector** (rides the postgres ATTACH; server needs `CREATE EXTENSION vector`) | Available |
+| **Vector / AI databases** | Pinecone, Qdrant, Weaviate, Chroma, Milvus, LanceDB | Preview (need vendor SDKs) |
 
 ### Transforms
 
@@ -170,7 +171,8 @@ The whole group runs today. Validators split their input: passing rows continue 
 | **Network relational DBs** | SQL Server, Oracle, ClickHouse, generic JDBC | Planned |
 | **Streaming** | Kafka, Pulsar, NATS, Kinesis, REST / Webhook / GraphQL | Planned |
 | **NoSQL** | MongoDB, Redis, Elasticsearch, OpenSearch | Planned |
-| **Vector / AI databases** | pgvector, Pinecone, Qdrant, Weaviate, Chroma, Milvus, LanceDB | Preview |
+| **Vector / AI databases** | **pgvector** (Postgres ATTACH; server needs `CREATE EXTENSION vector`) | Available |
+| **Vector / AI databases** | Pinecone, Qdrant, Weaviate, Chroma, Milvus, LanceDB | Preview (need vendor SDKs) |
 
 ### Control flow
 

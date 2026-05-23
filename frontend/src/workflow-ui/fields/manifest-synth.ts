@@ -2275,6 +2275,33 @@ const distanceMetricField = (): Field => ({
 });
 
 function synthVectorSink(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'snk.pgvector') {
+        return base(comp, [
+            { label: 'Connection', fields: dbConnectionFields(comp.id) },
+            { label: 'Destination', fields: [
+                { key: 'schemaName', label: 'Schema', kind: 'text', defaultValue: 'public' },
+                { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'embeddings' },
+                {
+                    key: 'mode',
+                    label: 'Write mode',
+                    kind: 'select',
+                    defaultValue: 'overwrite',
+                    options: [
+                        { label: 'Create or replace', value: 'overwrite' },
+                        { label: 'Append (insert)', value: 'append' },
+                        { label: 'Upsert on conflict', value: 'upsert' },
+                        { label: 'Truncate + insert', value: 'truncate' },
+                    ],
+                },
+                {
+                    key: 'conflictColumns',
+                    label: 'Conflict columns (for upsert)',
+                    kind: 'columns',
+                    description: 'Required when mode is upsert.',
+                },
+            ]},
+        ], 'upstream');
+    }
     return base(
         comp,
         [
@@ -2315,6 +2342,18 @@ function synthVectorSink(comp: ComponentDef): ComponentManifest {
 }
 
 function synthVectorSource(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'src.pgvector') {
+        // pgvector tables live inside a regular Postgres server, so the
+        // same connection + table form as src.postgres applies. Vector
+        // columns come through DuckDB's postgres extension as FLOAT[N].
+        return base(comp, [
+            { label: 'Connection', fields: dbConnectionFields(comp.id) },
+            { label: 'Table', fields: [
+                { key: 'schemaName', label: 'Schema', kind: 'text', defaultValue: 'public' },
+                { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'embeddings' },
+            ]},
+        ]);
+    }
     return base(comp, [
         {
             label: 'Vector store',

@@ -2263,6 +2263,54 @@ fn geo_distance_computes_point_distance() {
 }
 
 #[test]
+fn pg_pgvector_roundtrip_through_postgres_attach() {
+    // Lives in the CI postgres-integration job (pgvector/pgvector:pg16
+    // image, so CREATE EXTENSION vector is preinstalled). Local skip is
+    // governed by DUCKLE_PG_HOST, same as the other PG tests. snk.pgvector
+    // + src.pgvector ride the same postgres ATTACH path as snk.postgres /
+    // src.postgres; this test confirms the component IDs route correctly.
+    let engine = engine_or_skip!();
+    let (host, port, db, user, pass) = match pg_env() {
+        Some(x) => x,
+        None => {
+            eprintln!("skipping: set DUCKLE_PG_HOST to run pgvector tests");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n2,bob\n3,carol\n");
+    let table = format!("pgv_test_{}", std::process::id());
+
+    let r1 = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.pgvector", json!({
+                "host": &host, "port": port, "database": &db,
+                "user": &user, "password": &pass,
+                "schemaName": "public", "tableName": &table, "mode": "overwrite"
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_eq!(r1.status, "ok", "pgvector write failed: {:?}", r1.error);
+
+    let out = out_path(tmp.path(), "out.csv");
+    let r2 = engine.execute_pipeline(&doc(
+        json!([
+            node("r", "src.pgvector", json!({
+                "host": host, "port": port, "database": db,
+                "user": user, "password": pass,
+                "schemaName": "public", "tableName": table, "mode": "table"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    ));
+    assert_eq!(r2.status, "ok", "pgvector read failed: {:?}", r2.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");
