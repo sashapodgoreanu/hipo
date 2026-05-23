@@ -590,6 +590,8 @@ fn build_view_sql(
         | "xf.num.log" => build_numeric(inputs, props, component_id),
         "xf.num.bucketize" => build_bucketize(inputs, props),
         "xf.num.zscore" => build_zscore(inputs, props),
+        "xf.rank.filter" => build_rank_filter(inputs, props),
+        "xf.fill_forward" => build_fill_forward(inputs, props),
         "xf.dt.parse" | "xf.dt.format" | "xf.dt.extract" | "xf.dt.trunc" | "xf.dt.tz" => {
             build_datetime(inputs, props, component_id)
         }
@@ -2983,6 +2985,81 @@ fn build_zscore(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String
         "SELECT *, CASE WHEN stddev_samp(CAST({col} AS DOUBLE)) OVER () = 0 THEN NULL ELSE (CAST({col} AS DOUBLE) - avg(CAST({col} AS DOUBLE)) OVER ()) / stddev_samp(CAST({col} AS DOUBLE)) OVER () END AS {out} FROM {up}",
         col = qcol,
         out = quote_ident(&output),
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Rank Filter: keep the top N rows per group, ordered by a column.
+/// Common reporting pattern: 'top 3 spenders per region', 'most
+/// recent 5 orders per customer'. Computes ROW_NUMBER over the
+/// (partitionBy, orderBy DESC|ASC) window in a subquery, then
+/// WHERE filters to rank <= N. desc defaults to true (top N).
+fn build_rank_filter(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.rank.filter"))?;
+    let order_col = string_prop(props, "orderBy")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Rank Filter needs an orderBy column".to_string())?;
+    let partition: Vec<String> = columns_from_props(props, "partitionBy").unwrap_or_default();
+    let n = props
+        .get("n")
+        .and_then(|v| v.as_i64())
+        .filter(|n| *n > 0)
+        .unwrap_or(10);
+    let desc = props
+        .get("desc")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let direction = if desc { "DESC" } else { "ASC" };
+    let partition_clause = if partition.is_empty() {
+        String::new()
+    } else {
+        let cols = partition
+            .iter()
+            .map(|c| quote_ident(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("PARTITION BY {} ", cols)
+    };
+    Ok(format!(
+        "SELECT * EXCLUDE (_duckle_rank) FROM (SELECT u.*, row_number() OVER ({part}ORDER BY {ord} {dir}) AS _duckle_rank FROM {up} u) WHERE _duckle_rank <= {n}",
+        part = partition_clause,
+        ord = quote_ident(&order_col),
+        dir = direction,
+        n = n,
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Forward-fill: replace NULL values with the most recent non-null
+/// value within a group, ordered by a sort column. The classic
+/// time-series gap-fill: missing readings get the previous reading.
+/// Uses last_value(col IGNORE NULLS) over an unbounded preceding
+/// window - DuckDB evaluates this in one pass.
+fn build_fill_forward(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.fill_forward"))?;
+    let column = string_prop(props, "column")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Forward Fill needs a column".to_string())?;
+    let order_col = string_prop(props, "orderBy")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Forward Fill needs an orderBy column".to_string())?;
+    let partition: Vec<String> = columns_from_props(props, "partitionBy").unwrap_or_default();
+    let partition_clause = if partition.is_empty() {
+        String::new()
+    } else {
+        let cols = partition
+            .iter()
+            .map(|c| quote_ident(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("PARTITION BY {} ", cols)
+    };
+    let qcol = quote_ident(&column);
+    Ok(format!(
+        "SELECT * REPLACE (last_value({col} IGNORE NULLS) OVER ({part}ORDER BY {ord} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS {col}) FROM {up}",
+        col = qcol,
+        part = partition_clause,
+        ord = quote_ident(&order_col),
         up = quote_ident(upstream)
     ))
 }

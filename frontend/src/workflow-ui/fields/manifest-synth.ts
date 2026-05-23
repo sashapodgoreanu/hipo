@@ -1476,6 +1476,40 @@ function synthRowTransform(comp: ComponentDef): ComponentManifest {
             { label: 'Distinct', fields: [{ key: 'columns', label: 'Columns', kind: 'columns', description: 'Leave empty to dedupe on the whole row.' }] },
         ], 'upstream');
     }
+    if (id === 'xf.rank.filter') {
+        return base(comp, [
+            {
+                label: 'Top N per group',
+                fields: [
+                    { key: 'partitionBy', label: 'Group by (optional)', kind: 'columns', description: 'Leave empty for top N across the whole input.' },
+                    { key: 'orderBy', label: 'Order by column', kind: 'column', required: true },
+                    {
+                        key: 'desc',
+                        label: 'Direction',
+                        kind: 'select',
+                        defaultValue: 'true',
+                        options: [
+                            { label: 'Descending (top N largest)', value: 'true' },
+                            { label: 'Ascending (top N smallest)', value: 'false' },
+                        ],
+                    },
+                    { key: 'n', label: 'N (rows to keep per group)', kind: 'integer', defaultValue: 10 },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'xf.fill_forward') {
+        return base(comp, [
+            {
+                label: 'Forward fill',
+                fields: [
+                    { key: 'column', label: 'Column to fill', kind: 'column', required: true },
+                    { key: 'orderBy', label: 'Order by column', kind: 'column', required: true, description: 'The window is ordered by this column (usually a timestamp).' },
+                    { key: 'partitionBy', label: 'Group by (optional)', kind: 'columns', description: 'Fill independently within each group.' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (id === 'xf.topn' || id === 'xf.sample' || id === 'xf.skip') {
         return base(comp, [
             {

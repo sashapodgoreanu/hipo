@@ -244,6 +244,8 @@ export const PALETTE: Category[] = [
                     xf('topn', 'Top N / Limit', 'available', 'Keep the first N rows'),
                     xf('sort', 'Sort', 'available', 'Order rows'),
                     xf('skip', 'Skip / Offset', 'available', 'Drop the first N rows'),
+                    xf('rank.filter', 'Top N per Group', 'available', 'Keep the top N rows per group, ordered by a column (row_number window + filter)'),
+                    xf('fill_forward', 'Forward Fill', 'available', 'Replace NULL values with the most recent non-null value within an ordered window (time-series gap fill)'),
                 ],
             },
             {

@@ -110,7 +110,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | Group | Operations |
 |---|---|
 | **Fields** | Map (visual row mapper), Project / Select, Cast / Convert Type, Rename, Add Column, Drop Columns, Reorder, Coalesce / Null Fill |
-| **Rows** | Filter (visual builder or raw SQL, with a **reject** port), Distinct, Sample, Top N / Limit, Sort, Skip / Offset |
+| **Rows** | Filter (visual builder or raw SQL, with a **reject** port), Distinct, Sample, Top N / Limit, Sort, Skip / Offset, **Top N per Group** (row_number window + filter; ascending or descending), **Forward Fill** (replace NULLs with the last non-null value within an ordered window - time-series gap fill) |
 | **Aggregate** | Group By, Rollup, Cube, Count Rows, **Window Aggregate** (SUM / AVG / COUNT / MIN / MAX OVER a window, keeps every row), **Approx Quantile** (median / p95 / p99 via t-digest, fixed memory regardless of cardinality), **Approx Count Distinct** (HyperLogLog, available as a function in the Group By dropdown) |
 | **Join** | Inner, Left, Right, Full Outer, Cross, Lookup, Semi, Anti, **Spatial Join** (two-input join whose predicate is ST_Intersects / Contains / Within / Touches / Crosses / Overlaps / Equals; INNER or LEFT) |
 | **Set operations** | Union, Union All, Intersect, Except / Minus |

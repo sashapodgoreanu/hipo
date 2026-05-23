@@ -2263,6 +2263,77 @@ fn geo_distance_computes_point_distance() {
 }
 
 #[test]
+fn rank_filter_keeps_top_n_per_group() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "sales.csv",
+        "region,user,amount\nus,a,100\nus,b,80\nus,c,60\nus,d,40\neu,e,90\neu,f,70\neu,g,50\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("r", "xf.rank.filter", json!({
+                "partitionBy": ["region"], "orderBy": "amount", "desc": true, "n": 2
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "r"), main_edge("e2", "r", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "rank filter failed: {:?}", r.error);
+    // Top 2 per region: us = a,b; eu = e,f.  Total 4 rows.
+    let n = count(&format!("read_csv_auto('{}')", out));
+    assert_eq!(n, 4, "expected 4 rows, got {}", n);
+    let has_c = scalar_string(&format!(
+        "SELECT CAST(count(*) AS VARCHAR) FROM read_csv_auto('{}') WHERE \"user\" = 'c'",
+        out
+    ));
+    assert_eq!(has_c, "0", "user c (rank 3 in us) should have been filtered out");
+}
+
+#[test]
+fn fill_forward_propagates_last_non_null() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // Two sensors with gappy readings; rows interleaved by ts.
+    let csv = write_file(
+        tmp.path(),
+        "readings.csv",
+        "sensor,ts,reading\nA,1,10\nA,2,\nA,3,\nA,4,20\nB,1,5\nB,2,\nB,3,15\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("f", "xf.fill_forward", json!({
+                "column": "reading", "orderBy": "ts", "partitionBy": ["sensor"]
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "f"), main_edge("e2", "f", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "fill_forward failed: {:?}", r.error);
+    // Sensor A at ts=2 was null; should now be 10 (forward-filled from ts=1).
+    let r_a2 = scalar_string(&format!(
+        "SELECT CAST(reading AS VARCHAR) FROM read_csv_auto('{}') WHERE sensor = 'A' AND ts = 2",
+        out
+    ));
+    let r_a3 = scalar_string(&format!(
+        "SELECT CAST(reading AS VARCHAR) FROM read_csv_auto('{}') WHERE sensor = 'A' AND ts = 3",
+        out
+    ));
+    let r_b2 = scalar_string(&format!(
+        "SELECT CAST(reading AS VARCHAR) FROM read_csv_auto('{}') WHERE sensor = 'B' AND ts = 2",
+        out
+    ));
+    assert_eq!(r_a2, "10", "A@ts=2 should fill to 10");
+    assert_eq!(r_a3, "10", "A@ts=3 should fill to 10");
+    assert_eq!(r_b2, "5", "B@ts=2 should fill from B@ts=1 (5), not bleed from A");
+}
+
+#[test]
 fn text_base64_roundtrips() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
