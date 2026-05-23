@@ -1280,6 +1280,70 @@ fn pg_sink_then_source_roundtrip() {
     assert_eq!(name, "bob", "got {}", name);
 }
 
+fn mysql_env() -> Option<(String, u64, String, String, String)> {
+    let host = std::env::var("DUCKLE_MYSQL_HOST").ok()?;
+    let port = std::env::var("DUCKLE_MYSQL_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3306);
+    let db = std::env::var("DUCKLE_MYSQL_DB").unwrap_or_else(|_| "ducktest".into());
+    let user = std::env::var("DUCKLE_MYSQL_USER").unwrap_or_else(|_| "root".into());
+    let pass = std::env::var("DUCKLE_MYSQL_PASS").unwrap_or_default();
+    Some((host, port, db, user, pass))
+}
+
+#[test]
+fn mysql_sink_then_source_roundtrip() {
+    let engine = engine_or_skip!();
+    let (host, port, db, user, pass) = match mysql_env() {
+        Some(x) => x,
+        None => {
+            eprintln!("skipping: set DUCKLE_MYSQL_HOST to run against a real MySQL");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n2,bob\n3,carol\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let table = format!("duckle_test_{}", std::process::id());
+
+    // csv -> snk.mysql
+    let write_doc = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.mysql", json!({
+                "host": host, "port": port, "database": db,
+                "user": user, "password": pass,
+                "tableName": table, "mode": "overwrite"
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    );
+    let r1 = engine.execute_pipeline(&write_doc);
+    assert_eq!(r1.status, "ok", "write failed: {:?}", r1.error);
+
+    // src.mysql -> csv
+    let read_doc = doc(
+        json!([
+            node("r", "src.mysql", json!({
+                "host": host, "port": port, "database": db,
+                "user": user, "password": pass,
+                "tableName": table, "mode": "table"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let r2 = engine.execute_pipeline(&read_doc);
+    assert_eq!(r2.status, "ok", "read failed: {:?}", r2.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+    let name = scalar_string(&format!(
+        "SELECT name FROM read_csv_auto('{}') WHERE id = 2",
+        out
+    ));
+    assert_eq!(name, "bob", "got {}", name);
+}
+
 #[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
