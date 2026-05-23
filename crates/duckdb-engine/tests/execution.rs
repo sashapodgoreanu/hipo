@@ -518,7 +518,7 @@ fn unimplemented_component_fails_loudly_not_silently() {
     let d = doc(
         json!([
             node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
-            node("x1", "xf.cdc.scd1", json!({})),
+            node("x1", "code.python", json!({})),
         ]),
         json!([main_edge("e1", "s1", "x1")]),
     );
@@ -1632,6 +1632,66 @@ fn scd2_closes_changed_and_inserts_new_versions() {
         out
     ));
     assert_eq!(closed, "b", "got {}", closed);
+}
+
+#[test]
+fn scd1_emits_resolved_state() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let cur = write_file(tmp.path(), "cur.csv", "id,v\n1,a\n2,b2\n3,c\n");
+    let prev = write_file(tmp.path(), "prev.csv", "id,v\n1,a\n2,b\n4,d\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("c", "src.csv", json!({ "path": cur, "hasHeader": true })),
+            node("p", "src.csv", json!({ "path": prev, "hasHeader": true })),
+            node("h", "xf.cdc.scd1", json!({ "naturalKey": ["id"] })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "c", "h"),
+            lookup_edge("e2", "p", "h"),
+            main_edge("e3", "h", "k"),
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "scd1 failed: {:?}", result.error);
+    // cur has (1,2,3); prev (4) retained because key 4 isn't in cur. Total 4.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 4);
+    // id=2 must show the CURRENT value (b2), not the prev (b).
+    let v = scalar_string(&format!(
+        "SELECT v FROM read_csv_auto('{}') WHERE id = 2",
+        out
+    ));
+    assert_eq!(v, "b2", "got {}", v);
+}
+
+#[test]
+fn upsert_emits_only_changes_and_inserts() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let cur = write_file(tmp.path(), "cur.csv", "id,v\n1,a\n2,b2\n3,c\n");
+    let prev = write_file(tmp.path(), "prev.csv", "id,v\n1,a\n2,b\n4,d\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("c", "src.csv", json!({ "path": cur, "hasHeader": true })),
+            node("p", "src.csv", json!({ "path": prev, "hasHeader": true })),
+            node("u", "xf.cdc.upsert", json!({
+                "naturalKey": ["id"], "compareColumns": ["v"]
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "c", "u"),
+            lookup_edge("e2", "p", "u"),
+            main_edge("e3", "u", "k"),
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "upsert failed: {:?}", result.error);
+    // id=1 unchanged (skipped), id=2 changed, id=3 new -> 2 rows.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
 }
 
 #[test]

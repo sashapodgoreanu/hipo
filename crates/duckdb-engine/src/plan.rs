@@ -434,6 +434,8 @@ fn build_view_sql(
         "xf.transpose" => build_transpose(inputs),
         "xf.cdc.diff" => build_cdc_diff(inputs, props),
         "xf.cdc.scd2" => build_scd2(inputs, props),
+        "xf.cdc.scd1" => build_scd1(inputs, props),
+        "xf.cdc.upsert" => build_upsert(inputs, props),
         // Data-quality validators - the PASS rows. Failures go to the
         // node's __reject table (see build_reject_sql).
         "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" | "qa.schemavalidate" => {
@@ -1396,6 +1398,82 @@ fn build_transpose(inputs: &NodeInputs) -> Result<String, String> {
          UNPIVOT (val FOR colname IN (COLUMNS(* EXCLUDE _row)))) \
          ON _row USING first(val) GROUP BY colname)",
         up = quote_ident(upstream)
+    ))
+}
+
+/// SCD Type 1: overwrite-in-place. Output is the resolved current
+/// state: every row from `current`, plus rows from `previous` whose
+/// key isn't in current (so unrelated history isn't dropped). Both
+/// inputs must have the same column schema.
+fn build_scd1(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let cur = inputs.main().ok_or_else(|| missing_input_msg("xf.cdc.scd1"))?;
+    let prev = inputs.first_lookup().ok_or_else(|| {
+        "SCD1 needs a 'previous' input on the lookup port".to_string()
+    })?;
+    let keys = columns_list(props, "naturalKey");
+    if keys.is_empty() {
+        return Err("SCD1 needs natural key columns".to_string());
+    }
+    let key_eq = keys
+        .iter()
+        .map(|k| {
+            let q = quote_ident(k);
+            format!("p.{q} = c.{q}")
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    Ok(format!(
+        "SELECT * FROM {cur} \
+         UNION ALL \
+         SELECT * FROM {prev} p WHERE NOT EXISTS (SELECT 1 FROM {cur} c WHERE {key_eq})",
+        cur = quote_ident(cur),
+        prev = quote_ident(prev),
+    ))
+}
+
+/// Merge / Upsert: output the delta to write into a target -  the
+/// rows in `current` that are either a new key or a changed value.
+/// Unchanged rows are skipped (the target already has them). Deletes
+/// are NOT emitted; use Diff Detect when you need them.
+fn build_upsert(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let cur = inputs.main().ok_or_else(|| missing_input_msg("xf.cdc.upsert"))?;
+    let prev = inputs.first_lookup().ok_or_else(|| {
+        "Upsert needs a 'previous' input on the lookup port".to_string()
+    })?;
+    let keys = columns_list(props, "naturalKey");
+    if keys.is_empty() {
+        return Err("Upsert needs natural key columns".to_string());
+    }
+    let compares = columns_list(props, "compareColumns");
+    let key_eq = keys
+        .iter()
+        .map(|k| {
+            let q = quote_ident(k);
+            format!("cur.{q} = p.{q}")
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let first_key = quote_ident(&keys[0]);
+    let change_clause = if compares.is_empty() {
+        // No compare columns means we only flag new keys; everything
+        // already in previous (regardless of value) is skipped.
+        String::new()
+    } else {
+        let cmp_diff = compares
+            .iter()
+            .map(|c| {
+                let q = quote_ident(c);
+                format!("cur.{q} IS DISTINCT FROM p.{q}")
+            })
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        format!(" OR ({cmp_diff})")
+    };
+    Ok(format!(
+        "SELECT cur.* FROM {cur} cur LEFT JOIN {prev} p ON {key_eq} \
+         WHERE p.{first_key} IS NULL{change_clause}",
+        cur = quote_ident(cur),
+        prev = quote_ident(prev),
     ))
 }
 

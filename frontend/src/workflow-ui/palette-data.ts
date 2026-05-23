@@ -362,9 +362,9 @@ export const PALETTE: Category[] = [
                 label: 'CDC / SCD',
                 components: [
                     xf('cdc.diff', 'Diff Detect', 'available', 'Tag inserted/updated/deleted rows vs a previous snapshot'),
-                    xf('cdc.scd1', 'SCD Type 1', 'planned'),
+                    xf('cdc.scd1', 'SCD Type 1', 'available', 'Resolved current state: cur + prev rows whose key is not in cur'),
                     xf('cdc.scd2', 'SCD Type 2', 'available', 'Maintain versioned history: close changed rows, insert new versions'),
-                    xf('cdc.upsert', 'Merge / Upsert', 'planned'),
+                    xf('cdc.upsert', 'Merge / Upsert', 'available', 'Emit the upsert payload: new + changed rows from cur'),
                 ],
             },
             {
