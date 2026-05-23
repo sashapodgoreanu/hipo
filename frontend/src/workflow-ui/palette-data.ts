@@ -306,6 +306,8 @@ export const PALETTE: Category[] = [
                     xf('regex.match', 'Regex Match', 'available', 'Boolean: does the regex match the column? (regexp_matches)'),
                     xf('url.parse', 'URL Parse', 'available', 'Extract scheme / host / port / path / query / fragment from a URL column'),
                     xf('text.similarity', 'Text Similarity', 'available', 'Pairwise string similarity between two columns - levenshtein / damerau / jaccard / jaro-winkler'),
+                    xf('text.base64', 'Base64', 'available', 'Encode a column to base64 text, or decode base64 back to bytes'),
+                    xf('text.tokenize', 'Tokenize', 'available', 'Lowercase and split into an array of words (default: split on non-alphanumerics)'),
                     xf('split', 'Split', 'available'),
                     xf('concat', 'Concat', 'available'),
                     xf('trim', 'Trim', 'available'),
@@ -341,6 +343,7 @@ export const PALETTE: Category[] = [
                     xf('num.power', 'Power', 'available'),
                     xf('num.sqrt', 'Square Root', 'available'),
                     xf('num.bucketize', 'Bucketize', 'available', 'Bin a numeric column into N equal-width buckets between low and high (width_bucket)'),
+                    xf('num.zscore', 'Z-Score', 'available', 'Per-row standardized value: (value - mean) / stddev across the whole input'),
                 ],
             },
             {

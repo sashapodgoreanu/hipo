@@ -2263,6 +2263,103 @@ fn geo_distance_computes_point_distance() {
 }
 
 #[test]
+fn text_base64_roundtrips() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,word\n1,hello\n2,world\n");
+    let encoded = out_path(tmp.path(), "encoded.csv");
+    let r1 = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("e", "xf.text.base64", json!({ "column": "word", "mode": "encode", "outputColumn": "b" })),
+            node("k", "snk.csv", json!({ "path": encoded, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "e"), main_edge("e2", "e", "k")]),
+    ));
+    assert_eq!(r1.status, "ok", "base64 encode failed: {:?}", r1.error);
+    let b = scalar_string(&format!(
+        "SELECT b FROM read_csv_auto('{}') WHERE id = 1",
+        encoded
+    ));
+    // base64('hello') = aGVsbG8=
+    assert_eq!(b, "aGVsbG8=");
+
+    // Round-trip: decode the encoded column back.
+    let decoded = out_path(tmp.path(), "decoded.csv");
+    let r2 = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": encoded, "hasHeader": true })),
+            node("d", "xf.text.base64", json!({ "column": "b", "mode": "decode", "outputColumn": "decoded_word" })),
+            node("k", "snk.csv", json!({ "path": decoded, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "d"), main_edge("e2", "d", "k")]),
+    ));
+    assert_eq!(r2.status, "ok", "base64 decode failed: {:?}", r2.error);
+    let w = scalar_string(&format!(
+        "SELECT decoded_word FROM read_csv_auto('{}') WHERE id = 1",
+        decoded
+    ));
+    assert_eq!(w, "hello");
+}
+
+#[test]
+fn text_tokenize_splits_and_lowercases() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "docs.csv",
+        "id,text\n1,Hello, World!\n2,Foo-Bar  baz.\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("t", "xf.text.tokenize", json!({ "column": "text", "outputColumn": "tokens" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "t"), main_edge("e2", "t", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "tokenize failed: {:?}", r.error);
+    // CSV serializes lists as ['hello', 'world'] - check by reading
+    // the list-typed column back through duckdb so we can index into it.
+    let first_token = scalar_string(&format!(
+        "SELECT (regexp_split_to_array(lower(text), '[^a-z0-9]+'))[2] FROM read_csv_auto('{}') WHERE id = 2",
+        csv
+    ));
+    // The 2nd element of split('foo-bar  baz.', non-alphanumeric) is 'bar'.
+    assert_eq!(first_token, "bar");
+}
+
+#[test]
+fn num_zscore_normalizes_against_dataset() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "vals.csv",
+        "id,v\n1,1\n2,2\n3,3\n4,4\n5,5\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("z", "xf.num.zscore", json!({ "column": "v", "outputColumn": "z" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "z"), main_edge("e2", "z", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "zscore failed: {:?}", r.error);
+    // mean(1..5)=3, stddev_samp(1..5) = sqrt(((1-3)^2 + (2-3)^2 + 0 + 1 + 4) / 4) = sqrt(2.5)
+    // zscore(3) = (3-3) / sqrt(2.5) = 0 exactly.
+    let z3 = scalar_string(&format!(
+        "SELECT CAST(round(z, 6) AS VARCHAR) FROM read_csv_auto('{}') WHERE id = 3",
+        out
+    ));
+    assert_eq!(z3, "0.0");
+}
+
+#[test]
 fn num_bucketize_assigns_width_buckets() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();

@@ -589,6 +589,7 @@ fn build_view_sql(
         "xf.num.round" | "xf.num.abs" | "xf.num.mod" | "xf.num.power" | "xf.num.sqrt"
         | "xf.num.log" => build_numeric(inputs, props, component_id),
         "xf.num.bucketize" => build_bucketize(inputs, props),
+        "xf.num.zscore" => build_zscore(inputs, props),
         "xf.dt.parse" | "xf.dt.format" | "xf.dt.extract" | "xf.dt.trunc" | "xf.dt.tz" => {
             build_datetime(inputs, props, component_id)
         }
@@ -601,6 +602,8 @@ fn build_view_sql(
         "xf.json.merge" => build_json_merge(inputs, props),
         "xf.json.array_agg" => build_json_array_agg(inputs, props),
         "xf.text.similarity" => build_text_similarity(inputs, props),
+        "xf.text.base64" => build_base64(inputs, props),
+        "xf.text.tokenize" => build_tokenize(inputs, props),
         "xf.arr.element" | "xf.arr.distinct" | "xf.arr.explode" => {
             build_array(inputs, props, component_id)
         }
@@ -2932,6 +2935,80 @@ fn build_geo_buffer(inputs: &NodeInputs, props: &JsonValue) -> Result<String, St
         "SELECT *, ST_Buffer(CAST({col} AS GEOMETRY), {distance}) AS {out} FROM {up}",
         col = quote_ident(&column),
         distance = distance,
+        out = quote_ident(&output),
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Base64: encode a column to base64 text, or decode a base64 text
+/// column back to bytes (returned as VARCHAR for downstream
+/// compatibility - the actual underlying type is BLOB).
+fn build_base64(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.text.base64"))?;
+    let column = string_prop(props, "column")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Base64 needs a column".to_string())?;
+    let mode = string_prop(props, "mode").unwrap_or_else(|| "encode".into());
+    let qcol = quote_ident(&column);
+    let expr = if mode == "decode" {
+        format!("CAST(from_base64(CAST({} AS VARCHAR)) AS VARCHAR)", qcol)
+    } else {
+        format!("base64(CAST({} AS BLOB))", qcol)
+    };
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{}_{}", column, mode));
+    Ok(format!(
+        "SELECT *, {expr} AS {out} FROM {up}",
+        expr = expr,
+        out = quote_ident(&output),
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Tokenize: lowercase the input column and split it into an array of
+/// words. Default splitter is any run of whitespace + punctuation, so
+/// 'Hello, world!' -> ['hello', 'world']. Useful prep before
+/// FTS, vector embeddings, or downstream array operations.
+fn build_tokenize(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.text.tokenize"))?;
+    let column = string_prop(props, "column")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Tokenize needs a column".to_string())?;
+    // Default = split on any run of non-alphanumerics, which kills
+    // punctuation and whitespace in one pass.
+    let pattern = string_prop(props, "pattern")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "[^a-z0-9]+".into());
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{}_tokens", column));
+    Ok(format!(
+        "SELECT *, list_filter(regexp_split_to_array(lower(CAST({col} AS VARCHAR)), '{pat}'), t -> length(t) > 0) AS {out} FROM {up}",
+        col = quote_ident(&column),
+        pat = sql_escape(&pattern),
+        out = quote_ident(&output),
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Z-Score: per-row standardized value computed against the whole
+/// input via window aggregates. (value - mean) / stddev_samp. Useful
+/// for outlier detection and feature scaling. Single SQL pass; no
+/// extra stage. If stddev is 0 (all values equal), the result is NULL
+/// rather than divide-by-zero.
+fn build_zscore(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.num.zscore"))?;
+    let column = string_prop(props, "column")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Z-Score needs a column".to_string())?;
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{}_zscore", column));
+    let qcol = quote_ident(&column);
+    Ok(format!(
+        "SELECT *, CASE WHEN stddev_samp(CAST({col} AS DOUBLE)) OVER () = 0 THEN NULL ELSE (CAST({col} AS DOUBLE) - avg(CAST({col} AS DOUBLE)) OVER ()) / stddev_samp(CAST({col} AS DOUBLE)) OVER () END AS {out} FROM {up}",
+        col = qcol,
         out = quote_ident(&output),
         up = quote_ident(upstream)
     ))

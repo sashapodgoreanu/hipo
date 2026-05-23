@@ -1684,6 +1684,45 @@ function synthWindowTransform(comp: ComponentDef): ComponentManifest {
 }
 
 function synthStringTransform(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'xf.text.base64') {
+        return base(comp, [
+            {
+                label: 'Base64',
+                fields: [
+                    { key: 'column', label: 'Column', kind: 'column', required: true },
+                    {
+                        key: 'mode',
+                        label: 'Mode',
+                        kind: 'select',
+                        defaultValue: 'encode',
+                        options: [
+                            { label: 'Encode (text/bytes -> base64 text)', value: 'encode' },
+                            { label: 'Decode (base64 text -> bytes-as-text)', value: 'decode' },
+                        ],
+                    },
+                    { key: 'outputColumn', label: 'Output column', kind: 'text', placeholder: '<column>_<mode>' },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (comp.id === 'xf.text.tokenize') {
+        return base(comp, [
+            {
+                label: 'Tokenize',
+                fields: [
+                    { key: 'column', label: 'Column', kind: 'column', required: true },
+                    {
+                        key: 'pattern',
+                        label: 'Split pattern (regex)',
+                        kind: 'text',
+                        placeholder: '[^a-z0-9]+',
+                        description: 'Default splits on any run of non-alphanumerics, dropping punctuation/whitespace.',
+                    },
+                    { key: 'outputColumn', label: 'Output column', kind: 'text', placeholder: '<column>_tokens' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.text.similarity') {
         return base(comp, [
             {
@@ -1891,6 +1930,17 @@ function synthDateTimeTransform(comp: ComponentDef): ComponentManifest {
 }
 
 function synthNumericTransform(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'xf.num.zscore') {
+        return base(comp, [
+            {
+                label: 'Z-Score',
+                fields: [
+                    { key: 'column', label: 'Column', kind: 'column', required: true },
+                    { key: 'outputColumn', label: 'Output column', kind: 'text', placeholder: '<column>_zscore' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.num.bucketize') {
         return base(comp, [
             {
