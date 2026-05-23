@@ -147,3 +147,58 @@ jobs:
           DUCKLE_MYSQL_USER: root
           DUCKLE_MYSQL_PASS: mytest
         run: cargo test -p duckle-duckdb-engine --test execution -- mysql_
+
+  # Live MinIO integration tests (covers all S3-compatible: MinIO, R2, B2).
+  minio-integration:
+    runs-on: ubuntu-latest
+    services:
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+          MINIO_DEFAULT_BUCKETS: duckle-test
+        ports: ['9000:9000']
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Seed MinIO bucket with a test object
+        run: |
+          set -e
+          # Upload a small parquet file to s3://duckle-test/orders.parquet
+          # via the DuckDB CLI itself, so the source test reads it back.
+          "$DUCKLE_DUCKDB_BIN" :memory: -c "
+            INSTALL httpfs; LOAD httpfs;
+            CREATE OR REPLACE SECRET seed (
+              TYPE S3,
+              KEY_ID 'minioadmin',
+              SECRET 'minioadmin',
+              REGION 'us-east-1',
+              ENDPOINT 'localhost:9000',
+              URL_STYLE 'path',
+              USE_SSL false
+            );
+            COPY (SELECT * FROM (VALUES (1,'alice'),(2,'bob'),(3,'carol')) t(id,name))
+              TO 's3://duckle-test/orders.parquet' (FORMAT PARQUET);
+          "
+      - name: Run MinIO integration tests
+        env:
+          DUCKLE_MINIO_HOST: localhost
+          DUCKLE_MINIO_PORT: '9000'
+          DUCKLE_MINIO_BUCKET: duckle-test
+          DUCKLE_MINIO_ACCESS_KEY: minioadmin
+          DUCKLE_MINIO_SECRET_KEY: minioadmin
+        run: cargo test -p duckle-duckdb-engine --test execution -- minio_

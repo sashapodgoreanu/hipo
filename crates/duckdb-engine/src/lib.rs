@@ -549,6 +549,12 @@ pub(crate) fn secret_statement(
             let sec = get("secretKey")?;
             let region = get("region").unwrap_or("us-east-1");
             let session = get("sessionToken");
+            // S3-compatible (MinIO / R2 / B2) sets endpoint + url_style +
+            // use_ssl. Empty / missing values are skipped so plain AWS S3
+            // keeps its defaults.
+            let endpoint = get("endpoint").filter(|s| !s.is_empty());
+            let url_style = get("urlStyle").filter(|s| !s.is_empty());
+            let use_ssl = get("useSsl").filter(|s| !s.is_empty());
             let mut parts = vec![
                 "TYPE S3".to_string(),
                 format!("KEY_ID '{}'", sql_escape(key)),
@@ -557,6 +563,16 @@ pub(crate) fn secret_statement(
             ];
             if let Some(s) = session {
                 parts.push(format!("SESSION_TOKEN '{}'", sql_escape(s)));
+            }
+            if let Some(e) = endpoint {
+                parts.push(format!("ENDPOINT '{}'", sql_escape(e)));
+            }
+            if let Some(u) = url_style {
+                parts.push(format!("URL_STYLE '{}'", sql_escape(u)));
+            }
+            if let Some(s) = use_ssl {
+                // DuckDB takes USE_SSL as a bool literal, not a string.
+                parts.push(format!("USE_SSL {}", s));
             }
             Some(format!(
                 "CREATE OR REPLACE SECRET secret_{} ({});",
@@ -597,7 +613,10 @@ pub(crate) fn collect_pipeline_secrets(doc: &PipelineDoc) -> Vec<String> {
             None => continue,
         };
         let format = match id {
-            "src.s3" | "snk.s3" => "s3",
+            // S3-compatible (plain S3 + MinIO / R2 / B2) all use the same
+            // CREATE SECRET (TYPE S3) machinery; the MinIO / R2 / B2
+            // variants add ENDPOINT + URL_STYLE in the form.
+            "src.s3" | "snk.s3" | "src.minio" | "src.r2" | "src.b2" => "s3",
             "src.gcs" | "snk.gcs" => "gcs",
             "src.azureblob" | "snk.azureblob" => "azureblob",
             _ => continue,

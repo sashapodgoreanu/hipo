@@ -1379,6 +1379,44 @@ fn md_source_reads_table() {
 }
 
 #[test]
+fn minio_source_reads_via_endpoint() {
+    // Live S3-compatible test. The CI minio-integration job seeds
+    // s3://duckle-test/orders.parquet with 3 rows; this verifies the
+    // engine can read it back through the SECRET's endpoint plumbing.
+    let engine = engine_or_skip!();
+    let host = match std::env::var("DUCKLE_MINIO_HOST") {
+        Ok(h) if !h.is_empty() => h,
+        _ => {
+            eprintln!("skipping: set DUCKLE_MINIO_HOST to run against MinIO");
+            return;
+        }
+    };
+    let port = std::env::var("DUCKLE_MINIO_PORT").unwrap_or_else(|_| "9000".into());
+    let bucket = std::env::var("DUCKLE_MINIO_BUCKET").unwrap_or_else(|_| "duckle-test".into());
+    let access = std::env::var("DUCKLE_MINIO_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let secret = std::env::var("DUCKLE_MINIO_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.minio", json!({
+                "bucket": bucket, "key": "orders.parquet", "region": "us-east-1",
+                "accessKey": access, "secretKey": secret,
+                "endpoint": format!("{}:{}", host, port),
+                "urlStyle": "path", "useSsl": "false",
+                "format": "parquet"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "r", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "MinIO read failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

@@ -133,9 +133,9 @@ export const PALETTE: Category[] = [
                     src('s3', 'Amazon S3', 'available', 'Read via DuckDB httpfs'),
                     src('gcs', 'Google Cloud Storage', 'available', 'Read via DuckDB httpfs'),
                     src('azureblob', 'Azure Blob Storage', 'available', 'Read via the azure extension'),
-                    src('minio', 'MinIO', 'planned'),
-                    src('r2', 'Cloudflare R2', 'planned'),
-                    src('b2', 'Backblaze B2', 'planned'),
+                    src('minio', 'MinIO', 'available', 'Read via S3-compatible endpoint'),
+                    src('r2', 'Cloudflare R2', 'available', 'Read via S3-compatible endpoint'),
+                    src('b2', 'Backblaze B2', 'available', 'Read via S3-compatible endpoint'),
                 ],
             },
             {

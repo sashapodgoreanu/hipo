@@ -395,10 +395,15 @@ fn build_view_sql(
         "src.json" | "src.jsonl" => Ok(build_json_source(props)),
         "src.sqlite" => Ok(build_sqlite_source(props)),
         "src.duckdb" => Ok(build_duckdb_source(props)),
-        "src.s3" | "src.gcs" | "src.azureblob" | "src.http" => Ok(build_cloud_source(
-            component_id.strip_prefix("src.").unwrap_or(component_id),
-            props,
-        )),
+        "src.s3" | "src.gcs" | "src.azureblob" | "src.http"
+        | "src.minio" | "src.r2" | "src.b2" => {
+            // MinIO / R2 / B2 are S3-compatible; the endpoint lives in
+            // the SECRET created by the runtime, so the URL itself is
+            // just s3://bucket/key.
+            let s = component_id.strip_prefix("src.").unwrap_or(component_id);
+            let scheme = if matches!(s, "minio" | "r2" | "b2") { "s3" } else { s };
+            Ok(build_cloud_source(scheme, props))
+        }
         "src.postgres" | "src.cockroach" | "src.mysql" | "src.mariadb"
         | "src.motherduck" => build_relational_source(component_id, props),
         // Pass-through transforms
