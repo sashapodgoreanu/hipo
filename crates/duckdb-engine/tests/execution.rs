@@ -1822,6 +1822,36 @@ fn pg_sink_upsert_updates_and_inserts() {
 }
 
 #[test]
+fn switch_routes_rows_to_case_outputs() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,amount\n1,50\n2,150\n3,200\n4,30\n");
+    let out_high = out_path(tmp.path(), "high.csv");
+    let out_low = out_path(tmp.path(), "low.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("sw", "ctl.switch", json!({
+                "branches": { "high": "amount > 100", "low": "amount <= 100" }
+            })),
+            node("kh", "snk.csv", json!({ "path": out_high, "hasHeader": true })),
+            node("kl", "snk.csv", json!({ "path": out_low, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "s", "sw"),
+            port_edge("e2", "sw", "case_1", "kh"),
+            port_edge("e3", "sw", "case_2", "kl"),
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "switch run failed: {:?}", result.error);
+    // case_1 (high: amount > 100) -> ids 2 and 3.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out_high)), 2);
+    // case_2 (low: <= 100, excluding high matches) -> ids 1 and 4.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out_low)), 2);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

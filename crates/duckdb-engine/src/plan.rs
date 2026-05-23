@@ -249,6 +249,12 @@ const REJECT_SUFFIX: &str = "__reject";
 fn output_table_ref(source_id: &str, source_handle: Option<&str>) -> String {
     match source_handle.map(canonical_port) {
         Some("reject") | Some("filter") => format!("{}{}", source_id, REJECT_SUFFIX),
+        // Switch / conditional split: each case + default port reads
+        // from its own `<node>__<handle>` table that build_switch
+        // materializes.
+        Some(h) if h.starts_with("case_") || h == "default" => {
+            format!("{}__{}", source_id, h)
+        }
         _ => source_id.to_string(),
     }
 }
@@ -393,6 +399,14 @@ fn build_stage(
                 Some(from_view.to_string()),
             )
         }
+    } else if component_id == "ctl.switch" {
+        // Switch materializes one table per case + default; it has no
+        // main output table, so the count_rows fallback in the executor
+        // (which would target node.id) just returns None for it.
+        let sql = build_switch(&node.id, inputs, &props).map_err(|e| {
+            EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
+        })?;
+        (format!("{}{}", attach, sql), StageKind::View, None)
     } else {
         let body = build_view_sql(component_id, &props, inputs).map_err(|e| {
             EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
@@ -1474,6 +1488,68 @@ fn build_transpose(inputs: &NodeInputs) -> Result<String, String> {
          ON _row USING first(val) GROUP BY colname)",
         up = quote_ident(upstream)
     ))
+}
+
+/// Switch / Conditional Split. Routes rows to case_1 ... case_N output
+/// ports based on the form's `branches` (a key-value of branch name
+/// -> boolean SQL expression). First-match-wins: a row that satisfied
+/// branch i is excluded from branches i+1..N and from default. Up to
+/// 3 cases (matching the fixed port set) plus a default for the
+/// remainder. The form's branch object preserves insertion order
+/// because the workspace enables serde_json's preserve_order feature.
+fn build_switch(node_id: &str, inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("ctl.switch"))?;
+    let mut conds: Vec<String> = Vec::new();
+    if let Some(obj) = props.get("branches").and_then(|v| v.as_object()) {
+        for (_name, val) in obj {
+            if let Some(c) = val.as_str().filter(|s| !s.trim().is_empty()) {
+                conds.push(c.to_string());
+            }
+            if conds.len() >= 3 {
+                break;
+            }
+        }
+    }
+    if conds.is_empty() {
+        return Err("Switch needs at least one branch condition".to_string());
+    }
+    let up = quote_ident(upstream);
+    let mut stmts: Vec<String> = Vec::new();
+    let mut prior: Vec<String> = Vec::new();
+    for (i, cond) in conds.iter().enumerate() {
+        let case_table = format!("{}__case_{}", node_id, i + 1);
+        let where_clause = if prior.is_empty() {
+            format!("({})", cond)
+        } else {
+            let neg = prior
+                .iter()
+                .map(|p| format!("NOT ({})", p))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            format!("({}) AND {}", cond, neg)
+        };
+        stmts.push(format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} WHERE {}",
+            quote_ident(&case_table),
+            up,
+            where_clause
+        ));
+        prior.push(cond.clone());
+    }
+    // Default: rows that no branch matched.
+    let default_table = format!("{}__default", node_id);
+    let default_where = prior
+        .iter()
+        .map(|p| format!("NOT ({})", p))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    stmts.push(format!(
+        "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} WHERE {}",
+        quote_ident(&default_table),
+        up,
+        default_where
+    ));
+    Ok(stmts.join("; "))
 }
 
 /// SCD Type 1: overwrite-in-place. Output is the resolved current
