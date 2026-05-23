@@ -415,10 +415,13 @@ impl DuckdbEngine {
         }
     }
 
-    /// Relational-DB upsert: DESCRIBE the upstream materialized table to
-    /// enumerate columns, then build INSERT ... ON CONFLICT (Postgres /
-    /// Cockroach) or INSERT ... ON DUPLICATE KEY UPDATE (MySQL /
-    /// MariaDB) with the right SET clause.
+    /// Relational-DB upsert. DuckDB's ATTACH doesn't propagate the
+    /// target's UNIQUE / PRIMARY KEY constraints, so a native DuckDB
+    /// INSERT ... ON CONFLICT fails to bind. Instead we stage the
+    /// upstream into the target DB via ATTACH and then run the real
+    /// ON CONFLICT (Postgres) / ON DUPLICATE KEY UPDATE (MySQL) INSERT
+    /// directly on the underlying connection through the extension's
+    /// passthrough function (postgres_execute / mysql_execute).
     fn run_upsert(
         &self,
         db: &Path,
@@ -447,9 +450,54 @@ impl DuckdbEngine {
             .iter()
             .filter(|c| !key_set.contains(c.as_str()))
             .collect();
-        let upsert_sql = build_upsert_statement(spec, &set_cols);
-        let full = format!("{}{}{}", secret_prefix, spec.attach, upsert_sql);
-        self.run(Some(db), &full, false)
+
+        // Sanitized staging table name (suffix from upstream node id).
+        let suffix: String = spec
+            .from_view
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let target_native = spec
+            .target
+            .strip_prefix("duckle_dst.")
+            .unwrap_or(&spec.target)
+            .to_string();
+        let staging_unqualified = format!("duckle_upsert_staging_{}", suffix);
+
+        // Step 1: stage the rows in the target DB (via ATTACH).
+        // Default schema differs per family (public for PG/Cockroach;
+        // for MySQL the database is selected at ATTACH, no schema layer).
+        let staging_native = match spec.family {
+            plan::UpsertFamily::Postgres => format!("public.{}", staging_unqualified),
+            plan::UpsertFamily::MySql => staging_unqualified.clone(),
+        };
+        let staging_duckle = format!("duckle_dst.{}", staging_native);
+        let stage_sql = format!(
+            "{secret}{attach}DROP TABLE IF EXISTS {sd}; \
+             CREATE TABLE {sd} AS SELECT * FROM {from} WHERE 1=0; \
+             INSERT INTO {sd} SELECT * FROM {from};",
+            secret = secret_prefix,
+            attach = spec.attach,
+            sd = staging_duckle,
+            from = plan::quote_ident(&spec.from_view)
+        );
+        self.run(Some(db), &stage_sql, false)?;
+
+        // Step 2: assemble the real upsert SQL, run it on the native
+        // connection so the constraint check sees the real schema.
+        let native_sql = build_native_upsert_sql(spec, &set_cols, &target_native, &staging_native);
+        let exec_fn = match spec.family {
+            plan::UpsertFamily::Postgres => "postgres_execute",
+            plan::UpsertFamily::MySql => "mysql_execute",
+        };
+        let exec_sql = format!(
+            "{secret}{attach}CALL {fn_name}('duckle_dst', '{sql}');",
+            secret = secret_prefix,
+            attach = spec.attach,
+            fn_name = exec_fn,
+            sql = native_sql.replace('\'', "''")
+        );
+        self.run(Some(db), &exec_sql, false)
     }
 
     fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
@@ -575,50 +623,66 @@ pub(crate) fn sql_escape(s: &str) -> String {
 /// Build a `CREATE OR REPLACE SECRET` statement for a cloud format if
 /// the options carry credentials. `secret_name` keeps per-source
 /// secrets distinct so connections don't trample each other.
-/// Compose the INSERT ... ON CONFLICT / ON DUPLICATE KEY UPDATE
-/// statement for a relational sink in upsert mode, given the columns
-/// the DESCRIBE step found and the user-declared conflict key.
-fn build_upsert_statement(spec: &plan::UpsertSpec, set_cols: &[&String]) -> String {
-    let from = plan::quote_ident(&spec.from_view);
-    let insert = format!("INSERT INTO {} SELECT * FROM {}", spec.target, from);
+/// Compose the upsert + cleanup SQL that runs natively on the target
+/// DB (through postgres_execute / mysql_execute), reading from the
+/// staging table we just populated via ATTACH. Identifiers are native
+/// to each family: double-quoted for Postgres, backticks for MySQL.
+fn build_native_upsert_sql(
+    spec: &plan::UpsertSpec,
+    set_cols: &[&String],
+    target_native: &str,
+    staging_native: &str,
+) -> String {
     match spec.family {
         plan::UpsertFamily::Postgres => {
             let key_list = spec
                 .conflict_cols
                 .iter()
-                .map(|c| plan::quote_ident(c))
+                .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
                 .collect::<Vec<_>>()
                 .join(", ");
-            if set_cols.is_empty() {
-                format!("{} ON CONFLICT ({}) DO NOTHING", insert, key_list)
+            let conflict = if set_cols.is_empty() {
+                format!("ON CONFLICT ({}) DO NOTHING", key_list)
             } else {
                 let set_clause = set_cols
                     .iter()
                     .map(|c| {
-                        let q = plan::quote_ident(c);
+                        let q = format!("\"{}\"", c.replace('"', "\"\""));
                         format!("{q} = EXCLUDED.{q}")
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{} ON CONFLICT ({}) DO UPDATE SET {}", insert, key_list, set_clause)
-            }
+                format!("ON CONFLICT ({}) DO UPDATE SET {}", key_list, set_clause)
+            };
+            format!(
+                "INSERT INTO {target} SELECT * FROM {staging} {conflict}; DROP TABLE {staging};",
+                target = target_native,
+                staging = staging_native,
+                conflict = conflict
+            )
         }
         plan::UpsertFamily::MySql => {
+            // MySQL relies on the target's existing UNIQUE/PRIMARY KEY.
+            // INSERT IGNORE is the fallback when there are no non-key
+            // columns to update.
             if set_cols.is_empty() {
-                // No non-key cols means there's nothing to update on
-                // conflict; emit INSERT IGNORE so the operation is at
-                // least idempotent on the existing rows.
-                format!("INSERT IGNORE INTO {} SELECT * FROM {}", spec.target, from)
+                format!(
+                    "INSERT IGNORE INTO {target} SELECT * FROM {staging}; DROP TABLE {staging};",
+                    target = target_native,
+                    staging = staging_native
+                )
             } else {
-                // MySQL's ON DUPLICATE KEY UPDATE relies on whatever
-                // UNIQUE / PRIMARY KEY indexes the target table already
-                // has; conflict_cols are informational on the form.
                 let set_clause = set_cols
                     .iter()
                     .map(|c| format!("`{c}` = VALUES(`{c}`)"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{} ON DUPLICATE KEY UPDATE {}", insert, set_clause)
+                format!(
+                    "INSERT INTO {target} SELECT * FROM {staging} ON DUPLICATE KEY UPDATE {set}; DROP TABLE {staging};",
+                    target = target_native,
+                    staging = staging_native,
+                    set = set_clause
+                )
             }
         }
     }
