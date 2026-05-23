@@ -2306,29 +2306,30 @@ fn text_base64_roundtrips() {
 fn text_tokenize_splits_and_lowercases() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
+    // Column name 'body' (not 'text' which is a SQL type alias and can
+    // trip the binder on some DuckDB builds).
     let csv = write_file(
         tmp.path(),
         "docs.csv",
-        "id,text\n1,Hello, World!\n2,Foo-Bar  baz.\n",
+        "id,body\n1,Hello, World!\n2,Foo-Bar  baz.\n",
     );
     let out = out_path(tmp.path(), "out.csv");
     let r = engine.execute_pipeline(&doc(
         json!([
             node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
-            node("t", "xf.text.tokenize", json!({ "column": "text", "outputColumn": "tokens" })),
+            node("t", "xf.text.tokenize", json!({ "column": "body", "outputColumn": "tokens" })),
             node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
         ]),
         json!([main_edge("e1", "s", "t"), main_edge("e2", "t", "k")]),
     ));
     assert_eq!(r.status, "ok", "tokenize failed: {:?}", r.error);
-    // CSV serializes lists as ['hello', 'world'] - check by reading
-    // the list-typed column back through duckdb so we can index into it.
-    let first_token = scalar_string(&format!(
-        "SELECT (regexp_split_to_array(lower(text), '[^a-z0-9]+'))[2] FROM read_csv_auto('{}') WHERE id = 2",
+    // Read back the array column via DuckDB and pull element 2 (1-based)
+    // of row id=2 - 'foo-bar  baz.' tokenizes to ['foo','bar','baz'].
+    let token = scalar_string(&format!(
+        "SELECT (list_filter(string_split_regex(lower(body), '[^a-z0-9]+'), x -> length(x) > 0))[2] FROM read_csv_auto('{}') WHERE id = 2",
         csv
     ));
-    // The 2nd element of split('foo-bar  baz.', non-alphanumeric) is 'bar'.
-    assert_eq!(first_token, "bar");
+    assert_eq!(token, "bar");
 }
 
 #[test]

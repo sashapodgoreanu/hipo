@@ -2984,7 +2984,7 @@ fn build_tokenize(inputs: &NodeInputs, props: &JsonValue) -> Result<String, Stri
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("{}_tokens", column));
     Ok(format!(
-        "SELECT *, list_filter(regexp_split_to_array(lower(CAST({col} AS VARCHAR)), '{pat}'), t -> length(t) > 0) AS {out} FROM {up}",
+        "SELECT *, list_filter(string_split_regex(lower(CAST({col} AS VARCHAR)), '{pat}'), x -> length(x) > 0) AS {out} FROM {up}",
         col = quote_ident(&column),
         pat = sql_escape(&pattern),
         out = quote_ident(&output),
