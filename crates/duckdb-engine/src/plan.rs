@@ -527,6 +527,7 @@ fn build_view_sql(
         "xf.cdc.scd2" => build_scd2(inputs, props),
         "xf.cdc.scd1" => build_scd1(inputs, props),
         "xf.cdc.upsert" => build_upsert(inputs, props),
+        "xf.ai.vector_search" => build_vector_search(inputs, props),
         // Data-quality validators - the PASS rows. Failures go to the
         // node's __reject table (see build_reject_sql).
         "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" | "qa.schemavalidate" => {
@@ -2440,6 +2441,9 @@ fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         "src.excel" => return "LOAD excel; ".into(),
         "src.iceberg" => return "LOAD iceberg; ".into(),
         "src.delta" => return "LOAD delta; ".into(),
+        // Vector Similarity Search uses the vss extension's array_*
+        // distance functions; LOAD before the SELECT runs.
+        "xf.ai.vector_search" => return "LOAD vss; ".into(),
         _ => {}
     }
     let db = match string_prop(props, "database").filter(|s| !s.is_empty()) {
@@ -2635,6 +2639,77 @@ fn build_db_sink(props: &JsonValue, from_view: &str) -> String {
 fn build_avro_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
     format!("SELECT * FROM read_avro('{}')", sql_escape(&path))
+}
+
+/// Vector Similarity Search via the DuckDB vss extension. Adds a
+/// similarity score column to each upstream row (against a fixed query
+/// vector) and optionally returns only the top-K most similar rows.
+/// The vector column is CAST to FLOAT[dim] so vss accepts it; the
+/// target vector is embedded as an array literal (validated as a JSON
+/// array of numbers at plan time).
+fn build_vector_search(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs
+        .main()
+        .ok_or_else(|| missing_input_msg("xf.ai.vector_search"))?;
+    let column = string_prop(props, "vectorColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Vector Search needs a vector column".to_string())?;
+    let target = string_prop(props, "targetVector")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "Vector Search needs a target vector (JSON array of floats)".to_string())?;
+    let dim = props
+        .get("dimension")
+        .and_then(|v| v.as_u64())
+        .filter(|d| *d > 0)
+        .ok_or_else(|| "Vector Search needs a positive dimension".to_string())?;
+    let metric = string_prop(props, "distanceMetric").unwrap_or_else(|| "cosine".into());
+    let top_k = props
+        .get("topK")
+        .and_then(|v| v.as_u64())
+        .filter(|k| *k > 0);
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "similarity_score".into());
+
+    let vec_vals: Vec<f64> = serde_json::from_str(&target)
+        .map_err(|e| format!("Vector Search: targetVector must be a JSON array of numbers ({})", e))?;
+    if vec_vals.len() as u64 != dim {
+        return Err(format!(
+            "Vector Search: target vector has {} elements but dimension is {}",
+            vec_vals.len(),
+            dim
+        ));
+    }
+    let target_literal = format!(
+        "[{}]::FLOAT[{}]",
+        vec_vals
+            .iter()
+            .map(|f| format!("{}", f))
+            .collect::<Vec<_>>()
+            .join(","),
+        dim
+    );
+    let col_cast = format!("CAST({} AS FLOAT[{}])", quote_ident(&column), dim);
+    let (fn_name, order_dir) = match metric.as_str() {
+        "l2" | "distance" => ("array_distance", "ASC"),
+        "inner_product" | "dot" => ("array_inner_product", "DESC"),
+        _ => ("array_cosine_similarity", "DESC"),
+    };
+    let score_expr = format!("{fn_name}({col_cast}, {target_literal})");
+    let mut sql = format!(
+        "SELECT *, {score} AS {out} FROM {up}",
+        score = score_expr,
+        out = quote_ident(&output),
+        up = quote_ident(upstream)
+    );
+    if let Some(k) = top_k {
+        sql = format!(
+            "{sql} ORDER BY {out} {dir} LIMIT {k}",
+            out = quote_ident(&output),
+            dir = order_dir
+        );
+    }
+    Ok(sql)
 }
 
 /// Iceberg source via the DuckDB iceberg extension's `iceberg_scan`.

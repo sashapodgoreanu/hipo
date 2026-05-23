@@ -1928,6 +1928,51 @@ fn tsv_sink_writes_tab_delimited() {
 }
 
 #[test]
+fn vector_search_ranks_by_cosine_similarity() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // Seed three rows with 3-dim float vectors via parquet (preserves
+    // the FLOAT[3] type that vss expects).
+    let parquet = out_path(tmp.path(), "vecs.parquet");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "COPY (SELECT * FROM (VALUES \
+                (1, [1.0, 0.0, 0.0]::FLOAT[3]), \
+                (2, [0.0, 1.0, 0.0]::FLOAT[3]), \
+                (3, [0.9, 0.1, 0.0]::FLOAT[3]) \
+            ) t(id, vec)) TO '{}' (FORMAT PARQUET)",
+            parquet
+        ),
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.parquet", json!({ "path": parquet })),
+            node("v", "xf.ai.vector_search", json!({
+                "vectorColumn": "vec",
+                "targetVector": "[0.9, 0.1, 0.0]",
+                "dimension": 3,
+                "distanceMetric": "cosine",
+                "topK": 2,
+                "outputColumn": "score"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "v"), main_edge("e2", "v", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "vector_search failed: {:?}", result.error);
+    // topK = 2 -> two rows. The closest match (identical vector) is id=3.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    let top = scalar_string(&format!(
+        "SELECT CAST(id AS VARCHAR) FROM read_csv_auto('{}') ORDER BY score DESC LIMIT 1",
+        out
+    ));
+    assert_eq!(top, "3", "got {}", top);
+}
+
+#[test]
 fn missing_source_file_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     let out = out_path(tmp.path(), "never.parquet");

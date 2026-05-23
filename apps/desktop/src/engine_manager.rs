@@ -142,6 +142,7 @@ const DUCKDB_EXTENSIONS: &[&str] = &[
     "avro",     // Avro reader
     "iceberg",  // Apache Iceberg table scan
     "delta",    // Delta Lake table scan
+    "vss",      // Vector similarity search (array_* distance funcs)
 ];
 
 fn duckdb_command(bin: &Path) -> std::process::Command {

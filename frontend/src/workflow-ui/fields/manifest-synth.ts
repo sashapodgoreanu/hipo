@@ -2177,6 +2177,61 @@ function synthVectorSource(comp: ComponentDef): ComponentManifest {
 
 function synthAiTransform(comp: ComponentDef): ComponentManifest {
     const id = comp.id;
+    if (id === 'xf.ai.vector_search') {
+        return base(comp, [
+            {
+                label: 'Vector similarity search',
+                fields: [
+                    {
+                        key: 'vectorColumn',
+                        label: 'Vector column',
+                        kind: 'column',
+                        required: true,
+                        description: 'Column holding the embeddings (array of floats).',
+                    },
+                    {
+                        key: 'targetVector',
+                        label: 'Query vector',
+                        kind: 'expression',
+                        rows: 3,
+                        required: true,
+                        placeholder: '[0.1, 0.2, 0.3, ...]',
+                        description: 'JSON array of floats, length must equal Dimension.',
+                    },
+                    {
+                        key: 'dimension',
+                        label: 'Dimension',
+                        kind: 'integer',
+                        required: true,
+                        defaultValue: 384,
+                    },
+                    {
+                        key: 'distanceMetric',
+                        label: 'Distance metric',
+                        kind: 'select',
+                        defaultValue: 'cosine',
+                        options: [
+                            { label: 'Cosine similarity (higher = closer)', value: 'cosine' },
+                            { label: 'L2 distance (lower = closer)', value: 'l2' },
+                            { label: 'Inner product (higher = closer)', value: 'inner_product' },
+                        ],
+                    },
+                    {
+                        key: 'topK',
+                        label: 'Top K',
+                        kind: 'integer',
+                        description: 'Leave empty to score every row; set K to keep only the K closest.',
+                    },
+                    {
+                        key: 'outputColumn',
+                        label: 'Score column',
+                        kind: 'text',
+                        defaultValue: 'similarity_score',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     if (id === 'xf.ai.embed') {
         return base(comp, [
             {
