@@ -84,6 +84,10 @@ pub struct Stage {
     pub sqlserver_sink: Option<SqlServerSinkSpec>,
     /// SQL Server / Synapse SELECT via tiberius.
     pub sqlserver_source: Option<SqlServerSourceSpec>,
+    /// Cassandra / ScyllaDB INSERT via the scylla CQL driver.
+    pub cassandra_sink: Option<CassandraSinkSpec>,
+    /// Cassandra / ScyllaDB SELECT via the scylla CQL driver.
+    pub cassandra_source: Option<CassandraSourceSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -158,6 +162,31 @@ pub struct SnowflakeSourceSpec {
     pub schema: Option<String>,
     pub warehouse: Option<String>,
     pub role: Option<String>,
+    pub query: String,
+}
+
+/// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
+/// (pure Rust, speaks CQL to both Cassandra + ScyllaDB).
+#[derive(Debug, Clone)]
+pub struct CassandraSinkSpec {
+    pub from_view: String,
+    /// Comma-separated list of contact points (host:port).
+    pub contact_points: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub keyspace: String,
+    pub table: String,
+    pub batch_size: usize,
+}
+
+/// src.cassandra / src.scylla: CQL SELECT via scylla.
+#[derive(Debug, Clone)]
+pub struct CassandraSourceSpec {
+    pub node_id: String,
+    pub contact_points: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub keyspace: Option<String>,
     pub query: String,
 }
 
@@ -690,6 +719,8 @@ fn build_stage(
     let mut clickhouse_source: Option<ClickHouseSourceSpec> = None;
     let mut sqlserver_sink: Option<SqlServerSinkSpec> = None;
     let mut sqlserver_source: Option<SqlServerSourceSpec> = None;
+    let mut cassandra_sink: Option<CassandraSinkSpec> = None;
+    let mut cassandra_source: Option<CassandraSourceSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -916,6 +947,29 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0 && *n <= 50) // Databricks max is 50s
                 .unwrap_or(30),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.cassandra" || component_id == "snk.scylla" {
+        // ScyllaDB shares CQL with Cassandra; same driver, same executor.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let contact_points = string_prop(&props, "contactPoints")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: contactPoints required (comma-separated host:port)", component_id)))?;
+        let keyspace = string_prop(&props, "keyspace")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: keyspace required", component_id)))?;
+        let table = string_prop(&props, "tableName")
+            .or_else(|| string_prop(&props, "table"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: tableName required", component_id)))?;
+        cassandra_sink = Some(CassandraSinkSpec {
+            from_view: from_view.to_string(),
+            contact_points,
+            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            keyspace,
+            table,
+            batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000) as usize,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.sqlserver" || component_id == "snk.synapse" {
@@ -1257,6 +1311,28 @@ fn build_stage(
                 .unwrap_or(100),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.cassandra" || component_id == "src.scylla" {
+        let contact_points = string_prop(&props, "contactPoints")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: contactPoints required", component_id)))?;
+        let keyspace = string_prop(&props, "keyspace").filter(|s| !s.is_empty());
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                let table = string_prop(&props, "tableName").filter(|s| !s.is_empty())?;
+                let ks = keyspace.clone()?;
+                Some(format!("SELECT * FROM {}.{}", ks, table))
+            })
+            .ok_or_else(|| EngineError::Config(format!("{}: query or (keyspace+tableName) required", component_id)))?;
+        cassandra_source = Some(CassandraSourceSpec {
+            node_id: node.id.clone(),
+            contact_points,
+            user: string_prop(&props, "user").filter(|s| !s.is_empty()),
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            keyspace,
+            query,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.sqlserver" || component_id == "src.synapse" {
         let host = string_prop(&props, "host")
             .filter(|s| !s.is_empty())
@@ -1542,6 +1618,8 @@ fn build_stage(
         clickhouse_source,
         sqlserver_sink,
         sqlserver_source,
+        cassandra_sink,
+        cassandra_source,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,

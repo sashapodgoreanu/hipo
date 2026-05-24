@@ -179,8 +179,8 @@ export const PALETTE: Category[] = [
                 label: 'NoSQL & Search',
                 components: [
                     src('mongodb', 'MongoDB', 'available', 'Read documents from a MongoDB collection via the official Rust driver (find with optional filter / projection / limit). Auth via mongodb:// connection string.'),
-                    src('cassandra', 'Cassandra', 'planned'),
-                    src('scylla', 'ScyllaDB', 'planned'),
+                    src('cassandra', 'Cassandra', 'available', 'Read CQL via the scylla driver (works with both Cassandra and ScyllaDB).'),
+                    src('scylla', 'ScyllaDB', 'available', 'Read CQL via the scylla driver. Same wire as src.cassandra.'),
                     src('redis', 'Redis', 'planned'),
                     src('dynamodb', 'DynamoDB', 'planned'),
                     src('elastic', 'Elasticsearch', 'available', 'Read docs from an Elasticsearch index via the _search API. from+size pagination (up to 10000 rows by default); ApiKey auth.'),
@@ -529,6 +529,8 @@ export const PALETTE: Category[] = [
                 label: 'NoSQL & Search',
                 components: [
                     snk('mongodb', 'MongoDB', 'available', 'Insert documents into a MongoDB collection via the official driver. Bulk insert_many batched at 1000 docs by default; replace mode drops the collection first.'),
+                    snk('cassandra', 'Cassandra', 'available', 'INSERT rows into a Cassandra table via the scylla CQL driver (one INSERT per row; CQL has no multi-row VALUES).'),
+                    snk('scylla', 'ScyllaDB', 'available', 'Same wire as snk.cassandra - INSERT via the scylla CQL driver.'),
                     snk('redis', 'Redis', 'planned'),
                     snk('elastic', 'Elasticsearch', 'available', 'Bulk-index docs via the _bulk NDJSON API (configurable host, index, ApiKey auth)'),
                     snk('opensearch', 'OpenSearch', 'available', 'Bulk-index docs via the OpenSearch _bulk NDJSON API (same shape as Elasticsearch)'),

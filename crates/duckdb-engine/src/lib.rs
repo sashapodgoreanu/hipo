@@ -28,9 +28,10 @@ pub mod plan;
 pub use history::{append_run_record, load_run_history, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
-    ClickHouseSinkSpec, ClickHouseSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec,
-    ElasticSourceSpec, MongoSinkSpec, MongoSourceSpec, RestSourceSpec, SnowflakeAuth,
-    SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec, WebhookSpec,
+    CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec, ClickHouseSourceSpec,
+    DatabricksSinkSpec, DatabricksSourceSpec, ElasticSourceSpec, MongoSinkSpec, MongoSourceSpec,
+    RestSourceSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec,
+    SqlServerSourceSpec, WebhookSpec,
 };
 
 #[derive(Debug, Error)]
@@ -380,6 +381,10 @@ impl DuckdbEngine {
                     self.run_sqlserver_sink(&db_path, spec)
                 } else if let Some(spec) = stage.sqlserver_source.as_ref() {
                     self.run_sqlserver_source(&db_path, spec)
+                } else if let Some(spec) = stage.cassandra_sink.as_ref() {
+                    self.run_cassandra_sink(&db_path, spec)
+                } else if let Some(spec) = stage.cassandra_source.as_ref() {
+                    self.run_cassandra_source(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -803,6 +808,151 @@ impl DuckdbEngine {
         Ok(format!(
             "snowflake: inserted {} rows into {}",
             total_inserted, spec.table
+        ))
+    }
+
+    /// Cassandra / ScyllaDB sink via the scylla CQL driver. Each row
+    /// becomes one INSERT statement (CQL doesn't support multi-row
+    /// VALUES). Values are interpolated as literals; bind parameters
+    /// would need per-column type detection which the scylla 0.13
+    /// generic API makes painful.
+    fn run_cassandra_sink(
+        &self,
+        db: &Path,
+        spec: &CassandraSinkSpec,
+    ) -> Result<String, EngineError> {
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!(
+                "cassandra: 0 rows to insert into {}.{}",
+                spec.keyspace, spec.table
+            ));
+        }
+        let cols: Vec<String> = match rows[0].as_object() {
+            Some(o) => o.keys().cloned().collect(),
+            None => {
+                return Err(EngineError::Query(
+                    "cassandra: upstream rows aren't JSON objects".into(),
+                ))
+            }
+        };
+        let cols_list = cols
+            .iter()
+            .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let qualified = format!("{}.{}", spec.keyspace, spec.table);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("cassandra: tokio rt: {}", e)))?;
+        let total = rt
+            .block_on(async {
+                let mut builder = scylla::SessionBuilder::new();
+                for cp in spec.contact_points.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    builder = builder.known_node(cp);
+                }
+                if let (Some(u), Some(p)) = (&spec.user, &spec.password) {
+                    builder = builder.user(u, p);
+                }
+                let session = builder
+                    .build()
+                    .await
+                    .map_err(|e| format!("connect: {}", e))?;
+                let mut total = 0_usize;
+                for row in &rows {
+                    let row_obj = row.as_object();
+                    let vals: Vec<String> = cols
+                        .iter()
+                        .map(|c| {
+                            let v = row_obj
+                                .and_then(|o| o.get(c))
+                                .unwrap_or(&JsonValue::Null);
+                            json_to_sql_literal(v)
+                        })
+                        .collect();
+                    let stmt = format!(
+                        "INSERT INTO {} ({}) VALUES ({})",
+                        qualified,
+                        cols_list,
+                        vals.join(", ")
+                    );
+                    session
+                        .query(stmt, &[])
+                        .await
+                        .map_err(|e| format!("insert: {}", e))?;
+                    total += 1;
+                }
+                Ok::<usize, String>(total)
+            })
+            .map_err(|e| EngineError::Query(format!("cassandra sink: {}", e)))?;
+        Ok(format!(
+            "cassandra: inserted {} rows into {}.{}",
+            total, spec.keyspace, spec.table
+        ))
+    }
+
+    /// Cassandra / ScyllaDB source via scylla. Best-effort CqlValue ->
+    /// JsonValue conversion for the common types (numbers, text, bool,
+    /// uuid, blob-as-base64).
+    fn run_cassandra_source(
+        &self,
+        db: &Path,
+        spec: &CassandraSourceSpec,
+    ) -> Result<String, EngineError> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("cassandra: tokio rt: {}", e)))?;
+        let rows: Vec<JsonValue> = rt
+            .block_on(async {
+                let mut builder = scylla::SessionBuilder::new();
+                for cp in spec.contact_points.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    builder = builder.known_node(cp);
+                }
+                if let (Some(u), Some(p)) = (&spec.user, &spec.password) {
+                    builder = builder.user(u, p);
+                }
+                if let Some(ks) = &spec.keyspace {
+                    builder = builder.use_keyspace(ks, false);
+                }
+                let session = builder
+                    .build()
+                    .await
+                    .map_err(|e| format!("connect: {}", e))?;
+                let result = session
+                    .query(spec.query.clone(), &[])
+                    .await
+                    .map_err(|e| format!("query: {}", e))?;
+                let cols: Vec<String> = result
+                    .col_specs
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+                let rows = result.rows.unwrap_or_default();
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut obj = serde_json::Map::new();
+                    for (i, name) in cols.iter().enumerate() {
+                        let v = row
+                            .columns
+                            .get(i)
+                            .and_then(|cv| cv.as_ref())
+                            .map(cql_value_to_json)
+                            .unwrap_or(JsonValue::Null);
+                        obj.insert(name.clone(), v);
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok::<Vec<JsonValue>, String>(out)
+            })
+            .map_err(|e| EngineError::Query(format!("cassandra source: {}", e)))?;
+        let count = rows.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "cassandra: materialized {} rows into {}",
+            count, spec.node_id
         ))
     }
 
@@ -2210,6 +2360,32 @@ fn db_quote_ident(s: &str) -> String {
 /// SQL Server identifier quoting: square brackets, internal `]` doubled.
 fn ss_quote_ident(s: &str) -> String {
     format!("[{}]", s.replace(']', "]]"))
+}
+
+/// Best-effort scylla::CqlValue -> JsonValue conversion. Covers the
+/// common scalar types; falls back to JSON string for anything we
+/// don't know about (lists/sets/maps stringify as Display).
+fn cql_value_to_json(v: &scylla::frame::response::result::CqlValue) -> JsonValue {
+    use scylla::frame::response::result::CqlValue;
+    match v {
+        CqlValue::Boolean(b) => JsonValue::Bool(*b),
+        CqlValue::TinyInt(n) => JsonValue::from(*n as i64),
+        CqlValue::SmallInt(n) => JsonValue::from(*n as i64),
+        CqlValue::Int(n) => JsonValue::from(*n as i64),
+        CqlValue::BigInt(n) => JsonValue::from(*n),
+        CqlValue::Counter(c) => JsonValue::from(c.0),
+        CqlValue::Float(f) => serde_json::Number::from_f64(*f as f64)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        CqlValue::Double(f) => serde_json::Number::from_f64(*f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        CqlValue::Text(s) | CqlValue::Ascii(s) => JsonValue::String(s.clone()),
+        CqlValue::Uuid(u) => JsonValue::String(u.to_string()),
+        CqlValue::Timeuuid(u) => JsonValue::String(u.to_string()),
+        CqlValue::Empty => JsonValue::Null,
+        other => JsonValue::String(format!("{:?}", other)),
+    }
 }
 
 /// Render a serde_json::Value as a Snowflake SQL literal.

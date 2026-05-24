@@ -1570,6 +1570,27 @@ function synthApiSink(comp: ComponentDef): ComponentManifest {
 }
 
 function synthNoSqlSource(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'src.cassandra' || comp.id === 'src.scylla') {
+        const vendor = comp.id === 'src.cassandra' ? 'Cassandra' : 'ScyllaDB';
+        return base(comp, [
+            {
+                label: `${vendor} cluster`,
+                fields: [
+                    { key: 'contactPoints', label: 'Contact points', kind: 'text', required: true, placeholder: '127.0.0.1:9042,host2:9042' },
+                    { key: 'user', label: 'User (optional)', kind: 'text' },
+                    { key: 'password', label: 'Password (optional)', kind: 'text', placeholder: '••••••••' },
+                    { key: 'keyspace', label: 'Keyspace', kind: 'text', placeholder: 'my_keyspace' },
+                ],
+            },
+            {
+                label: 'Query',
+                fields: [
+                    { key: 'tableName', label: 'Table (for SELECT *)', kind: 'text', placeholder: 'users' },
+                    { key: 'query', label: 'Or custom CQL', kind: 'expression', rows: 4, placeholder: 'SELECT * FROM ks.tbl WHERE ...' },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.mongodb') {
         return base(comp, [
             {
@@ -1664,6 +1685,22 @@ function synthNoSqlSource(comp: ComponentDef): ComponentManifest {
 }
 
 function synthNoSqlSink(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'snk.cassandra' || comp.id === 'snk.scylla') {
+        const vendor = comp.id === 'snk.cassandra' ? 'Cassandra' : 'ScyllaDB';
+        return base(comp, [
+            {
+                label: `${vendor} cluster`,
+                fields: [
+                    { key: 'contactPoints', label: 'Contact points', kind: 'text', required: true, placeholder: '127.0.0.1:9042,host2:9042' },
+                    { key: 'user', label: 'User (optional)', kind: 'text' },
+                    { key: 'password', label: 'Password (optional)', kind: 'text', placeholder: '••••••••' },
+                    { key: 'keyspace', label: 'Keyspace', kind: 'text', required: true },
+                    { key: 'tableName', label: 'Table', kind: 'text', required: true },
+                    { key: 'batchSize', label: 'Batch size (descriptive - CQL does single-row INSERTs)', kind: 'integer', defaultValue: 1000 },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'snk.mongodb') {
         return base(comp, [
             {
