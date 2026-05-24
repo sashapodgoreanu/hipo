@@ -2285,11 +2285,21 @@ fn snk_webhook_posts_one_request_per_row() {
                 Ok(s) => s,
                 Err(_) => break,
             };
-            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
-            let mut buf = [0u8; 8192];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let _ = tx.send(buf[..n].to_vec());
+            // Drain whatever the client wrote - headers and body can
+            // arrive in separate TCP reads, so keep going until the
+            // read times out (no more data) or we hit a cap.
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(buf);
             let body = b"ok";
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -2299,9 +2309,7 @@ fn snk_webhook_posts_one_request_per_row() {
             let _ = stream.write_all(body);
             let _ = stream.flush();
             // Windows CI hits WSAECONNABORTED (os err 10053) if we drop
-            // the stream before the client finishes reading. shutdown(Write)
-            // sends FIN cleanly; the short linger sleep gives the client
-            // time to drain and ACK.
+            // the stream before the client finishes reading.
             let _ = stream.shutdown(std::net::Shutdown::Write);
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -2355,11 +2363,20 @@ fn snk_rest_batches_rows_into_one_request() {
                 Ok(s) => s,
                 Err(_) => break,
             };
-            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
-            let mut buf = [0u8; 8192];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let _ = tx.send(buf[..n].to_vec());
+            // Drain until read times out so we catch header + body even
+            // when they land in separate TCP segments.
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(buf);
             let _ = stream.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
             );
