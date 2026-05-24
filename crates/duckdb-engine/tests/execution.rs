@@ -5698,6 +5698,52 @@ fn snk_cockroach_routes_through_postgres_attach_path() {
 }
 
 #[test]
+fn src_fixedwidth_extracts_positional_columns() {
+    // Simulate a mainframe / banking-style fixed-width file. Three
+    // rows, each line is "id (5 chars) | name (20 chars padded) |
+    // amount (10 chars right-aligned)". Engine should extract three
+    // columns via substr and trim trailing whitespace.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let fw = write_file(
+        tmp.path(),
+        "fw.txt",
+        "00001alice               000123.45\n\
+         00002bob                 000050.00\n\
+         00003carol               000999.99\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("f", "src.fixedwidth", json!({
+                "path": fw,
+                "columns": [
+                    {"name": "id",     "start": 1,  "width": 5},
+                    {"name": "name",   "start": 6,  "width": 20},
+                    {"name": "amount", "start": 26, "width": 10}
+                ]
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "f", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.fixedwidth failed: {:?}", r.error);
+    // Three rows in, three rows out.
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+    // Verify a specific extracted value - trailing pad should be stripped.
+    let alice_name = scalar_string(&format!(
+        "SELECT name FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert_eq!(alice_name, "alice");
+    let bob_amount = scalar_string(&format!(
+        "SELECT amount FROM read_csv_auto('{}') WHERE id = 2",
+        out
+    ));
+    assert_eq!(bob_amount, "000050.00");
+}
+
+#[test]
 fn src_yaml_reads_array_of_objects_as_rows() {
     // Top-level YAML array becomes one row per element.
     let engine = engine_or_skip!();

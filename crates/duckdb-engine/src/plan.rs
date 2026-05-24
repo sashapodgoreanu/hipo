@@ -2364,6 +2364,7 @@ fn build_view_sql(
         "src.iceberg" => Ok(build_iceberg_source(props)),
         "src.delta" => Ok(build_delta_source(props)),
         "src.spatial" => Ok(build_spatial_source(props)),
+        "src.fixedwidth" => build_fixedwidth_source(props),
         // Pass-through transforms
         "xf.filter" => build_filter(inputs, props),
         // Log Rows - pass data through unchanged; its rows surface in the
@@ -5822,6 +5823,61 @@ fn build_vector_search(inputs: &NodeInputs, props: &JsonValue) -> Result<String,
 fn build_spatial_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
     format!("SELECT * FROM ST_Read('{}')", sql_escape(&path))
+}
+
+/// Fixed-width / positional source. The form gives a `columns` array
+/// of `{name, start (1-based), width}` entries; the engine builds a
+/// SELECT that walks each line and pulls the substring at the right
+/// offset. The whole-file-as-one-column trick uses read_csv with a
+/// delimiter that can't appear in plain text (chr(7) - the BEL) so
+/// every line becomes a single string the SUBSTR projections can chew.
+/// Trims trailing whitespace by default (the standard for fixed-width
+/// dumps where every field is padded to its column width).
+fn build_fixedwidth_source(props: &JsonValue) -> Result<String, String> {
+    let path = string_prop(props, "path")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Fixed-width source: path required".to_string())?;
+    let cols = props
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            "Fixed-width source: columns array required ({name, start, width} each)".to_string()
+        })?;
+    if cols.is_empty() {
+        return Err("Fixed-width source: at least one column required".into());
+    }
+    let trim = props
+        .get("trim")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let projections: Vec<String> = cols
+        .iter()
+        .map(|c| {
+            let name = c
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("col")
+                .to_string();
+            let start = c.get("start").and_then(|v| v.as_i64()).unwrap_or(1);
+            let width = c.get("width").and_then(|v| v.as_i64()).unwrap_or(1);
+            let raw = format!("substr(line, {}, {})", start, width);
+            let expr = if trim {
+                format!("rtrim({})", raw)
+            } else {
+                raw
+            };
+            format!("{} AS {}", expr, quote_ident(&name))
+        })
+        .collect();
+    // chr(7) (BEL) is virtually never present in real text; using it as
+    // the read_csv delimiter forces every line to land as one column.
+    // all_varchar=true keeps the line string-typed regardless of what
+    // it happens to start with (numbers, dates, etc).
+    Ok(format!(
+        "WITH _lines AS (SELECT column0 AS line FROM read_csv_auto('{}', delim = chr(7), header = false, all_varchar = true)) SELECT {} FROM _lines",
+        sql_escape(&path),
+        projections.join(", ")
+    ))
 }
 
 /// Iceberg source via the DuckDB iceberg extension's `iceberg_scan`.
