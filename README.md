@@ -181,7 +181,11 @@ The whole group runs today. Validators split their input: passing rows continue 
 | **Replicate / Tee** | Send the same data to multiple downstream outputs | Available |
 | **Merge Streams** | Concatenate multiple input streams (UNION ALL) | Available |
 | **Switch / Conditional Split** | Route rows to `case_1..N` outputs by boolean condition (first match wins); rows that don't match any condition fall to a `default` output | Available |
-| **Iterate / For Each / Wait / Schedule / Throttle / Retry / Dead Letter / Try-Catch / Run Pipeline / Trigger / Checkpoint** | Runtime orchestration features | Planned (engine-runtime, not pure SQL) |
+| **Wait / Delay** | Sleep `N ms / s / min / h` before passing rows through. Useful for rate-limiting a downstream API or stretching out smoke tests. | Available |
+| **Throttle** | Insert an inter-stage delay derived from a rows-per-second target. Best-effort for batch pipelines, the hook is in place for streaming. | Available |
+| **Checkpoint** | Pass rows through and also write a parquet snapshot to a path. The durable artifact a future run can read back via `src.parquet`. | Available |
+| **Dead Letter Queue** | Terminal sink for rejected rows (JSON / CSV / Parquet at a path). Conventionally wired to an upstream node's reject port. | Available |
+| **Iterate / For Each / Schedule / Try-Catch / Retry / Run Pipeline / Trigger** | Loop and nested-pipeline orchestration | Planned (need DAG-engine restructuring; orchestration crate exists for cron-style schedules) |
 
 ### Orchestration and workspace
 

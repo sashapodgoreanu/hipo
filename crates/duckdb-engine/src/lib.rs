@@ -305,6 +305,12 @@ impl DuckdbEngine {
                 kind: kind_label.into(),
             });
 
+            // ctl.wait / ctl.throttle inject an inter-stage delay
+            // before running the SQL. Done in the executor so the
+            // planner stays declarative.
+            if let Some(ms) = stage.wait_ms {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
             let started = Instant::now();
             // Enforce "error if exists" before writing a local file sink.
             let sql = format!("{}{}", secret_prefix, stage.sql);

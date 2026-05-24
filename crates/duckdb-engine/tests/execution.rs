@@ -2263,6 +2263,99 @@ fn geo_distance_computes_point_distance() {
 }
 
 #[test]
+fn ctl_wait_actually_sleeps_before_passthrough() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n2\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let started = std::time::Instant::now();
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "ctl.wait", json!({ "duration": 250, "unit": "milliseconds" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "w"), main_edge("e2", "w", "k")]),
+    ));
+    let elapsed = started.elapsed();
+    assert_eq!(r.status, "ok", "ctl.wait failed: {:?}", r.error);
+    assert!(
+        elapsed >= std::time::Duration::from_millis(200),
+        "expected pipeline >= 200ms with a 250ms wait, got {:?}",
+        elapsed
+    );
+    let n = count(&format!("read_csv_auto('{}')", out));
+    assert_eq!(n, 2, "rows should pass through unchanged");
+}
+
+#[test]
+fn ctl_checkpoint_writes_sidecar_parquet() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n2,bob\n");
+    let snapshot = out_path(tmp.path(), "snapshot.parquet");
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("c", "ctl.checkpoint", json!({ "name": "after_ingest", "storage": snapshot })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "ctl.checkpoint failed: {:?}", r.error);
+    // Both the sidecar parquet and the downstream CSV exist with the
+    // full upstream content.
+    let from_parquet = count(&format!("read_parquet('{}')", snapshot));
+    let from_csv = count(&format!("read_csv_auto('{}')", out));
+    assert_eq!(from_parquet, 2);
+    assert_eq!(from_csv, 2);
+}
+
+#[test]
+fn ctl_deadletter_writes_to_path() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n2,bob\n");
+    let dlq = out_path(tmp.path(), "dlq.json");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("d", "ctl.deadletter", json!({ "destination": dlq, "format": "json" })),
+        ]),
+        json!([main_edge("e1", "s", "d")]),
+    ));
+    assert_eq!(r.status, "ok", "ctl.deadletter failed: {:?}", r.error);
+    let n = count(&format!("read_json_auto('{}')", dlq));
+    assert_eq!(n, 2);
+}
+
+#[test]
+fn ctl_throttle_inserts_per_stage_delay() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let started = std::time::Instant::now();
+    // rate=5 rows/sec -> 200ms per stage delay.
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("t", "ctl.throttle", json!({ "rate": 5 })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "t"), main_edge("e2", "t", "k")]),
+    ));
+    let elapsed = started.elapsed();
+    assert_eq!(r.status, "ok", "ctl.throttle failed: {:?}", r.error);
+    assert!(
+        elapsed >= std::time::Duration::from_millis(150),
+        "expected pipeline >= 150ms with rate=5/sec throttle, got {:?}",
+        elapsed
+    );
+}
+
+#[test]
 fn text_match_contains_starts_ends() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();

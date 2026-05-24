@@ -563,9 +563,9 @@ export const PALETTE: Category[] = [
                 id: 'ctl.timing',
                 label: 'Timing',
                 components: [
-                    ctl('wait', 'Wait / Delay', 'planned'),
+                    ctl('wait', 'Wait / Delay', 'available', 'Sleep for a fixed number of milliseconds before passing rows through (smoke tests, rate-limit a downstream API)'),
                     ctl('schedule', 'Schedule', 'planned'),
-                    ctl('throttle', 'Throttle', 'planned'),
+                    ctl('throttle', 'Throttle', 'available', 'Insert an inter-stage delay derived from a rows-per-second target (best-effort for batch pipelines, hook is in place for streaming)'),
                 ],
             },
             {
@@ -574,7 +574,7 @@ export const PALETTE: Category[] = [
                 components: [
                     ctl('runpipeline', 'Run Pipeline', 'planned'),
                     ctl('trigger', 'Trigger Pipeline', 'planned'),
-                    ctl('checkpoint', 'Checkpoint', 'planned'),
+                    ctl('checkpoint', 'Checkpoint', 'available', 'Pass rows through and also write a parquet snapshot to a path - the durable artifact a future run can read back via src.parquet'),
                 ],
             },
             {
@@ -583,7 +583,7 @@ export const PALETTE: Category[] = [
                 components: [
                     ctl('try', 'Try / Catch', 'planned'),
                     ctl('retry', 'Retry', 'planned'),
-                    ctl('deadletter', 'Dead Letter Queue', 'planned'),
+                    ctl('deadletter', 'Dead Letter Queue', 'available', 'Terminal sink for rejected rows - parquet or csv at a configurable path; conventionally wired to an upstream node\'s reject port'),
                 ],
             },
         ],

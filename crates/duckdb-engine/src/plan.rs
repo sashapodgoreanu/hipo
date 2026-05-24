@@ -48,6 +48,9 @@ pub struct Stage {
     /// query) so the PRAGMA sees committed state. Works unchanged on
     /// v1.4 too.
     pub text_search: Option<TextSearchSpec>,
+    /// Milliseconds the executor sleeps before running this stage.
+    /// Set by ctl.wait and ctl.throttle. None = no delay.
+    pub wait_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +364,7 @@ fn build_stage(
     let mut sink_mode: Option<String> = None;
     let mut upsert: Option<UpsertSpec> = None;
     let mut text_search: Option<TextSearchSpec> = None;
+    let mut wait_ms: Option<u64> = None;
     // ATTACH statements for external-DB nodes (DuckDB/SQLite). Each stage
     // runs in its own CLI process, so fixed aliases are collision-free.
     let attach = attach_prelude(component_id, &props);
@@ -419,6 +423,95 @@ fn build_stage(
                 Some(from_view.to_string()),
             )
         }
+    } else if component_id == "ctl.wait" {
+        // Pass-through view. Engine sleeps wait_ms before running the SQL.
+        // Form writes { duration: int, unit: 'milliseconds'|'seconds'|'minutes'|'hours' }.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let dur = props.get("duration").and_then(|v| v.as_u64()).unwrap_or(0);
+        let unit = string_prop(&props, "unit").unwrap_or_else(|| "seconds".into());
+        let ms = match unit.as_str() {
+            "milliseconds" | "ms" => dur,
+            "minutes" => dur.saturating_mul(60_000),
+            "hours" => dur.saturating_mul(3_600_000),
+            _ => dur.saturating_mul(1_000),
+        };
+        if ms > 0 {
+            wait_ms = Some(ms);
+        }
+        let sql = format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM {}",
+            quote_ident(&node.id),
+            quote_ident(from_view)
+        );
+        (sql, StageKind::View, None)
+    } else if component_id == "ctl.throttle" {
+        // Same shape as ctl.wait - applies an inter-stage delay derived
+        // from the requested rows-per-second. Marginal for batch
+        // workloads but the hook is in place for streaming.
+        // Form writes { rate: int (rows/sec) }.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let rps = props
+            .get("rate")
+            .and_then(|v| v.as_f64())
+            .or_else(|| props.get("rowsPerSecond").and_then(|v| v.as_f64()))
+            .unwrap_or(0.0);
+        if rps > 0.0 {
+            wait_ms = Some((1000.0 / rps).max(1.0) as u64);
+        }
+        let sql = format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM {}",
+            quote_ident(&node.id),
+            quote_ident(from_view)
+        );
+        (sql, StageKind::View, None)
+    } else if component_id == "ctl.checkpoint" {
+        // Pass-through view + a sidecar parquet write. The temp DB the
+        // executor uses goes away after the pipeline; the parquet is
+        // the durable artifact a user can read back into a future run.
+        // Form writes { name, storage }.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let path = string_prop(&props, "storage")
+            .or_else(|| string_prop(&props, "path"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: checkpoint storage path required", component_id)))?;
+        let sql = format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM {}; COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET)",
+            quote_ident(&node.id),
+            quote_ident(from_view),
+            quote_ident(&node.id),
+            sql_escape(&path)
+        );
+        (sql, StageKind::View, None)
+    } else if component_id == "ctl.deadletter" {
+        // Terminal sink for rejected rows. Same shape as snk.parquet /
+        // snk.csv / snk.json - write the upstream to a file.
+        // Form writes { destination: path, format: 'json'|'csv'|'parquet' }.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let path = string_prop(&props, "destination")
+            .or_else(|| string_prop(&props, "path"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: dead letter destination required", component_id)))?;
+        let format = string_prop(&props, "format").unwrap_or_else(|| "json".into());
+        sink_path = Some(path.clone());
+        sink_mode = string_prop(&props, "mode").filter(|s| !s.is_empty());
+        let copy = match format.as_str() {
+            "csv" => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT CSV, HEADER true)",
+                quote_ident(from_view),
+                sql_escape(&path)
+            ),
+            "parquet" => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET, COMPRESSION 'ZSTD')",
+                quote_ident(from_view),
+                sql_escape(&path)
+            ),
+            _ => format!(
+                "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY false)",
+                quote_ident(from_view),
+                sql_escape(&path)
+            ),
+        };
+        (copy, StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "ctl.switch" {
         // Switch materializes one table per case + default; it has no
         // main output table, so the count_rows fallback in the executor
@@ -473,6 +566,7 @@ fn build_stage(
         sink_mode,
         upsert,
         text_search,
+        wait_ms,
     })
 }
 
