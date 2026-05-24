@@ -4,12 +4,12 @@ This document is the source of truth for what's in the palette but
 not yet executable. The README's capability tables are the highlight
 reel; this is the full ledger.
 
-The palette currently carries **300 components**, broken down:
+The palette currently carries **301 components**, broken down:
 
-- **251 available** - executes on the DuckDB engine today
+- **255 available** - executes on the DuckDB engine today
 - **12 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
-- **37 planned** - reserved in the palette so the roadmap is visible,
+- **34 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
 
 If you drop a planned or preview tile and try to run, the executor
@@ -24,19 +24,19 @@ it's a preview component.` rather than silently doing nothing.
 
 | Component | Notes |
 |---|---|
-| `src.kafka` / `snk.kafka` | Needs `rdkafka` (C library) or a pure-Rust client; non-trivial dep |
 | `src.pulsar` / `snk.pulsar` | Apache Pulsar Rust client; new dep |
-| `src.redpanda` | Kafka-wire-compatible - alias of `src.kafka` once the driver lands |
 | `src.nats` / `snk.nats` | `async-nats` driver; pairs with the streaming-pipeline mode |
 | `src.kinesis` / `snk.kinesis` | AWS SDK for Rust; sizeable dep tree |
 | `src.eventhubs` | Azure AMQP via `azure_sdk_eventhubs` |
 | `src.pubsub` | GCP Pub/Sub Rust SDK |
 | `src.rabbit` | `lapin` driver; AMQP 0.9.1 |
 
-These need more than a driver - the engine's per-stage shell-out model
-assumes a finite input. A streaming-source mode (continuous run with
-checkpoint commits) is a separate engine workstream that lands alongside
-the first broker driver.
+`src.kafka`, `snk.kafka`, `src.redpanda`, `snk.redpanda` shipped via
+the pure-Rust `rskafka` driver (no C dep, builds cleanly on every
+CI runner). Current semantics are **batch**: produce/consume up to N
+records per stage run. A true streaming mode (continuous run with
+checkpoint commits) is a separate engine workstream; lands alongside
+the next broker driver.
 
 ### Vector-DB read sources (vendor-specific scan APIs)
 

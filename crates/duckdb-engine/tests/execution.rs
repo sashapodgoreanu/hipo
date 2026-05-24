@@ -6094,6 +6094,61 @@ fn src_milvus_paginates_via_offset() {
 }
 
 #[test]
+fn snk_and_src_kafka_roundtrip_via_real_broker() {
+    // Env-gated like the mongo / redis tests. Set DUCKLE_KAFKA_BROKERS
+    // to a working comma-separated list (e.g. 127.0.0.1:9092) and
+    // DUCKLE_KAFKA_TOPIC to a topic name. Produces 3 records via
+    // snk.kafka then consumes them back via src.kafka.
+    let engine = engine_or_skip!();
+    let brokers = match std::env::var("DUCKLE_KAFKA_BROKERS").ok() {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            eprintln!("skipping: set DUCKLE_KAFKA_BROKERS to run Kafka tests");
+            return;
+        }
+    };
+    let topic = std::env::var("DUCKLE_KAFKA_TOPIC")
+        .unwrap_or_else(|_| format!("duckle-test-{}", std::process::id()));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alpha\n2,beta\n3,gamma\n");
+
+    // Produce.
+    let r1 = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.kafka", json!({
+                "brokers": &brokers,
+                "topic": &topic,
+                "keyColumn": "id",
+            })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    ));
+    assert_eq!(r1.status, "ok", "kafka sink failed: {:?}", r1.error);
+
+    // Consume back.
+    let out = out_path(tmp.path(), "kafka.csv");
+    let r2 = engine.execute_pipeline(&doc(
+        json!([
+            node("k", "src.kafka", json!({
+                "brokers": &brokers,
+                "topic": &topic,
+                "startOffset": -1,
+                "maxRecords": 100,
+            })),
+            node("o", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "k", "o")]),
+    ));
+    assert_eq!(r2.status, "ok", "kafka source failed: {:?}", r2.error);
+    let n = count(&format!("read_csv_auto('{}')", out));
+    // We may pick up other test records from earlier runs against the
+    // same topic; just assert we got AT LEAST our 3 produced records.
+    assert!(n >= 3, "expected at least 3 records consumed, got {}", n);
+}
+
+#[test]
 fn snk_and_src_redis_roundtrip_via_real_url() {
     // Env-gated like the mongo / postgres / mysql tests. Set
     // DUCKLE_REDIS_URL to a working redis URL (e.g. redis://127.0.0.1:6379/0)

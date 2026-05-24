@@ -152,9 +152,9 @@ export const PALETTE: Category[] = [
                 id: 'src.streaming',
                 label: 'Streaming',
                 components: [
-                    src('kafka', 'Apache Kafka', 'planned'),
+                    src('kafka', 'Apache Kafka', 'available', 'Batch-consume up to maxRecords messages from a single partition via the pure-Rust `rskafka` driver. Emits {offset, key, value, timestamp_ms} rows. startOffset negative = read from earliest available; positive = read from that offset. Batch ETL semantics - continuous streaming is on the roadmap.'),
                     src('pulsar', 'Apache Pulsar', 'planned'),
-                    src('redpanda', 'Redpanda', 'planned'),
+                    src('redpanda', 'Redpanda', 'available', 'Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition.'),
                     src('nats', 'NATS JetStream', 'planned'),
                     src('rabbit', 'RabbitMQ', 'planned'),
                     src('kinesis', 'AWS Kinesis', 'planned'),
@@ -513,7 +513,8 @@ export const PALETTE: Category[] = [
                 id: 'snk.streaming',
                 label: 'Streaming',
                 components: [
-                    snk('kafka', 'Apache Kafka', 'planned'),
+                    snk('kafka', 'Apache Kafka', 'available', 'Produce one Kafka record per upstream row via the pure-Rust `rskafka` driver. Record key = optional keyColumn value; record value = JSON-stringified row. Records go to a single partition (partitionId, default 0); pipelined batching (default 500 records per produce call).'),
+                    snk('redpanda', 'Redpanda', 'available', 'Same wire protocol as Kafka - rides the rskafka driver. Use snk.kafka semantics.'),
                     snk('pulsar', 'Apache Pulsar', 'planned'),
                     snk('nats', 'NATS JetStream', 'planned'),
                     snk('kinesis', 'AWS Kinesis', 'planned'),

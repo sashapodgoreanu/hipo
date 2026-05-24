@@ -61,6 +61,12 @@ redis = { version = "0.27", default-features = false }
 # out as YAML/TOML. Avoids needing DuckDB extensions for either format.
 serde_yaml = "0.9"
 toml = "0.8"
+# Kafka (and Redpanda) producer + consumer via the pure-Rust rskafka
+# crate (InfluxDB IOx in production). Async-only - wrapped in tokio
+# block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
+# build dance entirely, at the cost of fewer broker-protocol features
+# (good enough for batch produce + batch consume, no admin client).
+rskafka = "0.5"
 
 [features]
 default = ["oracle"]

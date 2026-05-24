@@ -30,10 +30,11 @@ pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
     CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec, ClickHouseSourceSpec,
     DatabricksSinkSpec, DatabricksSourceSpec, ElasticSourceSpec, FormatFileSinkSpec,
-    FormatFileSourceSpec, FormatKind, MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec,
-    OracleSinkSpec, OracleSourceSpec, QdrantSourceSpec, RedisSinkSpec, RedisSourceSpec,
-    RestPagination, RestSourceSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec,
-    SqlServerSinkSpec, SqlServerSourceSpec, WeaviateSourceSpec, WebhookSpec,
+    FormatFileSourceSpec, FormatKind, KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec,
+    MongoSinkSpec, MongoSourceSpec, OracleSinkSpec, OracleSourceSpec, QdrantSourceSpec,
+    RedisSinkSpec, RedisSourceSpec, RestPagination, RestSourceSpec, SnowflakeAuth,
+    SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec,
+    WeaviateSourceSpec, WebhookSpec,
 };
 
 #[derive(Debug, Error)]
@@ -513,6 +514,10 @@ impl DuckdbEngine {
                     self.run_format_source(&db_path, spec)
                 } else if let Some(spec) = stage.format_sink.as_ref() {
                     self.run_format_sink(&db_path, spec)
+                } else if let Some(spec) = stage.kafka_sink.as_ref() {
+                    self.run_kafka_sink(&db_path, spec)
+                } else if let Some(spec) = stage.kafka_source.as_ref() {
+                    self.run_kafka_source(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -1719,6 +1724,185 @@ impl DuckdbEngine {
             spec.format,
             rows.len(),
             spec.path
+        ))
+    }
+
+    /// Kafka / Redpanda producer via rskafka. Each upstream row
+    /// becomes one Kafka record: key = optional keyColumn value,
+    /// value = JSON-stringified row. Records go into a single
+    /// partition (multi-partition fan-out is a follow-up). Async
+    /// underneath; wrapped in tokio block_on like mongo / tiberius.
+    fn run_kafka_sink(
+        &self,
+        db: &Path,
+        spec: &KafkaSinkSpec,
+    ) -> Result<String, EngineError> {
+        let select = format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view));
+        let rows = self.run_rows(Some(db), &select)?;
+        if rows.is_empty() {
+            return Ok(format!("kafka: 0 rows to produce to {}", spec.topic));
+        }
+        let cancel = self.cancel.clone();
+        let bootstrap: Vec<String> = spec
+            .bootstrap_servers
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("kafka: tokio rt: {}", e)))?;
+        let total: Result<usize, String> = rt.block_on(async {
+            use rskafka::client::partition::{Compression, UnknownTopicHandling};
+            use rskafka::client::ClientBuilder;
+            use rskafka::record::Record;
+            let client = ClientBuilder::new(bootstrap)
+                .build()
+                .await
+                .map_err(|e| format!("connect: {}", e))?;
+            let pc = client
+                .partition_client(&spec.topic, spec.partition_id, UnknownTopicHandling::Retry)
+                .await
+                .map_err(|e| format!("partition client: {}", e))?;
+            let mut total = 0_usize;
+            let now = chrono::Utc::now();
+            for chunk in rows.chunks(spec.batch_size) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("cancelled".into());
+                }
+                let records: Vec<Record> = chunk
+                    .iter()
+                    .map(|row| {
+                        let key = if spec.key_column.is_empty() {
+                            None
+                        } else {
+                            row.get(&spec.key_column).and_then(|v| match v {
+                                JsonValue::String(s) => Some(s.as_bytes().to_vec()),
+                                JsonValue::Null => None,
+                                other => Some(other.to_string().into_bytes()),
+                            })
+                        };
+                        let value = serde_json::to_string(row)
+                            .unwrap_or_default()
+                            .into_bytes();
+                        Record {
+                            key,
+                            value: Some(value),
+                            headers: std::collections::BTreeMap::new(),
+                            timestamp: now,
+                        }
+                    })
+                    .collect();
+                pc.produce(records, Compression::default())
+                    .await
+                    .map_err(|e| format!("produce batch: {}", e))?;
+                total += chunk.len();
+            }
+            Ok(total)
+        });
+        match total {
+            Ok(n) => Ok(format!("kafka: produced {} record(s) to {}", n, spec.topic)),
+            Err(e) if e == "cancelled" => Err(EngineError::Cancelled),
+            Err(e) => Err(EngineError::Query(format!("kafka sink: {}", e))),
+        }
+    }
+
+    /// Kafka / Redpanda consumer via rskafka. Batch-fetches up to
+    /// max_records messages from a single partition starting at
+    /// start_offset (negative = earliest available). Emits rows of
+    /// {offset, key, value, timestamp_ms}. Value is the raw bytes
+    /// decoded as UTF-8 (best-effort) - schema-aware decoding (Avro,
+    /// Protobuf) is on the roadmap.
+    fn run_kafka_source(
+        &self,
+        db: &Path,
+        spec: &KafkaSourceSpec,
+    ) -> Result<String, EngineError> {
+        let cancel = self.cancel.clone();
+        let bootstrap: Vec<String> = spec
+            .bootstrap_servers
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("kafka: tokio rt: {}", e)))?;
+        let rows: Result<Vec<JsonValue>, String> = rt.block_on(async {
+            use rskafka::client::partition::UnknownTopicHandling;
+            use rskafka::client::ClientBuilder;
+            let client = ClientBuilder::new(bootstrap)
+                .build()
+                .await
+                .map_err(|e| format!("connect: {}", e))?;
+            let pc = client
+                .partition_client(&spec.topic, spec.partition_id, UnknownTopicHandling::Retry)
+                .await
+                .map_err(|e| format!("partition client: {}", e))?;
+            // Negative start_offset = read from earliest available.
+            let mut next_offset = if spec.start_offset < 0 {
+                pc.get_offset(rskafka::client::partition::OffsetAt::Earliest)
+                    .await
+                    .map_err(|e| format!("earliest offset: {}", e))?
+            } else {
+                spec.start_offset
+            };
+            let mut out: Vec<JsonValue> = Vec::new();
+            while (out.len() as u64) < spec.max_records {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("cancelled".into());
+                }
+                let (records, _hw) = pc
+                    .fetch_records(next_offset, 1..1_000_000, 1_000)
+                    .await
+                    .map_err(|e| format!("fetch: {}", e))?;
+                if records.is_empty() {
+                    break;
+                }
+                for r in records {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("offset".into(), JsonValue::from(r.offset));
+                    obj.insert(
+                        "timestamp_ms".into(),
+                        JsonValue::from(r.record.timestamp.timestamp_millis()),
+                    );
+                    obj.insert(
+                        "key".into(),
+                        r.record
+                            .key
+                            .as_ref()
+                            .map(|b| JsonValue::String(String::from_utf8_lossy(b).to_string()))
+                            .unwrap_or(JsonValue::Null),
+                    );
+                    obj.insert(
+                        "value".into(),
+                        r.record
+                            .value
+                            .as_ref()
+                            .map(|b| JsonValue::String(String::from_utf8_lossy(b).to_string()))
+                            .unwrap_or(JsonValue::Null),
+                    );
+                    out.push(JsonValue::Object(obj));
+                    next_offset = r.offset + 1;
+                    if out.len() as u64 >= spec.max_records {
+                        break;
+                    }
+                }
+            }
+            Ok(out)
+        });
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) if e == "cancelled" => return Err(EngineError::Cancelled),
+            Err(e) => return Err(EngineError::Query(format!("kafka source: {}", e))),
+        };
+        let count = rows.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "kafka: materialized {} record(s) into {}",
+            count, spec.node_id
         ))
     }
 

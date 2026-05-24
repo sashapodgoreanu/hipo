@@ -135,6 +135,10 @@ pub struct Stage {
     /// YAML / TOML config-format writer: SELECT the upstream view, serialize
     /// the row array with the relevant serde crate, write to disk.
     pub format_sink: Option<FormatFileSinkSpec>,
+    /// Kafka producer (also handles Redpanda - same wire protocol).
+    pub kafka_sink: Option<KafkaSinkSpec>,
+    /// Kafka consumer (also handles Redpanda).
+    pub kafka_source: Option<KafkaSourceSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -339,6 +343,39 @@ pub struct FormatFileSinkSpec {
     pub from_view: String,
     pub path: String,
     pub format: FormatKind,
+}
+
+/// snk.kafka / snk.redpanda: bulk-produce one Kafka record per
+/// upstream row. Record key = optional keyColumn value; record value
+/// = JSON-stringified row. Records are produced into a single
+/// partition (partitionId, default 0) - parallel multi-partition
+/// produce is a follow-up.
+#[derive(Debug, Clone)]
+pub struct KafkaSinkSpec {
+    pub from_view: String,
+    /// Comma-separated list of "host:port" entries.
+    pub bootstrap_servers: String,
+    pub topic: String,
+    pub partition_id: i32,
+    /// Empty = no record key.
+    pub key_column: String,
+    /// Records per produce batch. Defaults to 500 - bigger means
+    /// fewer broker round-trips but more memory.
+    pub batch_size: usize,
+}
+
+/// src.kafka / src.redpanda: batch-consume up to `max_records`
+/// messages from a single partition starting at `start_offset`
+/// (negative = read from earliest). Emits {offset, key, value, timestamp_ms}
+/// rows; value is the raw byte string (no schema unpacking, no Avro).
+#[derive(Debug, Clone)]
+pub struct KafkaSourceSpec {
+    pub node_id: String,
+    pub bootstrap_servers: String,
+    pub topic: String,
+    pub partition_id: i32,
+    pub start_offset: i64,
+    pub max_records: u64,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -934,6 +971,8 @@ fn build_stage(
     let mut milvus_source: Option<MilvusSourceSpec> = None;
     let mut format_source: Option<FormatFileSourceSpec> = None;
     let mut format_sink: Option<FormatFileSinkSpec> = None;
+    let mut kafka_sink: Option<KafkaSinkSpec> = None;
+    let mut kafka_source: Option<KafkaSourceSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -1438,6 +1477,32 @@ fn build_stage(
             bulk_action: Some(action_line),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if matches!(component_id, "snk.kafka" | "snk.redpanda") {
+        // Kafka producer (Redpanda speaks the Kafka wire protocol so
+        // it's a pure alias). Bootstrap servers + topic + optional
+        // keyColumn + partitionId. Must come before the
+        // starts_with("snk.") catch-all below.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let bootstrap = string_prop(&props, "brokers")
+            .or_else(|| string_prop(&props, "bootstrapServers"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: brokers required (comma-separated host:port)", component_id)))?;
+        let topic = string_prop(&props, "topic")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
+        kafka_sink = Some(KafkaSinkSpec {
+            from_view: from_view.to_string(),
+            bootstrap_servers: bootstrap,
+            topic,
+            partition_id: props.get("partitionId").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            key_column: string_prop(&props, "keyColumn").unwrap_or_default(),
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(500) as usize,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if matches!(component_id, "snk.yaml" | "snk.toml") {
         // Single-file YAML / TOML writer. SELECT the upstream view's
         // rows, serialize as a single doc. YAML emits a top-level
@@ -1771,6 +1836,27 @@ fn build_stage(
             user,
             password: string_prop(&props, "password").unwrap_or_default(),
             query,
+        });
+        (String::new(), StageKind::View, None)
+    } else if matches!(component_id, "src.kafka" | "src.redpanda") {
+        // Kafka batch-consume from a single partition. start_offset
+        // negative = read from earliest available; positive = read
+        // from that offset. max_records caps the batch (defaults to
+        // 1000 - this is a batch ETL connector, not a streaming pump).
+        let bootstrap = string_prop(&props, "brokers")
+            .or_else(|| string_prop(&props, "bootstrapServers"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: brokers required", component_id)))?;
+        let topic = string_prop(&props, "topic")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: topic required", component_id)))?;
+        kafka_source = Some(KafkaSourceSpec {
+            node_id: node.id.clone(),
+            bootstrap_servers: bootstrap,
+            topic,
+            partition_id: props.get("partitionId").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            start_offset: props.get("startOffset").and_then(|v| v.as_i64()).unwrap_or(-1),
+            max_records: props.get("maxRecords").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000),
         });
         (String::new(), StageKind::View, None)
     } else if matches!(component_id, "src.yaml" | "src.toml") {
@@ -2303,6 +2389,8 @@ fn build_stage(
         milvus_source,
         format_source,
         format_sink,
+        kafka_sink,
+        kafka_source,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,
