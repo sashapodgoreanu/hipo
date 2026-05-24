@@ -2286,6 +2286,7 @@ fn snk_webhook_posts_one_request_per_row() {
                 Err(_) => break,
             };
             stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            stream.set_nodelay(true).ok();
             let mut buf = [0u8; 8192];
             let n = stream.read(&mut buf).unwrap_or(0);
             let _ = tx.send(buf[..n].to_vec());
@@ -2296,6 +2297,13 @@ fn snk_webhook_posts_one_request_per_row() {
             );
             let _ = stream.write_all(resp.as_bytes());
             let _ = stream.write_all(body);
+            let _ = stream.flush();
+            // Windows CI hits WSAECONNABORTED (os err 10053) if we drop
+            // the stream before the client finishes reading. shutdown(Write)
+            // sends FIN cleanly; the short linger sleep gives the client
+            // time to drain and ACK.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
         }
     });
 
@@ -2348,12 +2356,16 @@ fn snk_rest_batches_rows_into_one_request() {
                 Err(_) => break,
             };
             stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            stream.set_nodelay(true).ok();
             let mut buf = [0u8; 8192];
             let n = stream.read(&mut buf).unwrap_or(0);
             let _ = tx.send(buf[..n].to_vec());
             let _ = stream.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
             );
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
         }
     });
 
