@@ -6608,6 +6608,102 @@ fn src_git_log_emits_one_row_per_commit() {
     assert_eq!(tweak, "Tweak: pipe | in subject");
 }
 
+/// xf.ai.pii: pipe 3 rows containing different PII shapes through
+/// the redactor; verify each gets the right label substituted and
+/// non-PII text is untouched.
+#[test]
+fn xf_ai_pii_replaces_emails_phones_ssns_credit_cards() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,note\n\
+         1,Contact alice@example.com or call (415) 555-0100\n\
+         2,SSN: 123-45-6789 on file\n\
+         3,Card 4242 4242 4242 4242 was charged\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("p", "xf.ai.pii", json!({ "inputColumn": "note" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "p"), main_edge("e2", "p", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "xf.ai.pii failed: {:?}", r.error);
+    let row1 = scalar_string(&format!(
+        "SELECT note FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert!(row1.contains("[REDACTED-EMAIL]"), "missing email redact: {}", row1);
+    assert!(row1.contains("[REDACTED-PHONE]"), "missing phone redact: {}", row1);
+    let row2 = scalar_string(&format!(
+        "SELECT note FROM read_csv_auto('{}') WHERE id = 2",
+        out
+    ));
+    assert!(row2.contains("[REDACTED-SSN]"), "missing SSN redact: {}", row2);
+    let row3 = scalar_string(&format!(
+        "SELECT note FROM read_csv_auto('{}') WHERE id = 3",
+        out
+    ));
+    assert!(
+        row3.contains("[REDACTED-CREDIT-CARD]"),
+        "missing CC redact: {}",
+        row3
+    );
+}
+
+/// xf.ai.chunk explode mode: 2 rows in, each text long enough to
+/// split into 3 chunks, total = 6 output rows with chunk_index +
+/// chunk_count preserved.
+#[test]
+fn xf_ai_chunk_explodes_long_text_into_rows() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // 30-char strings + chunkSize=10 + overlap=0 = 3 chunks each.
+    let in_csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,text\n1,abcdefghij0123456789klmnopqrst\n2,uvwxyzABCDEFGHIJKLMNOPQRSTUVWX\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("c", "xf.ai.chunk", json!({
+                "inputColumn": "text",
+                "outputColumn": "piece",
+                "chunkSize": 10,
+                "chunkOverlap": 0,
+                "mode": "explode",
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "xf.ai.chunk failed: {:?}", r.error);
+    // 2 source rows * 3 chunks each = 6 rows
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out)),
+        6,
+        "expected 6 chunk rows"
+    );
+    // First row of id=1 starts with "abc"
+    let first = scalar_string(&format!(
+        "SELECT piece FROM read_csv_auto('{}') WHERE id = 1 AND chunk_index = 0",
+        out
+    ));
+    assert_eq!(first, "abcdefghij");
+    // chunk_count = 3 for both source rows
+    let cnt = scalar_string(&format!(
+        "SELECT count(DISTINCT chunk_count) FROM read_csv_auto('{}') WHERE chunk_count = 3",
+        out
+    ));
+    assert_eq!(cnt, "1");
+}
+
 /// code.wasm: compile an inline WAT (WebAssembly text) module that
 /// reverses its input string, supply it as base64 bytes, pipe 3 rows
 /// through it, verify each output is the reversed input. Proves the

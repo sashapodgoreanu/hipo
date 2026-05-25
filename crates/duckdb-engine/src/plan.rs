@@ -173,6 +173,10 @@ pub struct Stage {
     pub ai_embed: Option<AiEmbedSpec>,
     /// code.wasm (per-row WebAssembly transform).
     pub wasm: Option<WasmSpec>,
+    /// xf.ai.chunk (text splitter for RAG).
+    pub ai_chunk: Option<AiChunkSpec>,
+    /// xf.ai.pii (regex-based PII redaction).
+    pub ai_pii: Option<AiPiiSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -657,6 +661,38 @@ pub struct WasmSpec {
     pub input_column: String,
     pub output_column: String,
     pub function: String,
+}
+
+/// xf.ai.chunk: text splitter for RAG / embedding pipelines. No API
+/// call - pure local string slicing. Two modes:
+/// - "explode": one row per chunk with chunk_index + chunk_count;
+///   non-text columns preserved from the source row.
+/// - "array": chunks stored as a JSON array in `output_column`;
+///   one row per source row.
+#[derive(Debug, Clone)]
+pub struct AiChunkSpec {
+    pub node_id: String,
+    pub from_view: String,
+    pub input_column: String,
+    pub output_column: String,
+    pub chunk_size: usize,
+    pub chunk_overlap: usize,
+    pub mode: String,
+}
+
+/// xf.ai.pii: regex-based PII redaction. Detects emails, phone
+/// numbers, SSNs, and credit card patterns; replaces each match
+/// with `[REDACTED-EMAIL]` (etc) in the output column. Output column
+/// defaults to overwriting the input column. LLM-based redaction is
+/// a follow-up that would share the xf.ai.embed credential pattern.
+#[derive(Debug, Clone)]
+pub struct AiPiiSpec {
+    pub node_id: String,
+    pub from_view: String,
+    pub input_column: String,
+    pub output_column: String,
+    /// Subset of {"email","phone","ssn","credit_card"}. Empty = all.
+    pub types: Vec<String>,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -1291,6 +1327,8 @@ fn build_stage(
     let mut email_source: Option<EmailSourceSpec> = None;
     let mut ai_embed: Option<AiEmbedSpec> = None;
     let mut wasm: Option<WasmSpec> = None;
+    let mut ai_chunk: Option<AiChunkSpec> = None;
+    let mut ai_pii: Option<AiPiiSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -3052,6 +3090,64 @@ fn build_stage(
                 .unwrap_or_else(|| "transform".into()),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "xf.ai.pii" {
+        // Regex-based PII redaction. `types` is a comma-separated
+        // subset of email,phone,ssn,credit_card; empty = all.
+        let from_view = inputs
+            .main()
+            .ok_or_else(|| EngineError::Config(format!("{}: upstream input required", component_id)))?;
+        let input_column = string_prop(&props, "inputColumn")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "text".into());
+        let types = string_prop(&props, "types")
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ai_pii = Some(AiPiiSpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            output_column: string_prop(&props, "outputColumn")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| input_column.clone()),
+            input_column,
+            types,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "xf.ai.chunk" {
+        // Text splitter. Local string ops only - no API. Default to
+        // explode mode (one row per chunk) which is what RAG pipelines
+        // typically want before feeding into xf.ai.embed.
+        let from_view = inputs
+            .main()
+            .ok_or_else(|| EngineError::Config(format!("{}: upstream input required", component_id)))?;
+        ai_chunk = Some(AiChunkSpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            input_column: string_prop(&props, "inputColumn")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "text".into()),
+            output_column: string_prop(&props, "outputColumn")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "chunk".into()),
+            chunk_size: props
+                .get("chunkSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1000) as usize,
+            chunk_overlap: props
+                .get("chunkOverlap")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(100) as usize,
+            mode: string_prop(&props, "mode")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "explode".into()),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "xf.ai.embed" {
         // Per-row embedding via an OpenAI-compatible API. The planner
         // resolves the upstream view name (the stage reads from it
@@ -3170,6 +3266,8 @@ fn build_stage(
         clipboard_source,
         ai_embed,
         wasm,
+        ai_chunk,
+        ai_pii,
         email_source,
         wait_ms,
         retry_attempts,

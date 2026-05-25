@@ -98,6 +98,10 @@ arboard = { version = "3", default-features = false }
 # execution, but per-row ETL transforms aren't throughput-critical.
 # The wasm module runs in a sandbox - no fs, no network, no env vars.
 wasmi = "0.40"
+# Used by xf.ai.pii for regex-based PII detection (emails, phones,
+# SSNs, credit cards). Already in our dep graph transitively but
+# pinned explicitly here so it's stable across upstream churn.
+regex = "1"
 # IMAP client for src.email. 3.x alpha is what we need for rustls
 # support - the 2.x stable line only supports native-tls (OpenSSL on
 # Linux which would break the self-contained build promise). The

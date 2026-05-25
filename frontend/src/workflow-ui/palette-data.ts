@@ -413,8 +413,8 @@ export const PALETTE: Category[] = [
                 components: [
                     xf('ai.embed', 'Embeddings', 'available', 'Per-row embedding via any OpenAI-compatible /v1/embeddings endpoint. Props: inputColumn (default `text`), outputColumn (default `embedding`), model (default `text-embedding-3-small`), apiKey (required, sent as Bearer), baseUrl (default `https://api.openai.com` - point at Cohere, Voyage, llama.cpp embed server, etc), batchSize (default 100).'),
                     xf('ai.llm', 'LLM Transform', 'preview', 'Clean / enrich rows with an LLM'),
-                    xf('ai.chunk', 'Text Chunker', 'preview', 'Split text for RAG'),
-                    xf('ai.pii', 'PII Redact', 'preview', 'Detect + mask personal data'),
+                    xf('ai.chunk', 'Text Chunker', 'available', 'Split long text into chunks for RAG / embedding pipelines. No API call - pure local char-window splitting with overlap. Props: inputColumn (default `text`), outputColumn (default `chunk`), chunkSize (default 1000), chunkOverlap (default 100), mode (`explode` = one row per chunk with chunk_index/chunk_count, `array` = chunks as a column).'),
+                    xf('ai.pii', 'PII Redact', 'available', 'Regex-based PII redaction (email, phone, SSN, credit card). No API call. Props: inputColumn (default `text`), outputColumn (defaults to input - overwrites in place), types (comma-list subset; empty = all). LLM-backed redaction is a follow-up.'),
                     xf('ai.classify', 'Classify', 'preview', 'Label rows with a model'),
                     xf('ai.dedupe', 'Semantic Dedupe', 'preview', 'Drop near-duplicate rows'),
                     xf('ai.vector_search', 'Vector Similarity Search', 'available', 'Rank rows by similarity to a query vector via DuckDB vss'),

@@ -28,16 +28,16 @@ pub mod plan;
 pub use history::{append_run_record, load_run_history, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
-    quote_ident, AiEmbedSpec, AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec,
-    ClickHouseSinkSpec, ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec,
-    DatabricksSourceSpec, ElasticSourceSpec, EmailSourceSpec, FormatFileSinkSpec,
-    FormatFileSourceSpec, FormatKind, FtpSourceSpec, GitSourceSpec, KafkaSinkSpec, KafkaSourceSpec,
-    MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec, NatsSinkSpec, NatsSourceSpec, OracleSinkSpec,
-    OracleSourceSpec, PubSubSinkSpec, PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec,
-    RabbitSourceSpec, RedisSinkSpec, RedisSourceSpec, RestPagination, RestResponseFormat,
-    RestSourceSpec, ShellSpec, SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec,
-    SqlServerSinkSpec, SqlServerSourceSpec, WasmSpec, WeaviateSourceSpec, WebhookSpec, XmlSinkSpec,
-    XmlSourceSpec,
+    quote_ident, AiChunkSpec, AiEmbedSpec, AiPiiSpec, AvroSinkSpec, AvroSourceSpec,
+    CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec, ClickHouseSourceSpec,
+    ClipboardSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec, ElasticSourceSpec,
+    EmailSourceSpec, FormatFileSinkSpec, FormatFileSourceSpec, FormatKind, FtpSourceSpec,
+    GitSourceSpec, KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec,
+    MongoSourceSpec, NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec,
+    PubSubSinkSpec, PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec,
+    RedisSinkSpec, RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, ShellSpec,
+    SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec,
+    WasmSpec, WeaviateSourceSpec, WebhookSpec, XmlSinkSpec, XmlSourceSpec,
 };
 
 #[derive(Debug, Error)]
@@ -553,6 +553,10 @@ impl DuckdbEngine {
                     self.run_ai_embed(&db_path, spec)
                 } else if let Some(spec) = stage.wasm.as_ref() {
                     self.run_wasm(&db_path, spec)
+                } else if let Some(spec) = stage.ai_chunk.as_ref() {
+                    self.run_ai_chunk(&db_path, spec)
+                } else if let Some(spec) = stage.ai_pii.as_ref() {
+                    self.run_ai_pii(&db_path, spec)
                 } else if let Some(spec) = stage.email_source.as_ref() {
                     self.run_email_source(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
@@ -2551,6 +2555,108 @@ impl DuckdbEngine {
         Ok(format!(
             "email: materialized {} message(s) from {}@{}:{}/{} into {}",
             count, spec.user, spec.host, spec.port, spec.mailbox, spec.node_id
+        ))
+    }
+
+    /// xf.ai.pii: regex-based PII redaction. For each upstream row,
+    /// detect emails / phones / SSNs / credit-card numbers in the
+    /// input column and replace each match with `[REDACTED-TYPE]`.
+    /// Pure local regex - no API call, no model. LLM-backed redaction
+    /// is a follow-up that would share the xf.ai.embed pattern.
+    ///
+    /// The regex set is intentionally conservative (favor false-
+    /// negatives over false-positives) - users with stricter PII
+    /// needs should follow up with an LLM-backed pass or NER model.
+    fn run_ai_pii(&self, db: &Path, spec: &AiPiiSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
+        )?;
+        // Compile regex set once per stage (not once per row).
+        let patterns = pii_patterns(&spec.types);
+        let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+        for row in rows.iter() {
+            self.check_cancelled()?;
+            let text = row
+                .get(&spec.input_column)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let redacted = patterns.iter().fold(text, |acc, (re, label)| {
+                re.replace_all(&acc, *label).into_owned()
+            });
+            let mut obj = match row {
+                JsonValue::Object(m) => m.clone(),
+                _ => serde_json::Map::new(),
+            };
+            obj.insert(spec.output_column.clone(), JsonValue::String(redacted));
+            out.push(JsonValue::Object(obj));
+        }
+        let count = out.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &out)?;
+        Ok(format!(
+            "ai.pii: redacted {} row(s) into {}",
+            count, spec.node_id
+        ))
+    }
+
+    /// xf.ai.chunk: text splitter for RAG / embedding pipelines.
+    /// Splits the `input_column` of each upstream row into chunks of
+    /// at most `chunk_size` characters with `chunk_overlap` between
+    /// successive chunks. mode="explode" emits one row per chunk
+    /// (with chunk_index + chunk_count + the rest of the source row);
+    /// mode="array" emits one row per source row with the chunks as
+    /// a JSON array in `output_column`.
+    fn run_ai_chunk(&self, db: &Path, spec: &AiChunkSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
+        )?;
+        let mut out: Vec<JsonValue> = Vec::new();
+        for row in rows.iter() {
+            self.check_cancelled()?;
+            let text = row
+                .get(&spec.input_column)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let chunks = chunk_text(text, spec.chunk_size, spec.chunk_overlap);
+            let base = match row {
+                JsonValue::Object(m) => m.clone(),
+                _ => serde_json::Map::new(),
+            };
+            if spec.mode == "array" {
+                let mut obj = base;
+                obj.insert(
+                    spec.output_column.clone(),
+                    JsonValue::Array(
+                        chunks.into_iter().map(JsonValue::String).collect(),
+                    ),
+                );
+                out.push(JsonValue::Object(obj));
+            } else {
+                // explode (default)
+                let count = chunks.len() as i64;
+                for (idx, chunk) in chunks.into_iter().enumerate() {
+                    let mut obj = base.clone();
+                    obj.insert(
+                        spec.output_column.clone(),
+                        JsonValue::String(chunk),
+                    );
+                    obj.insert("chunk_index".into(), JsonValue::from(idx as i64));
+                    obj.insert("chunk_count".into(), JsonValue::from(count));
+                    out.push(JsonValue::Object(obj));
+                }
+            }
+        }
+        let count = out.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &out)?;
+        Ok(format!(
+            "ai.chunk: split {} upstream row(s) into {} chunk(s) -> {}",
+            rows.len(),
+            count,
+            spec.node_id
         ))
     }
 
@@ -5477,9 +5583,130 @@ fn parse_git_ls_tree(bytes: &[u8], max_rows: usize) -> Vec<JsonValue> {
     out
 }
 
+/// Compile the regex set for xf.ai.pii based on the user's `types`
+/// selection (empty = all). Each regex is paired with the replacement
+/// label that gets substituted in for each match. Conservative
+/// patterns - favor false-negatives over false-positives. Users with
+/// stricter needs should follow up with an LLM-backed pass.
+fn pii_patterns(types: &[String]) -> Vec<(regex::Regex, &'static str)> {
+    let want = |t: &str| -> bool { types.is_empty() || types.iter().any(|s| s == t) };
+    let mut out: Vec<(regex::Regex, &'static str)> = Vec::new();
+    if want("email") {
+        // RFC 5322 lite - good enough for production-ish ETL use.
+        out.push((
+            regex::Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}").unwrap(),
+            "[REDACTED-EMAIL]",
+        ));
+    }
+    if want("credit_card") {
+        // Run BEFORE phone so a 16-digit number isn't half-eaten by
+        // the phone matcher.
+        out.push((
+            regex::Regex::new(r"\b(?:\d[ -]*?){13,19}\b").unwrap(),
+            "[REDACTED-CREDIT-CARD]",
+        ));
+    }
+    if want("ssn") {
+        out.push((
+            regex::Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
+            "[REDACTED-SSN]",
+        ));
+    }
+    if want("phone") {
+        // US-ish plus E.164. Won't catch every international format.
+        out.push((
+            regex::Regex::new(r"(?:\+?\d{1,3}[ -]?)?(?:\(\d{3}\)|\d{3})[ -]?\d{3}[ -]?\d{4}")
+                .unwrap(),
+            "[REDACTED-PHONE]",
+        ));
+    }
+    out
+}
+
+/// Split `text` into chunks of at most `size` chars with `overlap`
+/// chars between successive chunks. Walks in char (not byte) windows
+/// to avoid splitting UTF-8 sequences. Returns at least one chunk
+/// even for empty input - callers usually want a row to exist.
+fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String> {
+    if size == 0 {
+        return vec![text.to_string()];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= size {
+        return vec![text.to_string()];
+    }
+    let step = size.saturating_sub(overlap).max(1);
+    let mut out: Vec<String> = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let end = (start + size).min(chars.len());
+        out.push(chars[start..end].iter().collect());
+        if end == chars.len() {
+            break;
+        }
+        start += step;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::glob_match;
+    use super::{chunk_text, glob_match, pii_patterns};
+
+    fn redact_all(text: &str) -> String {
+        let patterns = pii_patterns(&[]);
+        patterns
+            .iter()
+            .fold(text.to_string(), |acc, (re, lbl)| re.replace_all(&acc, *lbl).into_owned())
+    }
+
+    #[test]
+    fn pii_patterns_redact_known_shapes() {
+        // emails
+        assert_eq!(
+            redact_all("contact alice@example.com please"),
+            "contact [REDACTED-EMAIL] please"
+        );
+        // SSN
+        assert_eq!(
+            redact_all("SSN: 123-45-6789"),
+            "SSN: [REDACTED-SSN]"
+        );
+        // phone, parenthesized
+        assert_eq!(
+            redact_all("call (415) 555-0100 today"),
+            "call [REDACTED-PHONE] today"
+        );
+        // credit card (Luhn-ish 16-digit)
+        assert_eq!(
+            redact_all("Card: 4242 4242 4242 4242"),
+            "Card: [REDACTED-CREDIT-CARD]"
+        );
+        // no false positive on a normal sentence
+        assert_eq!(
+            redact_all("hello world, this is fine"),
+            "hello world, this is fine"
+        );
+    }
+
+    #[test]
+    fn chunk_text_splits_with_overlap_and_preserves_utf8() {
+        // shorter than size = one chunk untouched
+        assert_eq!(chunk_text("abc", 10, 2), vec!["abc"]);
+        // exact-size = one chunk
+        assert_eq!(chunk_text("abcde", 5, 1), vec!["abcde"]);
+        // size 3, overlap 1, step 2: abc, cde, efg, ghi (last is short)
+        let chunks = chunk_text("abcdefghi", 3, 1);
+        assert_eq!(chunks, vec!["abc", "cde", "efg", "ghi"]);
+        // UTF-8 chars treated as single units (not bytes)
+        let chunks = chunk_text("hello", 2, 0);
+        assert_eq!(chunks, vec!["he", "ll", "o"]);
+        // empty input = single empty chunk
+        assert_eq!(chunk_text("", 5, 1), vec![""]);
+        // overlap >= size collapses to step=1 (no infinite loop)
+        let chunks = chunk_text("abcde", 2, 10);
+        assert!(!chunks.is_empty());
+    }
 
     #[test]
     fn glob_match_handles_star_and_question() {

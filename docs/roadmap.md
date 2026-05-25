@@ -6,8 +6,8 @@ reel; this is the full ledger.
 
 The palette currently carries **307 components**, broken down:
 
-- **278 available** - executes on the DuckDB engine today
-- **10 preview** - configurable in the designer (drag, wire, set
+- **280 available** - executes on the DuckDB engine today
+- **8 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
 - **19 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
@@ -114,9 +114,7 @@ as a real materialized stage; the upstream is exposed as `input`).
 | Component | Notes |
 |---|---|
 | `xf.ai.llm` | LLM transform - per-row prompt + parse response |
-| `xf.ai.chunk` | Text splitter (recursive / semantic / token-based) |
 | `xf.ai.classify` | LLM-backed classification |
-| `xf.ai.pii` | LLM- or NER-backed PII redaction |
 | `xf.ai.dedupe` | Embedding-based semantic dedupe |
 
 All six need a **model API credential pattern** that doesn't yet exist
