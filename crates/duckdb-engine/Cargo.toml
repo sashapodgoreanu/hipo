@@ -84,8 +84,15 @@ lapin = { version = "2", default-features = false, features = ["rustls"] }
 # FTP / FTPS client. Pure Rust, synchronous API (fits the per-stage
 # blocking model - no block_on dance). Rustls-backed TLS keeps the
 # build self-contained on every OS. SFTP (SSH-based, different
-# protocol) is a separate component on the roadmap.
+# protocol) is on the roadmap; russh pulls in aws-lc-sys which
+# requires NASM at build time, breaking the self-contained build.
 suppaftp = { version = "8", default-features = false, features = ["rustls-ring"] }
+# System clipboard reader (src.clipboard). Text-only - image-data is
+# off because we never round-trip images through pipelines. arboard
+# is pure-Rust on Windows and macOS; on Linux it talks to X11/Wayland
+# at runtime (gracefully fails with a clear engine error when there's
+# no display, e.g. on a headless CI runner).
+arboard = { version = "3", default-features = false }
 
 [features]
 default = ["oracle"]
@@ -98,3 +105,7 @@ rand = "0.8"
 # Writer to build a small .avro file inline before reading it back
 # through src.avro. Same version as the lib dep above.
 apache-avro = "0.17"
+# Re-imported so src.clipboard tests can write a known payload to the
+# system clipboard before running the pipeline. Same backend as the
+# lib dep -> writer and reader agree on the OS clipboard format.
+arboard = { version = "3", default-features = false }

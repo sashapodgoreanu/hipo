@@ -29,13 +29,13 @@ pub use history::{append_run_record, load_run_history, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
     AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec,
-    ClickHouseSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec, ElasticSourceSpec,
-    FormatFileSinkSpec, FormatFileSourceSpec, FormatKind, FtpSourceSpec, GitSourceSpec,
-    KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec, MongoSourceSpec,
-    NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec, PubSubSinkSpec,
-    PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec, RedisSinkSpec,
-    RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, ShellSpec, SnowflakeAuth,
-    SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec,
+    ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec,
+    ElasticSourceSpec, FormatFileSinkSpec, FormatFileSourceSpec, FormatKind, FtpSourceSpec,
+    GitSourceSpec, KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec,
+    MongoSourceSpec, NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec,
+    PubSubSinkSpec, PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec,
+    RedisSinkSpec, RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, ShellSpec,
+    SnowflakeAuth, SnowflakeSinkSpec, SnowflakeSourceSpec, SqlServerSinkSpec, SqlServerSourceSpec,
     WeaviateSourceSpec, WebhookSpec, XmlSinkSpec, XmlSourceSpec,
 };
 
@@ -546,6 +546,8 @@ impl DuckdbEngine {
                     self.run_shell(&db_path, spec)
                 } else if let Some(spec) = stage.ftp_source.as_ref() {
                     self.run_ftp_source(&db_path, spec)
+                } else if let Some(spec) = stage.clipboard_source.as_ref() {
+                    self.run_clipboard_source(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -2354,6 +2356,42 @@ impl DuckdbEngine {
         Ok(format!(
             "ftp: materialized {} file(s) from {}:{} into {}",
             count, spec.host, spec.port, spec.node_id
+        ))
+    }
+
+    /// src.clipboard: read the system clipboard as text. If it parses
+    /// as a JSON array-of-objects the array becomes rows directly; if
+    /// it parses as a single JSON object that single object becomes
+    /// one row; otherwise we emit one row {text, length}. Fails with
+    /// a clear EngineError when the display server isn't reachable
+    /// (e.g. headless Linux CI) - arboard's Clipboard::new returns
+    /// the underlying platform error.
+    fn run_clipboard_source(
+        &self,
+        db: &Path,
+        spec: &ClipboardSourceSpec,
+    ) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let mut cb = arboard::Clipboard::new()
+            .map_err(|e| EngineError::Query(format!("clipboard unavailable: {}", e)))?;
+        let text = cb
+            .get_text()
+            .map_err(|e| EngineError::Query(format!("clipboard get_text: {}", e)))?;
+        let rows: Vec<JsonValue> = match serde_json::from_str::<JsonValue>(&text) {
+            Ok(JsonValue::Array(arr)) if arr.iter().all(|v| v.is_object()) => arr,
+            Ok(JsonValue::Object(o)) => vec![JsonValue::Object(o)],
+            _ => {
+                let mut row = serde_json::Map::new();
+                row.insert("text".into(), JsonValue::String(text.clone()));
+                row.insert("length".into(), JsonValue::from(text.chars().count() as i64));
+                vec![JsonValue::Object(row)]
+            }
+        };
+        let count = rows.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "clipboard: materialized {} row(s) into {}",
+            count, spec.node_id
         ))
     }
 

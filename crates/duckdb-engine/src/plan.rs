@@ -165,6 +165,8 @@ pub struct Stage {
     pub shell: Option<ShellSpec>,
     /// FTP / FTPS file downloader.
     pub ftp_source: Option<FtpSourceSpec>,
+    /// System clipboard reader.
+    pub clipboard_source: Option<ClipboardSourceSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -590,6 +592,15 @@ pub struct FtpSourceSpec {
     pub directory: String,
     pub pattern: Option<String>,
     pub max_files: u64,
+}
+
+/// src.clipboard: read the system clipboard. If the text parses as
+/// JSON-array-of-objects, the array becomes rows directly; otherwise
+/// a single row {text, length} is emitted. Desktop-only by definition;
+/// fails clearly on headless systems where no display is reachable.
+#[derive(Debug, Clone)]
+pub struct ClipboardSourceSpec {
+    pub node_id: String,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -1220,6 +1231,7 @@ fn build_stage(
     let mut git_source: Option<GitSourceSpec> = None;
     let mut shell: Option<ShellSpec> = None;
     let mut ftp_source: Option<FtpSourceSpec> = None;
+    let mut clipboard_source: Option<ClipboardSourceSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -2303,6 +2315,13 @@ fn build_stage(
                 .filter(|n| *n > 0),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.clipboard" {
+        // System clipboard reader. No props - just emit current
+        // clipboard content as a row (or rows, if JSON array).
+        clipboard_source = Some(ClipboardSourceSpec {
+            node_id: node.id.clone(),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.ftp" {
         // FTP / FTPS list+download. List files at `directory`, filter
         // by optional glob `pattern` (* and ? wildcards), download
@@ -2980,6 +2999,7 @@ fn build_stage(
         git_source,
         shell,
         ftp_source,
+        clipboard_source,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,

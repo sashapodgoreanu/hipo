@@ -6608,6 +6608,76 @@ fn src_git_log_emits_one_row_per_commit() {
     assert_eq!(tweak, "Tweak: pipe | in subject");
 }
 
+/// src.clipboard: write known payloads to the clipboard and verify
+/// the engine reads them back as rows. Both shapes (JSON-array, plain
+/// text) live in one test because the OS clipboard is shared global
+/// state - splitting them risks one test's set_text clobbering the
+/// other's set_text under cargo's parallel runner. Skips on headless
+/// Linux (no DISPLAY or WAYLAND_DISPLAY) and on any runner where the
+/// platform clipboard isn't reachable.
+#[test]
+fn src_clipboard_reads_json_array_and_plain_text() {
+    let engine = engine_or_skip!();
+    if cfg!(target_os = "linux")
+        && std::env::var_os("DISPLAY").is_none()
+        && std::env::var_os("WAYLAND_DISPLAY").is_none()
+    {
+        eprintln!("skipping: headless Linux (no DISPLAY / WAYLAND_DISPLAY)");
+        return;
+    }
+    let mut writer = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("skipping: clipboard unavailable on this runner: {}", e);
+            return;
+        }
+    };
+
+    // ---- Phase 1: JSON-array shape becomes N rows ----
+    let payload = r#"[{"id":1,"city":"Tokyo"},{"id":2,"city":"Lagos"},{"id":3,"city":"Lima"}]"#;
+    writer.set_text(payload.to_string()).expect("set_text");
+    let tmp = tempfile::tempdir().unwrap();
+    let out1 = out_path(tmp.path(), "json.csv");
+    let r1 = engine.execute_pipeline(&doc(
+        json!([
+            node("c", "src.clipboard", json!({})),
+            node("k", "snk.csv", json!({ "path": out1, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "c", "k")]),
+    ));
+    assert_eq!(r1.status, "ok", "src.clipboard (json) failed: {:?}", r1.error);
+    assert_eq!(
+        count(&format!("read_csv_auto('{}')", out1)),
+        3,
+        "expected 3 clipboard rows from JSON array"
+    );
+    let tokyo_id = scalar_string(&format!(
+        "SELECT id FROM read_csv_auto('{}') WHERE city = 'Tokyo'",
+        out1
+    ));
+    assert_eq!(tokyo_id, "1");
+
+    // ---- Phase 2: non-JSON text becomes one {text, length} row ----
+    writer
+        .set_text("hello duckle".to_string())
+        .expect("set_text");
+    let out2 = out_path(tmp.path(), "text.csv");
+    let r2 = engine.execute_pipeline(&doc(
+        json!([
+            node("c", "src.clipboard", json!({})),
+            node("k", "snk.csv", json!({ "path": out2, "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "c", "k")]),
+    ));
+    assert_eq!(r2.status, "ok", "src.clipboard (text) failed: {:?}", r2.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out2)), 1);
+    let len = scalar_string(&format!(
+        "SELECT length FROM read_csv_auto('{}') LIMIT 1",
+        out2
+    ));
+    assert_eq!(len, "12");
+}
+
 /// src.ftp: env-gated integration test. Set DUCKLE_FTP_HOST (and
 /// optionally PORT/USER/PASSWORD/DIRECTORY) to a working FTP server
 /// holding the expected layout. Skips cleanly otherwise.

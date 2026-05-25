@@ -196,7 +196,7 @@ export const PALETTE: Category[] = [
                     src('http', 'HTTP', 'available', 'Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs'),
                     src('email', 'Email (IMAP)', 'planned'),
                     src('git', 'Git Repository', 'available', 'Read commit log or file tree from a local git working copy. Shells out to the system `git` CLI - no extra Rust dep. mode=log emits {hash, short_hash, author_name, author_email, date, subject}; mode=files emits {mode, type, hash, size, path}.'),
-                    src('clipboard', 'Clipboard', 'planned'),
+                    src('clipboard', 'Clipboard', 'available', 'Read the system clipboard via pure-Rust arboard. If the text parses as JSON-array-of-objects each element becomes a row; otherwise a single {text, length} row is emitted. Fails clearly on headless Linux (no display server) - desktop-only by design.'),
                 ],
             },
             {
