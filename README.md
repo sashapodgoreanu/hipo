@@ -2,9 +2,9 @@
 
 <img src="docs/assets/hero.svg" alt="Duckle" width="100%"/>
 
-<h3>The desktop ETL studio with a local AI that writes your pipelines.</h3>
+<h3>The local-first data studio with a built-in AI assistant.</h3>
 
-<p>I built <b>Duckle</b> because I wanted Talend's connector depth without Talend's JVM, IDE, and licence dance, and because I wanted Airflow's git-friendliness without running Airflow. You drag a CSV onto a canvas, wire it through filters and joins into Parquet, and the canvas compiles to SQL that DuckDB runs in milliseconds. When you can't be bothered to drag - just describe it to <b>Duckie</b>, the on-device assistant that drafts the pipeline JSON for you. The model runs on your CPU through llama.cpp. No API key, no telemetry. Pipelines persist as JSON files in a folder you pick, so a workspace is just a git repo. Open it in your IDE if you want.</p>
+<p><b>Duckle</b> is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, describe what you need in plain English to <b>Duckie</b> (the on-device AI assistant), and execute at native speed through DuckDB. 290+ connectors, 50+ transforms, a built-in scheduler, and a chat assistant that runs entirely on your CPU. Ships as a ~30 MB desktop app. No cloud, no servers, no lock-in.</p>
 
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-beta-3b82f6"/>
@@ -91,74 +91,68 @@
 
 ---
 
-## How a pipeline actually runs
+## What is Duckle?
 
-A pipeline is a directed graph of nodes. Each node compiles to one DuckDB statement.
+A visual data pipeline studio that runs on your laptop. Drag sources, transforms, validators, and sinks onto a canvas. Wire them together. Press **Run**. Duckle compiles the graph to SQL and executes it through a real columnar engine, with live previews, generated SQL on every node, and zero hidden state.
 
-A source like `src.csv` becomes `SELECT * FROM read_csv_auto('orders.csv')` and the result is materialized into a temp table named after the node's ID. The next transform - say `xf.filter` - becomes `SELECT * FROM "<source_id>" WHERE status = 'paid'`, materialized into its own temp table. Joins reference both upstream tables. Sinks compile to `COPY` for files, INSERT for databases, or a per-row HTTP POST for webhooks. The engine topologically sorts the graph, runs each stage in order, and lights up the node in the UI as it finishes.
+Three things make Duckle different from the heavyweights and the toy ETL tools:
 
-Click any node and you can read the exact SQL it produced in the **Plan** tab. The **Preview** tab runs a sampled `LIMIT 20` query against that node's materialized table - live rows, not a mock.
-
-Not everything goes through SQL. Six things bypass it:
-
-- `code.shell` shells out to the system shell - returns `{stdout, stderr, exit_code, duration_ms}` as one row
-- `code.javascript` runs through `boa_engine` (pure-Rust JS interpreter, sandboxed - no fetch, no fs)
-- `code.wasm` runs through `wasmi` (pure-Rust WASM interpreter, also sandboxed)
-- The `xf.ai.*` transforms POST to OpenAI-compatible HTTP endpoints
-- The streaming sinks (Kafka, NATS, RabbitMQ, Pub/Sub, Kinesis) call their broker drivers directly
-- `src.git`, `src.ftp`, `src.email`, `src.webhook`, `src.clipboard` use protocol-specific drivers
-
-Everything else is SQL.
+1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs locally - no API key, no telemetry, no cloud round-trip.
+2. **290+ connectors at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+3. **A self-contained binary you can audit.** ~30 MB download. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
-<img src="docs/assets/flow.svg" alt="Sources -> transforms -> sinks pipeline diagram" width="100%"/>
+<img src="docs/assets/flow.svg" alt="Sources flow through 50+ transforms into files, databases, object storage, vector stores, and AI" width="100%"/>
 </div>
 
 ---
 
-## Duckie - the local AI assistant that drafts pipelines
+## Meet Duckie - the local AI pipeline assistant
+
+> Describe what you need. Duckie writes the pipeline.
 
 <p align="center">
 <img src="docs/assets/real-life-screenshot/duckie-ai-assistant.png" alt="Duckie AI Assistant chat panel generating a CSV-to-Parquet pipeline from a natural-language description" width="100%"/>
 </p>
 
-That sidebar on the right is what Duckle calls **Duckie**. It's a chat panel hooked up to a Qwen 2.5 Coder 1.5B model that runs on your CPU through `llama-server` (downloaded once into your app-data folder, ~1.1 GB). You type "read orders.csv, filter where status equals shipped, write to shipped.parquet" and Duckie streams back valid pipeline JSON. Click **Insert into canvas** and the nodes appear, wired, with the right props. Then you tweak.
+The sidebar on the right is **Duckie AI Assistant** - powered by **Qwen 2.5 Coder 1.5B** running through **llama.cpp**, downloaded once (~1.1 GB) and then run entirely on your CPU. Ask in plain English; Duckie streams back a valid Duckle pipeline definition. One click drops it onto the canvas, ready to inspect, tweak, and run.
 
-The model is small enough to be useful without being magical. It writes the basic three-node pipelines you'd otherwise click for thirty seconds. For complex graphs you'll still drag, but Duckie can sketch the skeleton and you fill in the niche transforms.
-
-It runs entirely offline once installed. The chat panel talks to `llama-server` over `http://127.0.0.1:<random-port>/v1/chat/completions` - same OpenAI-compatible API that the `xf.ai.llm` / `xf.ai.embed` / `xf.ai.classify` connectors use. If you'd rather use a stronger remote model (GPT-4, Claude, a Cohere endpoint) for the per-row AI transforms in pipelines, just put their `baseUrl` and `apiKey` in the node props - the chat panel stays local; the pipeline transforms can go remote per stage. They're independent.
-
-The model is sandboxed in the strict sense: llama.cpp doesn't have tools, file access, or network calls. It can only emit text. The only thing it can do is write pipeline JSON that you read before clicking Insert.
-
----
-
-## Why these choices
-
-A handful of decisions that shape the codebase, written for someone looking at the source.
-
-**DuckDB via the CLI, not as a linked library.** I shell out to `duckdb` instead of linking `libduckdb`. Three reasons. First, cancellation: killing a child process is one line; cancelling a query through async FFI is several pages of code I'd rather not maintain. Second, upgrades: when DuckDB ships v1.6 next quarter I drop the new binary into `app-data/engines/duckdb/` and everything works - no rebuild. Third, the app stays small because DuckDB isn't statically baked in. The trade-off is process-spawn overhead - about 10 ms per stage. For interactive ETL with sub-second runs you don't notice it; for tight per-row loops we materialize fewer stages.
-
-**Tauri 2, not Electron.** Native WebView on every platform (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux). Means the download is ~30 MB instead of the ~150 MB an Electron app would weigh, and idle RAM is ~80 MB instead of ~300 MB. Cost: each WebView has its own quirks. file:// handling is different on each, drag-drop semantics differ slightly, the keyboard event tree is not quite the same. We test on all three and patch as we hit them.
-
-**Pure-Rust drivers everywhere we can.** `rskafka` over `rdkafka`, `lapin` for AMQP, `async-nats`, `quick-xml`, `apache-avro`, `suppaftp`, `imap`, `wasmi`, `boa_engine`. No C linking, no NASM, no OpenSSL dance. Every CI runner builds the same way. Cost: `rskafka` doesn't speak SASL so we can't talk Kafka-protocol to Azure Event Hubs - we work around it by using HTTP-direct + AWS SigV4 for the AWS services (DynamoDB, Kinesis) and skipping the few brokers that absolutely require SASL for now.
-
-**Pipelines are JSON files on disk.** A pipeline is `<workspace>/pipelines/my_etl.pipeline.json`. Same for connections, contexts, schedules. The whole workspace is a git repo. `git diff` shows meaningful changes, code review works, branch and merge work. No internal database, no SQLite to migrate. The downside is multi-user editing: if two people edit the same pipeline on the same branch and push, the second push merges or conflicts like any other text file. You lose the live-collaboration of, say, Figma. We're OK with that trade.
-
-**The LLM is a separate process.** `llama-server` lives in `app-data/engines/llamacpp/`, spawns lazily on the first chat message, and dies when Duckle exits. Means we can swap models (any GGUF that speaks chat-completions works), upgrade llama.cpp without rebuilding, and keep the app binary small. The cost is the obvious one: a 1.5B model on a CPU runs at ~5 tok/s. Fine for drafting a 3-node pipeline; slow if you ask for a 50-node graph. If you want faster, point the per-stage AI transforms at a remote API - the chat panel stays local but the pipeline can call whatever LLM you want.
-
-**React 19 + @xyflow/react.** @xyflow handles pan, zoom, and edge routing; we own the node renderers. React Compiler's auto-memoization means we don't sprinkle `useMemo` everywhere. We extend @xyflow with one custom edge type so a node can have multi-port outputs (`main`, `reject`, `errors` for quality validators).
+| | |
+|---|---|
+| **Truly local** | The Qwen model runs as a `llama-server` subprocess on `127.0.0.1`. No API keys. No network calls. Disconnect your wifi and it keeps working. |
+| **Streamed responses** | Tokens arrive as they're generated, with a blinking caret in the bubble. No "wait 20 seconds for the spinner to vanish" UX. |
+| **One-click insert** | When Duckie produces a JSON pipeline, an **Insert into canvas** button appears. The graph populates with positioned nodes, wired edges, and the props the model chose. |
+| **Bring-your-own-model option** | The chat plumbing is the same OpenAI-compatible HTTP interface used by `xf.ai.llm` / `xf.ai.embed` connectors. Point `baseUrl` at Ollama, llama.cpp, Cohere, OpenAI, Voyage - anything that speaks the OpenAI shape. |
+| **Sandboxed** | The model has no fs / net / tool access. It can only emit text - your pipeline JSON. |
 
 ---
 
-## Status, honestly
+## Why Duckle is different
 
-Public beta. The designer is stable. DuckDB execution has 170+ integration tests passing on Linux, macOS, and Windows. The cloud connectors and the Duckie chat panel both work in production builds today. I use Duckle myself for data cleanup and small-scale ETL.
+| | |
+|---|---|
+| **Visual, never opaque** | The canvas compiles to SQL you can read, and every node has a live preview tab. No black box. |
+| **Local-first AI** | An assistant that runs on your laptop without an API key. Your prompts, your data, your machine. |
+| **Compact binary, no bundled DB** | ~30 MB app. DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
+| **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
+| **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
+| **290+ connectors that work** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
+| **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
 
-The catalog is still expanding - I shipped 23 new connectors in the last week alone - and the pipeline JSON schema may break before 1.0 if I find a better way to model multi-port outputs. Treat it as good for daily use, not as something to bet a Fortune 500 ETL stack on yet.
+---
 
-It's single-machine by design. If a pipeline is too big for one laptop, sink it into a warehouse and run your big-data tooling there - that's the right shape. Duckle is not going to be a Spark cluster. There's no reason to build that; better tools already exist.
+## Status
 
-The component palette lists 313 nodes because I want the roadmap to be visible in the product itself. 292 of them execute today on DuckDB. 5 are "preview" - configurable in the designer, execution is being wired connector by connector (mostly the vector DBs that don't have list-all APIs and the AI tiles still being polished). 16 are "planned" - reserved in the palette but not yet executable. See [`docs/roadmap.md`](docs/roadmap.md) for what's left and why.
+Duckle is in **public beta**. The visual designer, the DuckDB execution engine, the scheduler, the cloud connectors, and the Duckie AI assistant all work today and are covered by 170+ integration tests across Linux, macOS, and Windows. The catalog is still growing and APIs may evolve before 1.0, but the day-to-day surface is stable enough for real work.
+
+**Scope, stated plainly:** Duckle is a single-machine, embedded studio. If you outgrow one box, point Duckle's output at the system that scales (a warehouse, an object store, a lakehouse). It will not pretend to be a cluster.
+
+The component palette ships **313 nodes** so the roadmap is visible in the product itself:
+
+- **292 available** runs on the DuckDB engine today
+- **5 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
+- **16 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
 
@@ -381,15 +375,7 @@ Pick the binary for your OS from the [latest release](https://github.com/SouravR
 | **macOS** (Apple Silicon) | `Duckle-macos-arm64` | `chmod +x Duckle-macos-arm64 && ./Duckle-macos-arm64`. Right-click -> Open the first time to bypass Gatekeeper. |
 | **Linux** (x86_64) | `Duckle-linux-x64` | `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`. Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian / Ubuntu). |
 
-Binary size (release builds):
-
-| Platform | Size |
-|---|---|
-| Linux x86_64 | ~30 MB |
-| macOS arm64 | ~24 MB |
-| Windows x86_64 | ~28 MB |
-
-The bulk is the embedded frontend bundle (~1 MB gzipped) plus statically linked Rust dependencies: `tokio`, the SQL Server / Cassandra drivers, the WASM and JS interpreters (`wasmi`, `boa_engine`), Apache Avro, regex, lapin, mongodb, rskafka, suppaftp. Engine binaries (DuckDB, llama.cpp) are NOT in this number - they download on first launch into your app-data directory:
+The binary is ~30 MB (Linux ~30, macOS ~24, Windows ~28). On first launch you'll be guided through downloading two engines into your app-data directory:
 
 | Engine | Size | Required? | What it powers |
 |---|---|---|---|
@@ -480,143 +466,83 @@ A wider tour of the workflow.
 
 ## Recipes and examples
 
-Ready-to-adapt pipelines. The JSON here is what Duckle writes to your workspace as a `.pipeline.json` file - you can paste it, save with that extension into `<workspace>/pipelines/`, and open it from the project tree.
+Ready-to-adapt patterns. Each one is a few nodes you wire on the canvas (or ask Duckie to sketch).
 
-### Recipe 1: CSV cleanup with rejected rows
+### CSV cleanup
 
-Read `orders.csv`, drop rows with nulls in critical columns, deduplicate by `order_id`, write the clean ones to Parquet and the rejected ones to a separate CSV.
+> "Read orders.csv, drop nulls, deduplicate by order_id, write to orders_clean.parquet"
 
-```json
-{
-  "nodes": [
-    { "id": "src", "type": "source", "data": { "label": "CSV", "componentId": "src.csv", "props": { "path": "data/orders.csv" } } },
-    { "id": "nn",  "type": "transform", "data": { "label": "Not-Null Check", "componentId": "qa.not_null", "props": { "columns": "order_id,customer_id,amount" } } },
-    { "id": "uq",  "type": "transform", "data": { "label": "Uniqueness", "componentId": "qa.uniqueness", "props": { "keyColumns": "order_id" } } },
-    { "id": "ok",  "type": "sink", "data": { "label": "Clean Parquet", "componentId": "snk.parquet", "props": { "path": "out/orders_clean.parquet", "mode": "overwrite", "compression": "zstd" } } },
-    { "id": "bad", "type": "sink", "data": { "label": "Rejects",       "componentId": "snk.csv",     "props": { "path": "out/orders_rejected.csv",  "mode": "overwrite", "hasHeader": true } } }
-  ],
-  "edges": [
-    { "id": "e1", "source": "src", "target": "nn", "sourceHandle": "main",   "targetHandle": "main" },
-    { "id": "e2", "source": "nn",  "target": "uq", "sourceHandle": "main",   "targetHandle": "main" },
-    { "id": "e3", "source": "uq",  "target": "ok", "sourceHandle": "main",   "targetHandle": "main" },
-    { "id": "e4", "source": "nn",  "target": "bad","sourceHandle": "reject", "targetHandle": "main" }
-  ]
-}
+```
+src.csv -> qa.not_null -> qa.uniqueness -> snk.parquet
 ```
 
-Note the **two outputs** from `qa.not_null`: `main` (rows that passed) and `reject` (rows that failed). They wire independently. `qa.uniqueness` works the same way.
+Set `qa.not_null` to the columns that must be present; set `qa.uniqueness` to `order_id`. Rejected rows go to a `snk.csv` on the `reject` port for inspection.
 
-### Recipe 2: Postgres -> Snowflake nightly upsert
+### Postgres -> Snowflake nightly load
 
-```json
-{
-  "nodes": [
-    { "id": "pg", "type": "source", "data": { "label": "Postgres events", "componentId": "src.postgres", "props": {
-        "connectionId": "prod-pg",
-        "query": "SELECT event_id, user_id, event_type, ts FROM events WHERE ts > current_date - INTERVAL '1 day'"
-      } } },
-    { "id": "sf", "type": "sink", "data": { "label": "Snowflake events", "componentId": "snk.snowflake", "props": {
-        "connectionId": "snowflake-analytics",
-        "database": "ANALYTICS", "schema": "RAW", "tableName": "EVENTS",
-        "mode": "upsert", "conflictColumns": "event_id"
-      } } }
-  ],
-  "edges": [
-    { "id": "e1", "source": "pg", "target": "sf", "sourceHandle": "main", "targetHandle": "main" }
-  ]
-}
+> "Read all rows from Postgres `events`, upsert into Snowflake table `analytics.events` on `event_id`"
+
+```
+src.postgres -> snk.snowflake (mode=upsert, conflict=event_id)
 ```
 
-Schedule from the **Schedule panel** with cron `0 2 * * *` for nightly 02:00 runs.
+Attach a `ctl.schedule` with cron `0 2 * * *` to run nightly at 02:00.
 
-### Recipe 3: S3 logs -> Hive-partitioned Parquet
+### S3 -> partitioned Parquet
 
-```json
-{
-  "nodes": [
-    { "id": "s3", "type": "source", "data": { "label": "Logs S3", "componentId": "src.s3", "props": {
-        "url": "s3://acme-logs/2026/*/*.json.gz",
-        "format": "json", "compression": "gzip",
-        "connectionId": "aws-prod"
-      } } },
-    { "id": "d", "type": "transform", "data": { "label": "Derive date", "componentId": "xf.derive", "props": {
-        "expressions": "event_date = CAST(ts AS DATE)"
-      } } },
-    { "id": "out", "type": "sink", "data": { "label": "Out", "componentId": "snk.parquet", "props": {
-        "path": "out/events/", "mode": "overwrite_or_ignore",
-        "partitionBy": "event_date", "compression": "zstd"
-      } } }
-  ],
-  "edges": [
-    { "id": "e1", "source": "s3", "target": "d",   "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e2", "source": "d",  "target": "out", "sourceHandle": "main", "targetHandle": "main" }
-  ]
-}
+> "Read all .json.gz files in `s3://logs/2026/*/*.json.gz`, parse, write Hive-partitioned by `event_date`"
+
+```
+src.s3 (glob, autodetect json.gz)
+  -> xf.derive (event_date = CAST(ts AS DATE))
+  -> snk.parquet (path=out/, partitionBy=event_date, mode=overwrite_or_ignore)
 ```
 
-### Recipe 4: RAG ingestion (chunk -> redact -> embed -> dedupe -> pgvector)
+### RAG ingestion
 
-```json
-{
-  "nodes": [
-    { "id": "src", "type": "source",    "data": { "label": "Docs",    "componentId": "src.s3",       "props": { "url": "s3://docs/**/*.md", "format": "json", "connectionId": "aws" } } },
-    { "id": "ch",  "type": "transform", "data": { "label": "Chunk",   "componentId": "xf.ai.chunk",  "props": { "inputColumn": "content", "outputColumn": "chunk", "chunkSize": 1500, "chunkOverlap": 150, "mode": "explode" } } },
-    { "id": "pii", "type": "transform", "data": { "label": "PII",     "componentId": "xf.ai.pii",    "props": { "inputColumn": "chunk" } } },
-    { "id": "em",  "type": "transform", "data": { "label": "Embed",   "componentId": "xf.ai.embed",  "props": { "inputColumn": "chunk", "outputColumn": "embedding", "model": "text-embedding-3-small", "apiKey": "${OPENAI_KEY}", "batchSize": 100 } } },
-    { "id": "dd",  "type": "transform", "data": { "label": "Dedupe",  "componentId": "xf.ai.dedupe", "props": { "embeddingColumn": "embedding", "threshold": 0.95 } } },
-    { "id": "pv",  "type": "sink",      "data": { "label": "pgvector","componentId": "snk.pgvector", "props": { "connectionId": "prod-pg", "table": "docs", "embeddingColumn": "embedding", "mode": "append" } } }
-  ],
-  "edges": [
-    { "id": "e1", "source": "src", "target": "ch",  "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e2", "source": "ch",  "target": "pii", "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e3", "source": "pii", "target": "em",  "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e4", "source": "em",  "target": "dd",  "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e5", "source": "dd",  "target": "pv",  "sourceHandle": "main", "targetHandle": "main" }
-  ]
-}
+> "Chunk our docs, embed with OpenAI, dedupe near-identicals, store in pgvector"
+
+```
+src.s3 (markdown files)
+  -> xf.ai.chunk (chunkSize=1500, overlap=150)
+  -> xf.ai.pii (redact)
+  -> xf.ai.embed (model=text-embedding-3-small, baseUrl=https://api.openai.com)
+  -> xf.ai.dedupe (threshold=0.95)
+  -> snk.pgvector (table=docs)
 ```
 
-`${OPENAI_KEY}` resolves from the active context variable at run time. To run fully local instead, set `baseUrl` to `http://127.0.0.1:<duckie-port>` and drop the `apiKey`.
+### Slack channel digest
 
-### Recipe 5: Slack channel digest
+> "Pull yesterday's Slack messages from #support, classify by sentiment, email a summary"
 
-```json
-{
-  "nodes": [
-    { "id": "sl", "type": "source",    "data": { "label": "Support",  "componentId": "src.slack",       "props": { "url": "https://slack.com/api/conversations.history?channel=C12345", "authType": "bearer", "authToken": "${SLACK_TOKEN}", "responsePath": "/messages" } } },
-    { "id": "cl", "type": "transform", "data": { "label": "Classify", "componentId": "xf.ai.classify",  "props": { "inputColumn": "text", "outputColumn": "sentiment", "categories": "positive,negative,neutral", "apiKey": "${OPENAI_KEY}" } } },
-    { "id": "ag", "type": "transform", "data": { "label": "By sent",  "componentId": "xf.aggregate",    "props": { "groupBy": "sentiment", "aggregations": "count = COUNT(*)" } } },
-    { "id": "em", "type": "sink",      "data": { "label": "Email",    "componentId": "snk.email",       "props": { "host": "smtp.example.com", "port": 587, "user": "${SMTP_USER}", "password": "${SMTP_PASS}", "fromAddress": "duckle@example.com", "toColumn": "_recipient", "subjectColumn": "_subject", "bodyColumn": "_body" } } }
-  ],
-  "edges": [
-    { "id": "e1", "source": "sl", "target": "cl", "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e2", "source": "cl", "target": "ag", "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e3", "source": "ag", "target": "em", "sourceHandle": "main", "targetHandle": "main" }
-  ]
-}
+```
+src.slack (channels.history with oldest=yesterday)
+  -> xf.ai.classify (categories=positive,negative,neutral)
+  -> xf.aggregate (group by sentiment, count)
+  -> snk.email (to=oncall@..., subject=Daily Support Digest)
 ```
 
-### Recipe 6: Git commit analytics
+### Webhook -> S3 archive
 
-```json
-{
-  "nodes": [
-    { "id": "g",  "type": "source",    "data": { "label": "Repo log",      "componentId": "src.git",     "props": { "repo": "/Users/me/code/acme", "mode": "log", "maxRows": 10000 } } },
-    { "id": "f",  "type": "transform", "data": { "label": "Last 30 days",  "componentId": "xf.filter",   "props": { "predicate": "CAST(date AS TIMESTAMP) > current_timestamp - INTERVAL '30 days'" } } },
-    { "id": "ag", "type": "transform", "data": { "label": "By author",     "componentId": "xf.aggregate","props": { "groupBy": "author_email", "aggregations": "commits = COUNT(*)" } } },
-    { "id": "s",  "type": "transform", "data": { "label": "Top 10",        "componentId": "xf.sort",     "props": { "by": "commits", "direction": "desc" } } },
-    { "id": "out","type": "sink",      "data": { "label": "Stats CSV",     "componentId": "snk.csv",     "props": { "path": "out/author-stats.csv", "mode": "overwrite", "hasHeader": true } } }
-  ],
-  "edges": [
-    { "id": "e1", "source": "g",  "target": "f",   "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e2", "source": "f",  "target": "ag",  "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e3", "source": "ag", "target": "s",   "sourceHandle": "main", "targetHandle": "main" },
-    { "id": "e4", "source": "s",  "target": "out", "sourceHandle": "main", "targetHandle": "main" }
-  ]
-}
+> "Receive 100 webhooks, archive each one as JSON in S3"
+
+```
+src.webhook (port=8080, maxRequests=100, timeoutMs=300000)
+  -> snk.s3 (path=s3://archive/events/, format=jsonl, partitionBy=event_date)
 ```
 
-More examples live under [`samples/`](samples). For a full per-component property reference (every prop, type, default, behavior) see [`docs/components.md`](docs/components.md).
+### Git commit-log analytics
+
+> "Build a dashboard of who's been committing what in the last 30 days"
+
+```
+src.git (mode=log, maxRows=10000)
+  -> xf.filter (date > current_date - INTERVAL '30 days')
+  -> xf.aggregate (group by author_email, count)
+  -> snk.csv (path=author-stats.csv)
+```
+
+More examples live in [`samples/`](samples) - drop the pipeline files into a workspace and open them.
 
 ---
 
@@ -873,44 +799,98 @@ A few patterns that consistently produce sub-second runs at small / medium data 
 
 ## FAQ
 
-**Is it free?**
-Yes. MIT OR Apache-2.0 - your choice. Use it commercially, fork it, sell what you build with it. No telemetry. There's nothing to "upgrade" to.
+<details>
+<summary><b>Is Duckle free? What's the license?</b></summary>
 
-**Does it send my data anywhere?**
-Only where your pipelines tell it to. The app itself makes no analytics calls. `src.s3` hits your S3 bucket. `xf.ai.embed` hits whichever endpoint you put in its `baseUrl`. If you use the local Duckie chat, that's localhost and stays on your machine.
+Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it commercially, fork it, sell what you build with it. No usage limits, no telemetry.
 
-**How big can a pipeline be?**
-DuckDB is comfortable up to "fits on the machine" - tens of GB on a laptop, hundreds on a beefy workstation, terabytes if you have the RAM. Past that, write to a warehouse and run your big-data tooling there. Duckle is built for the one-machine sweet spot.
+</details>
 
-**Do I need to install DuckDB first?**
-No. First launch downloads the right binary into your app-data folder (~50 MB with the pre-fetched extensions). Same for the AI engine if you opt in. Both are skippable; you can wire it back up later.
+<details>
+<summary><b>Does Duckle send my data anywhere?</b></summary>
 
-**Why is the binary 27-30 MB and not the 9 MB you used to claim?**
-Honest answer: the binary grew. When I started Duckle it was 9 MB because there were six connectors. Now it has 290 connectors, an AI runtime, an SMTP sender, an IMAP receiver, a wasm interpreter, a JS interpreter, an FTP client, a Cassandra driver, a SigV4 signer, a Git client, and a chat-completions HTTP plumbing. Statically linking those is what the size pays for. DuckDB and the LLM are still downloaded separately so the actual *download* is small; the *binary* itself has grown with the feature set.
+No. The app runs entirely on your machine. The engines (DuckDB, llama.cpp) are downloaded from official upstream releases on first launch and then run locally. The only network calls Duckle makes on your behalf are the ones your pipelines explicitly do (e.g. a `src.s3` reading from your S3 bucket, or `xf.ai.embed` if you configure it to hit OpenAI).
 
-**Can I point the AI transforms at OpenAI / Claude / Cohere instead of the local model?**
-Yes. The `xf.ai.*` connectors all accept `baseUrl` and `apiKey` props. Point them at any OpenAI-compatible `/v1/chat/completions` or `/v1/embeddings` endpoint. The local Duckie chat panel always uses localhost - the per-stage AI transforms are configurable per node.
+Duckie AI Assistant runs **fully offline** once the model is downloaded.
 
-**Where does my pipeline data live?**
-In the workspace folder you pick. Pipelines are `<workspace>/pipelines/*.pipeline.json`. Connections, contexts, routines, run history - all plain files. See [Workspace and Git flow](#workspace-and-git-flow).
+</details>
 
-**Can multiple people work on the same workspace?**
-Through Git, the same way they would on a codebase. The in-app Git panel handles commit / push / pull / branch (see [Git integration](#git-integration-github--gitlab)). There's no live multi-user mode like Figma - this is a single-machine tool.
+<details>
+<summary><b>How big are pipelines this works well on?</b></summary>
 
-**Can I run pipelines headlessly, from CI or cron?**
-A CLI run mode (`duckle run --workspace ~/data --pipeline orders_etl`) is on the 1.0 roadmap. For now: run from the desktop app on a schedule, or use the engine crate (`duckle-duckdb-engine`) from your own Rust binary.
+DuckDB is excellent on data that fits on one machine - tens of GB on a laptop, hundreds on a workstation. Beyond that, point Duckle's output at a warehouse / lakehouse that scales horizontally. Duckle is honest about being single-machine.
 
-**How good is Duckie really?**
-For three-to-six-node pipelines with common shapes, very good - the Qwen Coder model was trained on a lot of JSON-emitting code. For unusual transforms or specific vendor SaaS, less so - it'll sometimes invent props that don't exist. Treat it as a faster way to get a skeleton; verify the props before clicking Insert. For longer pipelines, ask it section by section. Or wire a more capable remote model into the per-stage `xf.ai.llm` transform and iterate that way.
+</details>
 
-**Does Duckie work offline?**
-Yes, once the model is downloaded. I've tested it on a plane. The only network call the chat panel makes is to localhost:port (the `llama-server` subprocess).
+<details>
+<summary><b>Do I need DuckDB installed first?</b></summary>
 
-**Why DuckDB and not Polars / Spark / DataFusion?**
-DuckDB's SQL surface covers ETL work. It's columnar and vectorized so it's fast on a laptop. The extension model gives us Iceberg / Delta / vector search / full-text search without writing the implementation. Polars is great as a DataFrame library but doesn't have the cloud / format / extension breadth. Spark is a cluster - if I needed a cluster I wouldn't build Duckle. DataFusion is closer to what I'd build but DuckDB has the wider ecosystem today.
+No - Duckle downloads it for you on first launch. The download is ~30 MB and includes the most-used extensions (httpfs, postgres, mysql, iceberg, delta, vss, fts, etc.) so the first time you touch a Postgres source there's no mid-pipeline network pause.
 
-**How do I write a new connector?**
-Open `crates/duckdb-engine/src/plan.rs` (where the planner decides what to do with each component_id) and `crates/duckdb-engine/src/lib.rs` (where executors live). The shortest path is to copy a similar one - `src.rabbit` for a streaming source, `src.dynamodb` for HTTP + bespoke auth - rename it, adapt the request shape, add a test in `crates/duckdb-engine/tests/execution.rs`, then flip the palette tile in `frontend/src/workflow-ui/palette-data.ts` from `'planned'` to `'available'`. Open a PR.
+</details>
+
+<details>
+<summary><b>How big is the binary, exactly?</b></summary>
+
+About 27-30 MB depending on platform (Linux 30 MB, macOS 24 MB, Windows 28 MB). The engines aren't statically linked - DuckDB (~50 MB with extensions) and the Duckie LLM (~1.1 GB for the Qwen GGUF) both download on first launch with a guided installer into your app-data folder. So the actual app download stays small, updates stay fast, and engines update independently.
+
+</details>
+
+<details>
+<summary><b>Can I use OpenAI / Cohere / Voyage instead of the local Duckie?</b></summary>
+
+Yes. The AI transforms (`xf.ai.embed`, `xf.ai.llm`, `xf.ai.classify`) accept a `baseUrl` prop. Point it at any OpenAI-compatible `/v1/...` endpoint and an `apiKey` and Duckle uses that instead. The local Duckie chat panel is hardwired to localhost; the pipeline AI transforms are configurable.
+
+</details>
+
+<details>
+<summary><b>Where does my pipeline data live?</b></summary>
+
+In the workspace folder you pick on first launch (see [Workspace and Git flow](#workspace-and-git-flow)). Pipelines are plain JSON files you can commit to Git, diff, branch, and review.
+
+</details>
+
+<details>
+<summary><b>Can multiple people collaborate on the same workspace?</b></summary>
+
+Via Git, yes - check the workspace into a repo and use standard branch/PR flows. Duckle does not have a real-time multiplayer mode (single-machine by design).
+
+</details>
+
+<details>
+<summary><b>Can I run pipelines headlessly / from CI?</b></summary>
+
+CLI run mode (`duckle run --workspace ~/data --pipeline orders_etl`) is on the 1.0 roadmap. Today you can run pipelines via the desktop app on a schedule, or by importing the engine crate (`duckle-duckdb-engine`) into your own Rust binary.
+
+</details>
+
+<details>
+<summary><b>Is the Duckie AI assistant any good?</b></summary>
+
+For 90% of common pipelines (read source -> simple transforms -> sink), yes - the Qwen 2.5 Coder model is tuned for structured-JSON generation. For long, complex pipelines you'll likely want to iterate: describe the first half, click insert, then ask for the next half. You can also swap the model: point `xf.ai.llm`'s `baseUrl` at GPT-4 or Claude for more capable pipeline drafting.
+
+</details>
+
+<details>
+<summary><b>Does the Duckie panel need internet after install?</b></summary>
+
+No. Once `llama-server` and the Qwen GGUF are downloaded into your app-data directory, Duckie runs fully offline. Tested by killing wifi and asking it for a pipeline - works fine.
+
+</details>
+
+<details>
+<summary><b>Why DuckDB and not Polars / Apache Spark / X?</b></summary>
+
+DuckDB's SQL surface is wide enough to express most ETL work, it's vectorized and fast on a laptop, it has first-class Iceberg/Delta/Parquet readers, and its extension model lets us add vector + full-text + Postgres ATTACH without code changes. Polars is great but doesn't ship the cloud/format/extension breadth we need; Spark is a great cluster but overkill for the local-first niche we're in.
+
+</details>
+
+<details>
+<summary><b>How do I contribute a new connector?</b></summary>
+
+See the [Contributing](#contributing) section and `crates/duckdb-engine/src/plan.rs` (planner branch) + `crates/duckdb-engine/src/lib.rs` (executor). The shortest path: copy an existing connector with similar shape (e.g. `src.rabbit` for a streaming source, `src.dynamodb` for an HTTP+auth API), adapt, add a test, flip the palette tile.
+
+</details>
 
 ---
 
