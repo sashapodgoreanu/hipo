@@ -167,6 +167,8 @@ pub struct Stage {
     pub ftp_source: Option<FtpSourceSpec>,
     /// System clipboard reader.
     pub clipboard_source: Option<ClipboardSourceSpec>,
+    /// xf.ai.embed (per-row embedding).
+    pub ai_embed: Option<AiEmbedSpec>,
     /// Milliseconds the executor sleeps before running this stage.
     /// Set by ctl.wait and ctl.throttle. None = no delay.
     pub wait_ms: Option<u64>,
@@ -601,6 +603,24 @@ pub struct FtpSourceSpec {
 #[derive(Debug, Clone)]
 pub struct ClipboardSourceSpec {
     pub node_id: String,
+}
+
+/// xf.ai.embed: per-row embedding transform. Reads `input_column`
+/// from each upstream row, batches up to `batch_size`, POSTs to
+/// `{base_url}/v1/embeddings` with Bearer `api_key`, adds the
+/// returned vector to each row under `output_column` (DOUBLE[]).
+/// Works with any OpenAI-compatible provider (Cohere, Voyage,
+/// llama.cpp embedding server, etc) - just change base_url.
+#[derive(Debug, Clone)]
+pub struct AiEmbedSpec {
+    pub node_id: String,
+    pub from_view: String,
+    pub input_column: String,
+    pub output_column: String,
+    pub model: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub batch_size: usize,
 }
 
 /// snk.cassandra / snk.scylla: CQL INSERT via the scylla driver
@@ -1232,6 +1252,7 @@ fn build_stage(
     let mut shell: Option<ShellSpec> = None;
     let mut ftp_source: Option<FtpSourceSpec> = None;
     let mut clipboard_source: Option<ClipboardSourceSpec> = None;
+    let mut ai_embed: Option<AiEmbedSpec> = None;
     let mut wait_ms: Option<u64> = None;
     // Advanced settings (universal across components, written by the
     // Properties Panel's Advanced tab). Engine honours them per stage.
@@ -2918,6 +2939,40 @@ fn build_stage(
         })?;
         text_search = Some(spec);
         (String::new(), StageKind::View, None)
+    } else if component_id == "xf.ai.embed" {
+        // Per-row embedding via an OpenAI-compatible API. The planner
+        // resolves the upstream view name (the stage reads from it
+        // during execution) and pins the API config. apiKey is
+        // required - this stage will not run with an empty key.
+        let from_view = inputs
+            .main()
+            .ok_or_else(|| EngineError::Config(format!("{}: upstream input required", component_id)))?;
+        let api_key = string_prop(&props, "apiKey")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: apiKey required (OpenAI / compatible)", component_id)))?;
+        ai_embed = Some(AiEmbedSpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            input_column: string_prop(&props, "inputColumn")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "text".into()),
+            output_column: string_prop(&props, "outputColumn")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "embedding".into()),
+            model: string_prop(&props, "model")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "text-embedding-3-small".into()),
+            api_key,
+            base_url: string_prop(&props, "baseUrl")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "https://api.openai.com".into()),
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(100) as usize,
+        });
+        (String::new(), StageKind::View, None)
     } else {
         let body = build_view_sql(component_id, &props, inputs).map_err(|e| {
             EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
@@ -3000,6 +3055,7 @@ fn build_stage(
         shell,
         ftp_source,
         clipboard_source,
+        ai_embed,
         wait_ms,
         retry_attempts,
         retry_backoff_ms,

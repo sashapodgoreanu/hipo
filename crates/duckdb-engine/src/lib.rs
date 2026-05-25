@@ -28,10 +28,10 @@ pub mod plan;
 pub use history::{append_run_record, load_run_history, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
-    AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec, ClickHouseSinkSpec,
-    ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec,
-    ElasticSourceSpec, FormatFileSinkSpec, FormatFileSourceSpec, FormatKind, FtpSourceSpec,
-    GitSourceSpec, KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec,
+    quote_ident, AiEmbedSpec, AvroSinkSpec, AvroSourceSpec, CassandraSinkSpec, CassandraSourceSpec,
+    ClickHouseSinkSpec, ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec,
+    DatabricksSourceSpec, ElasticSourceSpec, FormatFileSinkSpec, FormatFileSourceSpec, FormatKind,
+    FtpSourceSpec, GitSourceSpec, KafkaSinkSpec, KafkaSourceSpec, MilvusSourceSpec, MongoSinkSpec,
     MongoSourceSpec, NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec,
     PubSubSinkSpec, PubSubSourceSpec, QdrantSourceSpec, RabbitSinkSpec, RabbitSourceSpec,
     RedisSinkSpec, RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, ShellSpec,
@@ -548,6 +548,8 @@ impl DuckdbEngine {
                     self.run_ftp_source(&db_path, spec)
                 } else if let Some(spec) = stage.clipboard_source.as_ref() {
                     self.run_clipboard_source(&db_path, spec)
+                } else if let Some(spec) = stage.ai_embed.as_ref() {
+                    self.run_ai_embed(&db_path, spec)
                 } else if let Some(spec) = stage.upsert.as_ref() {
                     // Relational-DB upsert: DESCRIBE the upstream first to
                     // get the column list, then assemble INSERT ... ON
@@ -2356,6 +2358,104 @@ impl DuckdbEngine {
         Ok(format!(
             "ftp: materialized {} file(s) from {}:{} into {}",
             count, spec.host, spec.port, spec.node_id
+        ))
+    }
+
+    /// xf.ai.embed: per-row embedding via an OpenAI-compatible API.
+    /// Reads the upstream view, batches rows into groups of
+    /// batch_size, sends the input_column text array to /v1/embeddings,
+    /// zips the returned vectors back into the rows under
+    /// output_column. Works with OpenAI, Cohere (via baseUrl override),
+    /// Voyage, llama.cpp's embedding server, or any other
+    /// OpenAI-shaped endpoint.
+    ///
+    /// Establishes the AI credential pattern the other xf.ai.* tiles
+    /// will follow: apiKey lives in stage props for now (revisable
+    /// later if we add a secure keystore - just rewires this one read).
+    fn run_ai_embed(&self, db: &Path, spec: &AiEmbedSpec) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
+        )?;
+        if rows.is_empty() {
+            materialize_jsonobjects_as_table(db, &spec.node_id, &[])?;
+            return Ok(format!(
+                "ai.embed: 0 upstream rows -> {}",
+                spec.node_id
+            ));
+        }
+        let endpoint = format!("{}/v1/embeddings", spec.base_url.trim_end_matches('/'));
+        let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+        for chunk in rows.chunks(spec.batch_size) {
+            self.check_cancelled()?;
+            // Pull the text from each row; missing / non-string values
+            // become empty strings so the API call doesn't fail on a
+            // single bad row.
+            let inputs: Vec<String> = chunk
+                .iter()
+                .map(|row| {
+                    row.get(&spec.input_column)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .collect();
+            let body = serde_json::json!({
+                "model": spec.model,
+                "input": inputs,
+            });
+            let resp = ureq::post(&endpoint)
+                .set("Authorization", &format!("Bearer {}", spec.api_key))
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string());
+            let response: JsonValue = match resp {
+                Ok(r) => r
+                    .into_json()
+                    .map_err(|e| EngineError::Query(format!("ai.embed parse: {}", e)))?,
+                Err(ureq::Error::Status(code, r)) => {
+                    let body = r.into_string().unwrap_or_default();
+                    return Err(EngineError::Query(format!(
+                        "ai.embed HTTP {}: {}",
+                        code, body
+                    )));
+                }
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "ai.embed transport: {}",
+                        e
+                    )))
+                }
+            };
+            // OpenAI shape: response.data is an array of {index, embedding: [...]}.
+            // Order is guaranteed to match the input order per the API contract.
+            let data = response
+                .get("data")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if data.len() != chunk.len() {
+                return Err(EngineError::Query(format!(
+                    "ai.embed: expected {} embeddings, got {}",
+                    chunk.len(),
+                    data.len()
+                )));
+            }
+            for (row, item) in chunk.iter().zip(data.iter()) {
+                let embedding = item.get("embedding").cloned().unwrap_or(JsonValue::Null);
+                let mut obj = match row {
+                    JsonValue::Object(m) => m.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                obj.insert(spec.output_column.clone(), embedding);
+                out.push(JsonValue::Object(obj));
+            }
+        }
+        let count = out.len();
+        materialize_jsonobjects_as_table(db, &spec.node_id, &out)?;
+        Ok(format!(
+            "ai.embed ({}): embedded {} row(s) into {}",
+            spec.model, count, spec.node_id
         ))
     }
 

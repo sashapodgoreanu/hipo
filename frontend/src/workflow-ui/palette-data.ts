@@ -411,7 +411,7 @@ export const PALETTE: Category[] = [
                 id: 'xf.ai',
                 label: 'AI',
                 components: [
-                    xf('ai.embed', 'Embeddings', 'preview', 'Generate vector embeddings'),
+                    xf('ai.embed', 'Embeddings', 'available', 'Per-row embedding via any OpenAI-compatible /v1/embeddings endpoint. Props: inputColumn (default `text`), outputColumn (default `embedding`), model (default `text-embedding-3-small`), apiKey (required, sent as Bearer), baseUrl (default `https://api.openai.com` - point at Cohere, Voyage, llama.cpp embed server, etc), batchSize (default 100).'),
                     xf('ai.llm', 'LLM Transform', 'preview', 'Clean / enrich rows with an LLM'),
                     xf('ai.chunk', 'Text Chunker', 'preview', 'Split text for RAG'),
                     xf('ai.pii', 'PII Redact', 'preview', 'Detect + mask personal data'),

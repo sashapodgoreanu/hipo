@@ -6,8 +6,8 @@ reel; this is the full ledger.
 
 The palette currently carries **303 components**, broken down:
 
-- **271 available** - executes on the DuckDB engine today
-- **11 preview** - configurable in the designer (drag, wire, set
+- **272 available** - executes on the DuckDB engine today
+- **10 preview** - configurable in the designer (drag, wire, set
   properties); execution is being wired engine-by-engine
 - **21 planned** - reserved in the palette so the roadmap is visible,
   not yet executable
@@ -114,7 +114,6 @@ as a real materialized stage; the upstream is exposed as `input`).
 
 | Component | Notes |
 |---|---|
-| `xf.ai.embed` | OpenAI / Cohere / Voyage / local-model embed call |
 | `xf.ai.llm` | LLM transform - per-row prompt + parse response |
 | `xf.ai.chunk` | Text splitter (recursive / semantic / token-based) |
 | `xf.ai.classify` | LLM-backed classification |

@@ -6608,6 +6608,109 @@ fn src_git_log_emits_one_row_per_commit() {
     assert_eq!(tweak, "Tweak: pipe | in subject");
 }
 
+/// xf.ai.embed: stand up a tiny HTTP server pretending to be the
+/// OpenAI /v1/embeddings endpoint. Pipe a CSV with 3 text rows in;
+/// verify the engine batched them into one POST, attached the mock
+/// embeddings to each row, and the embedding column round-trips
+/// through DuckDB's JSON inference as a list of doubles.
+#[test]
+fn xf_ai_embed_calls_openai_compatible_endpoint() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let cap = captured.clone();
+    let handle = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(16384);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..32 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            cap.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf).to_string());
+            // OpenAI-shape response: data is array of {index, embedding}
+            // matching the input order.
+            let body = r#"{"data":[{"index":0,"embedding":[0.1,0.2,0.3]},{"index":1,"embedding":[0.4,0.5,0.6]},{"index":2,"embedding":[0.7,0.8,0.9]}],"model":"mock","usage":{}}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let in_csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,text\n1,hello\n2,world\n3,duckle\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let base_url = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
+            node("e", "xf.ai.embed", json!({
+                "inputColumn": "text",
+                "outputColumn": "vec",
+                "model": "mock",
+                "apiKey": "sk-test",
+                "baseUrl": base_url,
+                "batchSize": 100,
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "e"), main_edge("e2", "e", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "xf.ai.embed failed: {:?}", r.error);
+    let n = count(&format!("read_csv_auto('{}')", out));
+    assert_eq!(n, 3);
+    // Verify the API call shape: Bearer auth, POST to /v1/embeddings,
+    // and the input array contains all three texts.
+    let reqs = captured.lock().unwrap();
+    let req = &reqs[0];
+    assert!(
+        req.starts_with("POST /v1/embeddings"),
+        "expected POST /v1/embeddings, got: {}",
+        &req[..req.find('\n').unwrap_or(80).min(req.len())]
+    );
+    assert!(
+        req.to_lowercase().contains("authorization: bearer sk-test"),
+        "expected Bearer auth: {}",
+        req
+    );
+    assert!(req.contains("\"hello\""), "expected hello in request body");
+    assert!(req.contains("\"world\""), "expected world in request body");
+    assert!(req.contains("\"duckle\""), "expected duckle in request body");
+    // Verify the embedding column came back. The CSV writer renders
+    // the vec column as a list literal like '[0.1,0.2,0.3]'.
+    let v1 = scalar_string(&format!(
+        "SELECT vec FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert!(v1.contains("0.1"), "expected first row vec to contain 0.1: {}", v1);
+}
+
 /// src.clipboard: write known payloads to the clipboard and verify
 /// the engine reads them back as rows. Both shapes (JSON-array, plain
 /// text) live in one test because the OS clipboard is shared global
