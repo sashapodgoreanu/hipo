@@ -3582,7 +3582,12 @@ fn build_stage(
         });
         (String::new(), StageKind::View, None)
     } else {
-        let body = build_view_sql(component_id, &props, inputs).map_err(|e| {
+        let body = build_view_sql(
+            component_id,
+            &props,
+            inputs,
+            node.data.schema.as_deref(),
+        ).map_err(|e| {
             EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
         })?;
         // Materialize as a real table so the result persists across the
@@ -3687,8 +3692,8 @@ fn build_stage(
 /// engine's inspect path to DESCRIBE / sample without materializing.
 pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<String> {
     Some(match format {
-        "csv" => build_csv_source(props),
-        "tsv" => build_tsv_source(props),
+        "csv" => build_csv_source(props, None),
+        "tsv" => build_tsv_source(props, None),
         "parquet" => build_parquet_source(props),
         "json" | "jsonl" | "ndjson" => build_json_source(props),
         "sqlite" => build_sqlite_source(props),
@@ -3711,11 +3716,14 @@ fn build_view_sql(
     component_id: &str,
     props: &JsonValue,
     inputs: &NodeInputs,
+    declared: Option<&[duckle_metadata::Column]>,
 ) -> Result<String, String> {
     match component_id {
-        // Sources
-        "src.csv" => Ok(build_csv_source(props)),
-        "src.tsv" => Ok(build_tsv_source(props)),
+        // Sources - declared schema is consulted only by formats that
+        // accept a `columns = {...}` override (CSV / TSV today). Other
+        // sources auto-infer and ignore `declared`.
+        "src.csv" => Ok(build_csv_source(props, declared)),
+        "src.tsv" => Ok(build_tsv_source(props, declared)),
         "src.parquet" => Ok(build_parquet_source(props)),
         "src.json" | "src.jsonl" => Ok(build_json_source(props)),
         "src.sqlite" => Ok(build_sqlite_source(props)),
@@ -5669,7 +5677,7 @@ fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> Result<Stri
 
 // ---- Sources ------------------------------------------------------------
 
-fn build_csv_source(props: &JsonValue) -> String {
+fn build_csv_source(props: &JsonValue, declared: Option<&[duckle_metadata::Column]>) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
     let has_header = props
         .get("hasHeader")
@@ -5697,10 +5705,47 @@ fn build_csv_source(props: &JsonValue) -> String {
     if let Some(enc) = string_prop(props, "encoding").filter(|s| !s.is_empty()) {
         args.push(format!("encoding='{}'", sql_escape(&enc)));
     }
+    // If the user declared a schema (Schema panel in PropertiesPanel),
+    // honor it: DuckDB's `columns` argument skips auto-inference for the
+    // listed columns and reads them as the requested type. This is how
+    // a user forces a `dd/mm/yy` date column to stay as VARCHAR instead
+    // of being misparsed as `yyyy-mm-dd`. Without `columns`, read_csv_auto
+    // picks its own types and silently overrides whatever the Schema
+    // panel says. See issue #3.
+    if let Some(cols) = declared.filter(|c| !c.is_empty()) {
+        let pairs = cols
+            .iter()
+            .map(|c| format!("'{}': '{}'", sql_escape(&c.name), data_type_to_duckdb_sql(&c.data_type)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        args.push(format!("columns = {{{}}}", pairs));
+    }
     format!("SELECT * FROM read_csv_auto({})", args.join(", "))
 }
 
-fn build_tsv_source(props: &JsonValue) -> String {
+/// Map Duckle's DataType enum to a DuckDB SQL type string suitable for
+/// read_csv_auto's `columns = {...}` argument. "string" -> VARCHAR is
+/// the key one here: it stops DuckDB from trying (and usually failing)
+/// to auto-parse dd/mm/yy and other non-ISO date formats.
+fn data_type_to_duckdb_sql(t: &duckle_metadata::DataType) -> &'static str {
+    use duckle_metadata::DataType as D;
+    match t {
+        D::String => "VARCHAR",
+        D::Int32 => "INTEGER",
+        D::Int64 => "BIGINT",
+        D::Float32 => "FLOAT",
+        D::Float64 => "DOUBLE",
+        D::Bool => "BOOLEAN",
+        D::Date => "DATE",
+        D::Timestamp => "TIMESTAMP",
+        D::Time => "TIME",
+        D::Decimal => "DECIMAL",
+        D::Json => "JSON",
+        D::Binary => "BLOB",
+    }
+}
+
+fn build_tsv_source(props: &JsonValue, declared: Option<&[duckle_metadata::Column]>) -> String {
     // TSV is just CSV with delim='\t'. Force it.
     let mut p = props.clone();
     if let Some(obj) = p.as_object_mut() {
@@ -5709,7 +5754,7 @@ fn build_tsv_source(props: &JsonValue) -> String {
             JsonValue::String("\t".into()),
         );
     }
-    build_csv_source(&p)
+    build_csv_source(&p, declared)
 }
 
 fn build_parquet_source(props: &JsonValue) -> String {
@@ -7675,6 +7720,80 @@ mod tests {
         assert!(compiled.stages[2]
             .sql
             .contains("TO '/tmp/out.parquet' (FORMAT PARQUET"));
+    }
+
+    #[test]
+    fn csv_declared_schema_overrides_autodetect() {
+        // Regression for issue #3: when the user sets a column to
+        // VARCHAR in the Schema panel (typical fix for dd/mm/yy dates
+        // that DuckDB would otherwise misparse as yyyy-mm-dd), the
+        // generated read_csv_auto must include `columns = {...}` so
+        // DuckDB uses the requested types instead of inferring them.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/dates.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"id","type":"int64","nullable":false},
+                    {"name":"event_date","type":"string","nullable":true}
+                  ]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/out.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let src_sql = &compiled.stages[0].sql;
+        assert!(
+            src_sql.contains("columns = {"),
+            "missing columns= clause: {}",
+            src_sql
+        );
+        assert!(
+            src_sql.contains("'event_date': 'VARCHAR'"),
+            "date column not forced to VARCHAR: {}",
+            src_sql
+        );
+        assert!(
+            src_sql.contains("'id': 'BIGINT'"),
+            "int64 not mapped to BIGINT: {}",
+            src_sql
+        );
+    }
+
+    #[test]
+    fn csv_without_declared_schema_uses_autodetect() {
+        // Inverse check: no schema -> no columns clause, so DuckDB
+        // falls back to its normal autodetect.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        assert!(
+            !compiled.stages[0].sql.contains("columns = {"),
+            "should not emit columns clause without a declared schema: {}",
+            compiled.stages[0].sql
+        );
     }
 
     #[test]

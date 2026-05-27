@@ -42,8 +42,20 @@ pub fn run() {
             // engine can shell out to it. The binary may not exist yet
             // (first run installs it via the setup screen); the engine
             // just errors clearly until then.
+            //
+            // ALSO publish the path as DUCKLE_DUCKDB_BIN. The engine's
+            // primary execution path takes the binary as a constructor
+            // arg, but rest_source_apply (used by REST-shaped sources:
+            // Oracle, SQL Server, Snowflake, Databricks, Synapse,
+            // BigQuery, and the various SaaS aliases that materialize
+            // their inline result set) is a free helper that reads the
+            // env var directly. Without this set, those sources fail
+            // with "DUCKLE_DUCKDB_BIN not set" while plain file flows
+            // work fine. See issue #2.
             if let Ok(dir) = app.path().app_data_dir() {
-                let _ = DUCKDB_BIN.set(engine_manager::duckdb_path(&dir));
+                let bin = engine_manager::duckdb_path(&dir);
+                std::env::set_var("DUCKLE_DUCKDB_BIN", &bin);
+                let _ = DUCKDB_BIN.set(bin);
             }
             // Boot the scheduler. The `.setup` hook runs on the main
             // thread, OUTSIDE any tokio runtime, so calling spawn_ticker
