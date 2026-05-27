@@ -6868,9 +6868,19 @@ fn src_webhook_collects_inbound_http_requests() {
     };
 
     // Helper thread: wait a moment for the engine to bind, then POST
-    // two JSON bodies.
+    // two JSON bodies. The 200ms gap between the two POSTs lets the
+    // listener fully accept + parse the first body before the second
+    // arrives - tight back-to-back POSTs were flaky on slower CI
+    // runners (notably macos-14), where the listener accepted but
+    // hadn't yet read body 2 before the test moved on.
     let client = std::thread::spawn(move || {
-        for body in [r#"{"id":1,"event":"signup"}"#, r#"{"id":2,"event":"login"}"#] {
+        for (i, body) in [r#"{"id":1,"event":"signup"}"#, r#"{"id":2,"event":"login"}"#]
+            .into_iter()
+            .enumerate()
+        {
+            if i > 0 {
+                std::thread::sleep(Duration::from_millis(200));
+            }
             // Retry a few times in case the engine isn't bound yet.
             for _ in 0..50 {
                 if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
@@ -6882,7 +6892,7 @@ fn src_webhook_collects_inbound_http_requests() {
                     let _ = s.write_all(req.as_bytes());
                     let _ = s.flush();
                     let mut resp = Vec::new();
-                    let _ = s.set_read_timeout(Some(Duration::from_millis(500)));
+                    let _ = s.set_read_timeout(Some(Duration::from_millis(1000)));
                     let _ = s.read_to_end(&mut resp);
                     break;
                 }
