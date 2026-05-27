@@ -346,9 +346,46 @@ impl DuckdbEngine {
             // Advanced settings: memoryLimitMb prepends a PRAGMA so heavy
             // aggregations can be capped per stage. The PRAGMA only lives
             // for the duration of this CLI invocation.
-            let memory_pragma = match stage.memory_limit_mb {
-                Some(mb) => format!("PRAGMA memory_limit='{}MB'; ", mb),
-                None => String::new(),
+            //
+            // Three knobs, all with environment-variable defaults so a
+            // workspace config can cap the engine globally without
+            // touching every stage. Per-stage settings still override
+            // the env defaults.
+            //
+            //   DUCKLE_MEMORY_LIMIT - e.g. "4GB", "2048MB" (DuckDB syntax)
+            //   DUCKLE_THREADS      - integer; DuckDB defaults to N cores
+            //   DUCKLE_TEMP_DIR     - spill directory (default: OS temp)
+            //
+            // Why env-vars instead of an EngineConfig struct: the engine
+            // is constructed in many places (tests, scheduler, desktop)
+            // and threading a config through every call site is invasive.
+            // Env vars let the Tauri app's setup hook publish workspace
+            // settings once, and tests can set them ad-hoc.
+            let memory_pragma = {
+                let mut prag = String::new();
+                let env_mem = std::env::var("DUCKLE_MEMORY_LIMIT").ok().filter(|s| !s.is_empty());
+                let mem = match stage.memory_limit_mb {
+                    Some(mb) => Some(format!("{}MB", mb)),
+                    None => env_mem,
+                };
+                if let Some(m) = mem {
+                    prag.push_str(&format!("PRAGMA memory_limit='{}'; ", m.replace('\'', "''")));
+                }
+                if let Ok(t) = std::env::var("DUCKLE_THREADS") {
+                    if let Ok(n) = t.trim().parse::<u32>() {
+                        if n > 0 {
+                            prag.push_str(&format!("PRAGMA threads={}; ", n));
+                        }
+                    }
+                }
+                if let Ok(d) = std::env::var("DUCKLE_TEMP_DIR") {
+                    let d = d.trim();
+                    if !d.is_empty() {
+                        let escaped = d.replace('\'', "''").replace('\\', "/");
+                        prag.push_str(&format!("PRAGMA temp_directory='{}'; ", escaped));
+                    }
+                }
+                prag
             };
             // Enforce "error if exists" before writing a local file sink.
             let sql = format!("{}{}{}", secret_prefix, memory_pragma, stage.sql);

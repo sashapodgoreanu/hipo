@@ -5622,19 +5622,44 @@ fn split_leading_token(s: &str) -> (&str, &str) {
     (&s[..end], &s[end..])
 }
 
+/// Parse a key string into a list of column names. Accepts a single
+/// column (`"id"`) or comma-separated composite keys (`"customer_id,
+/// order_date"`). Whitespace around commas is stripped.
+fn parse_key_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
 fn build_join(inputs: &NodeInputs, props: &JsonValue, kind: &str) -> Result<String, String> {
     let left = inputs.main().ok_or_else(|| "join: missing main input".to_string())?;
     let right = inputs
         .first_lookup()
         .ok_or_else(|| "join: missing lookup input".to_string())?;
-    let left_key = props
-        .get("leftKey")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| "join: leftKey property required".to_string())?;
-    let right_key = props
-        .get("rightKey")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| "join: rightKey property required".to_string())?;
+    let left_keys = parse_key_list(
+        props
+            .get("leftKey")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| "join: leftKey property required".to_string())?,
+    );
+    let right_keys = parse_key_list(
+        props
+            .get("rightKey")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| "join: rightKey property required".to_string())?,
+    );
+    if left_keys.is_empty() || right_keys.is_empty() {
+        return Err("join: leftKey and rightKey cannot be empty".into());
+    }
+    if left_keys.len() != right_keys.len() {
+        return Err(format!(
+            "join: leftKey and rightKey must have the same number of columns (got {} vs {})",
+            left_keys.len(),
+            right_keys.len()
+        ));
+    }
     // The form's joinType, if set, overrides the component-id default so
     // changing it in the UI actually takes effect.
     let kind = match string_prop(props, "joinType").as_deref() {
@@ -5644,14 +5669,50 @@ fn build_join(inputs: &NodeInputs, props: &JsonValue, kind: &str) -> Result<Stri
         Some("full") | Some("outer") => "FULL OUTER",
         _ => kind,
     };
-    Ok(format!(
-        "SELECT m.*, r.* FROM {} m {} JOIN {} r ON m.{} = r.{}",
-        quote_ident(left),
-        kind,
-        quote_ident(right),
-        quote_ident(left_key),
-        quote_ident(right_key)
-    ))
+    // Two-shaped output:
+    // - If the keys have the same names on both sides (common with
+    //   well-modeled data), USING(...) gives a clean single copy of
+    //   the join columns - no "ambiguous reference" downstream.
+    // - If the names differ, ON + EXCLUDE the right-side keys still
+    //   dedupes the join columns. Other shared columns (e.g., both
+    //   tables have `created_at`) still need the user to project
+    //   them via xf.rename or xf.project upstream, but at minimum
+    //   the join keys themselves no longer collide.
+    let same_names = left_keys == right_keys;
+    if same_names {
+        let key_list = left_keys
+            .iter()
+            .map(|k| quote_ident(k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "SELECT * FROM {l} m {k} JOIN {r} r USING ({keys})",
+            l = quote_ident(left),
+            k = kind,
+            r = quote_ident(right),
+            keys = key_list
+        ))
+    } else {
+        let on_clause = left_keys
+            .iter()
+            .zip(right_keys.iter())
+            .map(|(l, r)| format!("m.{} = r.{}", quote_ident(l), quote_ident(r)))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let right_excl = right_keys
+            .iter()
+            .map(|k| quote_ident(k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "SELECT m.*, r.* EXCLUDE ({excl}) FROM {l} m {k} JOIN {r} r ON {on}",
+            excl = right_excl,
+            l = quote_ident(left),
+            k = kind,
+            r = quote_ident(right),
+            on = on_clause
+        ))
+    }
 }
 
 fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> Result<String, String> {
@@ -5659,22 +5720,48 @@ fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> Result<Stri
     let right = inputs
         .first_lookup()
         .ok_or_else(|| "semi: missing lookup input".to_string())?;
-    let left_key = props
-        .get("leftKey")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| "semi: leftKey required".to_string())?;
-    let right_key = props
-        .get("rightKey")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| "semi: rightKey required".to_string())?;
-    let op = if anti { "NOT IN" } else { "IN" };
+    let left_keys = parse_key_list(
+        props
+            .get("leftKey")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| "semi: leftKey required".to_string())?,
+    );
+    let right_keys = parse_key_list(
+        props
+            .get("rightKey")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| "semi: rightKey required".to_string())?,
+    );
+    if left_keys.is_empty() || right_keys.is_empty() {
+        return Err("semi: keys cannot be empty".into());
+    }
+    if left_keys.len() != right_keys.len() {
+        return Err(format!(
+            "semi: leftKey and rightKey must have the same number of columns (got {} vs {})",
+            left_keys.len(),
+            right_keys.len()
+        ));
+    }
+    // EXISTS / NOT EXISTS replaces IN / NOT IN to fix the classic SQL
+    // NULL gotcha: `x NOT IN (subquery)` returns UNKNOWN (treated as
+    // false) the moment the subquery yields a single NULL, which makes
+    // anti-join silently drop every row. EXISTS evaluates the subquery
+    // as a correlated boolean - NULL right-side keys simply don't
+    // match and don't break the predicate. Composite keys ride the
+    // same construction.
+    let prefix = if anti { "NOT " } else { "" };
+    let correlated = left_keys
+        .iter()
+        .zip(right_keys.iter())
+        .map(|(l, r)| format!("m.{} = r.{}", quote_ident(l), quote_ident(r)))
+        .collect::<Vec<_>>()
+        .join(" AND ");
     Ok(format!(
-        "SELECT * FROM {} WHERE {} {} (SELECT {} FROM {})",
-        quote_ident(left),
-        quote_ident(left_key),
-        op,
-        quote_ident(right_key),
-        quote_ident(right)
+        "SELECT * FROM {l} m WHERE {pre}EXISTS (SELECT 1 FROM {r} r WHERE {on})",
+        l = quote_ident(left),
+        pre = prefix,
+        r = quote_ident(right),
+        on = correlated
     ))
 }
 
@@ -7930,6 +8017,159 @@ mod tests {
         let sql = &compiled.stages[0].sql;
         assert!(sql.contains("dateformat='%d/%m/%Y'"), "missing dateformat: {}", sql);
         assert!(sql.contains("timestampformat='%d/%m/%Y %H:%M:%S'"), "missing timestampformat: {}", sql);
+    }
+
+    #[test]
+    fn join_with_same_key_name_uses_using_clause() {
+        // When leftKey == rightKey, USING() dedupes the join column
+        // and downstream `SELECT id FROM joined` is unambiguous.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join.inner",
+                  "properties":{"leftKey":"customer_id","rightKey":"customer_id"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(join_sql.contains("USING (\"customer_id\")"), "missing USING clause: {}", join_sql);
+        assert!(!join_sql.contains("m.\"customer_id\" = r.\"customer_id\""), "should have used USING not ON: {}", join_sql);
+    }
+
+    #[test]
+    fn join_with_different_key_names_excludes_right_key() {
+        // Different key names: ON + EXCLUDE the right-side key so the
+        // join column isn't duplicated in the output.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join.left",
+                  "properties":{"leftKey":"customer_id","rightKey":"cust_id"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(join_sql.contains("EXCLUDE (\"cust_id\")"), "missing EXCLUDE: {}", join_sql);
+        assert!(join_sql.contains("m.\"customer_id\" = r.\"cust_id\""), "missing ON clause: {}", join_sql);
+        assert!(join_sql.contains("LEFT JOIN"), "wrong kind: {}", join_sql);
+    }
+
+    #[test]
+    fn join_composite_keys_two_columns() {
+        // Composite keys via comma-separated input. Both sides must
+        // have the same arity or compile fails loudly.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join.inner",
+                  "properties":{"leftKey":"customer_id, order_date","rightKey":"customer_id, order_date"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(
+            join_sql.contains("USING (\"customer_id\", \"order_date\")"),
+            "composite USING wrong: {}",
+            join_sql
+        );
+    }
+
+    #[test]
+    fn semi_join_uses_exists_not_in() {
+        // Anti-join was silently dropping all rows when the right side
+        // had any NULL key, because `x NOT IN (subq with NULL)` evaluates
+        // to UNKNOWN. NOT EXISTS doesn't have that quirk.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Anti","componentId":"xf.anti",
+                  "properties":{"leftKey":"id","rightKey":"id"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(join_sql.contains("NOT EXISTS"), "anti should use NOT EXISTS: {}", join_sql);
+        assert!(!join_sql.contains("NOT IN"), "should not emit NOT IN: {}", join_sql);
     }
 
     #[test]
