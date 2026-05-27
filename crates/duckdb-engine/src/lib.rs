@@ -945,8 +945,17 @@ impl DuckdbEngine {
                 plan::StageKind::View => None,
             };
             match count_target {
+                // Flat aggregate shape `SELECT 'n' AS n, COUNT(*) AS r
+                // FROM <t>` instead of the nested scalar-subquery shape
+                // `SELECT 'n' AS n, (SELECT COUNT(*) FROM <t>) AS r`.
+                // DuckDB's binder for foreign-table views (the postgres
+                // and mysql extensions' ATTACH-then-CREATE-VIEW path)
+                // chokes on the scalar-subquery shape with an internal
+                // "Failed to bind column reference count_star()" error.
+                // The flat shape evaluates fine on both regular views
+                // and extension-backed ones.
                 Some(t) => batched_sql.push_str(&format!(
-                    "COPY (SELECT '{}' AS n, (SELECT COUNT(*) FROM {}) AS r) TO '{}' (FORMAT 'json', ARRAY false);\n",
+                    "COPY (SELECT '{}' AS n, COUNT(*) AS r FROM {}) TO '{}' (FORMAT 'json', ARRAY false);\n",
                     stage.node_id.replace('\'', "''"),
                     plan::quote_ident(t),
                     path_to_sql(&marker),
