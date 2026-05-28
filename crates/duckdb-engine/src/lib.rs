@@ -1137,6 +1137,7 @@ impl DuckdbEngine {
                 &mut stage_started_at,
                 &mut nodes,
                 on_event,
+                false,
             );
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -1147,6 +1148,7 @@ impl DuckdbEngine {
                         &mut stage_started_at,
                         &mut nodes,
                         on_event,
+                        true,
                     );
                     if !status.success() {
                         failed_stage_idx = Some(completed);
@@ -6114,18 +6116,64 @@ fn stage_kind_label(k: &plan::StageKind) -> &'static str {
     }
 }
 
-/// Read the single-row NDJSON marker the batched executor emits at
-/// each stage boundary. Returns the row count (None when the stage
-/// emitted no count - ctl.switch and xf.assert; see execute_batched
-/// for why - or when the marker is missing / malformed).
-fn read_marker(path: &Path) -> Option<u64> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let line = content.lines().next()?.trim();
-    let v: JsonValue = serde_json::from_str(line).ok()?;
-    v.get("_duckle_r").and_then(|x| {
-        x.as_u64()
-            .or_else(|| x.as_i64().map(|i| i.max(0) as u64))
-    })
+/// Whether a batched marker file has finished being written.
+///
+/// DuckDB's `COPY ... TO file` creates the output file EMPTY at the
+/// start of the statement and writes the row only once the (possibly
+/// slow) source query finishes - verified: counting a 2 M-row CSV view
+/// leaves the marker at 0 bytes for hundreds of ms. The poll loop must
+/// not consume a marker in that window, or it reads an empty file, gets
+/// no count, and advances past the stage forever (the "0 rows written
+/// despite RUN SUCCEEDED" bug). So we distinguish "not finished writing"
+/// from "finished, and the count is legitimately null".
+enum MarkerState {
+    /// Missing, empty, partially written, or momentarily unreadable
+    /// (DuckDB still holds the handle open). Caller must wait + retry.
+    Pending,
+    /// Fully written. Inner is the row count, or None for the count-less
+    /// markers (ctl.switch / xf.assert; see execute_batched).
+    Ready(Option<u64>),
+}
+
+/// Read the single-row NDJSON marker the batched executor emits at each
+/// stage boundary. Returns [`MarkerState::Pending`] until the file is a
+/// complete, parseable JSON object carrying `_duckle_r`.
+fn read_marker(path: &Path) -> MarkerState {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return MarkerState::Pending,
+    };
+    let line = match content.lines().next() {
+        Some(l) => l.trim(),
+        None => return MarkerState::Pending,
+    };
+    if line.is_empty() {
+        return MarkerState::Pending;
+    }
+    let v: JsonValue = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return MarkerState::Pending,
+    };
+    match v.get("_duckle_r") {
+        None => MarkerState::Pending,
+        Some(JsonValue::Null) => MarkerState::Ready(None),
+        Some(x) => {
+            MarkerState::Ready(x.as_u64().or_else(|| x.as_i64().map(|i| i.max(0) as u64)))
+        }
+    }
+}
+
+/// Post-exit wait: once the CLI has exited every marker is final, but
+/// the last one may still be flushing to disk. Give it a bounded moment
+/// to become readable rather than recording a spurious None.
+fn wait_for_marker(path: &Path) -> MarkerState {
+    for _ in 0..50 {
+        if let MarkerState::Ready(r) = read_marker(path) {
+            return MarkerState::Ready(r);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    read_marker(path)
 }
 
 /// Promote every marker file `<i>.json` present on disk into a
@@ -6143,13 +6191,26 @@ fn drain_batched_markers(
     stage_started_at: &mut [Instant],
     nodes: &mut std::collections::BTreeMap<String, NodeRunStatus>,
     on_event: &mut dyn FnMut(PipelineEvent),
+    final_pass: bool,
 ) {
     while *completed < stages.len() {
         let marker = marker_dir.join(format!("{}.json", *completed));
         if !marker.exists() {
             break;
         }
-        let rows = read_marker(&marker);
+        // Only consume a marker once DuckDB has finished writing it. An
+        // existing-but-empty file means the COPY is still running: break
+        // and let the caller poll again. After the CLI has exited
+        // (final_pass) the file is final, so wait briefly for the last
+        // flush instead of recording a spurious None.
+        let rows = match read_marker(&marker) {
+            MarkerState::Ready(r) => r,
+            MarkerState::Pending if final_pass => match wait_for_marker(&marker) {
+                MarkerState::Ready(r) => r,
+                MarkerState::Pending => break,
+            },
+            MarkerState::Pending => break,
+        };
         let finish = Instant::now();
         let elapsed = finish
             .duration_since(stage_started_at[*completed])
@@ -7755,9 +7816,50 @@ fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String> {
 mod tests {
     use super::{
         aws_sigv4_sign, chunk_text, cosine_similarity, glob_match, pii_patterns,
-        render_prompt_template, unwrap_dynamodb_attrs,
+        read_marker, render_prompt_template, unwrap_dynamodb_attrs, MarkerState,
     };
     use serde_json::json;
+
+    /// Flatten MarkerState for assertions: None = Pending, Some(r) = Ready(r).
+    fn marker_state(s: MarkerState) -> Option<Option<u64>> {
+        match s {
+            MarkerState::Pending => None,
+            MarkerState::Ready(r) => Some(r),
+        }
+    }
+
+    #[test]
+    fn read_marker_waits_for_complete_file() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, body: &str| {
+            let p = dir.path().join(name);
+            let mut f = std::fs::File::create(&p).unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            f.flush().unwrap();
+            p
+        };
+        // Missing file -> Pending (caller keeps polling).
+        assert_eq!(marker_state(read_marker(&dir.path().join("nope.json"))), None);
+        // Empty file -> Pending. This is the bug: DuckDB's COPY creates
+        // the marker empty while a slow COUNT runs; consuming it here
+        // produced "0 rows written despite RUN SUCCEEDED".
+        assert_eq!(marker_state(read_marker(&write("empty.json", ""))), None);
+        // Partially written JSON -> Pending.
+        assert_eq!(marker_state(read_marker(&write("partial.json", "{\"_duckle_"))), None);
+        // Object without the key -> Pending.
+        assert_eq!(marker_state(read_marker(&write("nokey.json", "{\"x\":1}"))), None);
+        // Complete count -> Ready(Some(n)), including large counts.
+        assert_eq!(
+            marker_state(read_marker(&write("full.json", "{\"_duckle_r\":2000000}"))),
+            Some(Some(2_000_000))
+        );
+        // Legitimate count-less marker (ctl.switch / xf.assert) -> Ready(None).
+        assert_eq!(
+            marker_state(read_marker(&write("null.json", "{\"_duckle_r\":null}"))),
+            Some(None)
+        );
+    }
 
     fn redact_all(text: &str) -> String {
         let patterns = pii_patterns(&[]);

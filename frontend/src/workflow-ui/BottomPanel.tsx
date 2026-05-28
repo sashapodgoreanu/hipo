@@ -445,11 +445,15 @@ function ConsoleTab({
 }
 
 function runStats(r: RunResult) {
+    // "rows written" = rows landed in sinks only. Summing every node
+    // (source + transforms + sink) triple-counts the same data and
+    // reads as a nonsense total on a simple read -> transform -> write
+    // graph. Per-node counts are shown individually in the row list.
     let rowsWritten = 0;
     let nodeCount = 0;
     for (const st of Object.values(r.nodes)) {
         nodeCount += 1;
-        if (st.rows) rowsWritten += st.rows;
+        if (st.kind === 'sink' && st.rows) rowsWritten += st.rows;
     }
     return { rowsWritten, nodeCount };
 }
