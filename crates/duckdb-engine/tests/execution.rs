@@ -238,6 +238,58 @@ fn csv_to_csv_roundtrip_preserves_rows() {
 }
 
 #[test]
+fn per_stage_wide_preview_does_not_deadlock() {
+    // Regression for issue #4: the per-stage CLI runner buffered stdout
+    // in the OS pipe and only read it after the process exited. A wide
+    // node preview (`SELECT * ... LIMIT 100`) whose JSON exceeds the
+    // ~64 KiB Windows pipe buffer deadlocked - DuckDB blocked writing
+    // stdout while the engine blocked waiting for exit - hanging the
+    // whole pipeline on the source node's preview, before the sink ever
+    // ran. (An Oracle date-dimension with 36 columns produced a ~128 KiB
+    // preview and hit this every time.) The runner now drains stdout +
+    // stderr concurrently, so any result size completes.
+    //
+    // Reproduced here without a driver source: a wide CSV (its 100-row
+    // preview is ~150 KiB) plus memoryLimitMb on a node, which forces
+    // the per-stage path (the batched path drains on a thread already).
+    let tmp = tempfile::tempdir().unwrap();
+    let cols = 8usize;
+    let rows = 200usize;
+    let cell = "x".repeat(200); // 200-char cells -> ~1.6 KiB/row
+    let mut csv = String::new();
+    csv.push_str(
+        &(0..cols)
+            .map(|c| format!("c{}", c))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    csv.push('\n');
+    for _ in 0..rows {
+        csv.push_str(
+            &(0..cols).map(|_| cell.as_str()).collect::<Vec<_>>().join(","),
+        );
+        csv.push('\n');
+    }
+    let in_path = write_file(tmp.path(), "wide.csv", &csv);
+    let out = out_path(tmp.path(), "wide_out.csv");
+
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("s1", "src.csv", json!({ "path": in_path, "hasHeader": true })),
+            // memoryLimitMb forces the per-stage path (where the buggy
+            // runner lived); the value itself is irrelevant to the test.
+            node("k1", "snk.csv", json!({ "path": out, "hasHeader": true, "memoryLimitMb": 512 })),
+        ]),
+        json!([main_edge("e1", "s1", "k1")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "wide per-stage run failed/hung: {:?}", result.error);
+    assert!(Path::new(&out).exists());
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), rows as i64);
+}
+
+#[test]
 fn aggregate_groups_and_sums() {
     let tmp = tempfile::tempdir().unwrap();
     let csv = write_file(

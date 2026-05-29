@@ -165,35 +165,68 @@ impl DuckdbEngine {
             .spawn()
             .map_err(|e| EngineError::Other(format!("could not start duckdb: {}", e)))?;
 
-        loop {
+        // Drain stdout AND stderr on dedicated threads so the child can
+        // never deadlock against a full OS pipe buffer. The previous code
+        // polled try_wait() to completion and only called wait_with_output()
+        // *after* the process exited - but a Windows anonymous pipe holds
+        // only ~64 KiB, so once DuckDB's result exceeds that it blocks
+        // writing stdout while we block waiting for it to exit. A wide-table
+        // preview (`SELECT * ... LIMIT 100` over ~36 columns is ~128 KiB)
+        // hit this exactly, hanging the whole pipeline on the source node's
+        // preview before it ever reached the sink (issue #4). Concurrent
+        // readers keep the pipe drained regardless of result size.
+        use std::io::Read;
+        let mut stdout_pipe = child
+            .stdout
+            .take()
+            .ok_or_else(|| EngineError::Other("duckdb stdout not captured".into()))?;
+        let mut stderr_pipe = child
+            .stderr
+            .take()
+            .ok_or_else(|| EngineError::Other("duckdb stderr not captured".into()))?;
+        let stdout_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            buf
+        });
+
+        let status = loop {
             match child.try_wait() {
-                Ok(Some(_)) => break,
+                Ok(Some(s)) => break s,
                 Ok(None) => {
                     if self.cancel.load(Ordering::Relaxed) {
                         let _ = child.kill();
                         let _ = child.wait();
+                        // Killing closes the pipes, so the reader threads
+                        // unblock; join them so their handles are released.
+                        let _ = stdout_reader.join();
+                        let _ = stderr_reader.join();
                         return Err(EngineError::Cancelled);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(40));
                 }
                 Err(e) => return Err(EngineError::Other(e.to_string())),
             }
-        }
+        };
 
-        let out = child
-            .wait_with_output()
-            .map_err(|e| EngineError::Other(e.to_string()))?;
-        if !out.status.success() {
-            let mut msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout_bytes = stdout_reader.join().unwrap_or_default();
+        let stderr_bytes = stderr_reader.join().unwrap_or_default();
+        if !status.success() {
+            let mut msg = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
             if msg.is_empty() {
-                msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                msg = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
             }
             if msg.is_empty() {
                 msg = "DuckDB CLI exited with an error".into();
             }
             return Err(EngineError::Query(msg));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
     }
 
     /// Run SQL and return the first JSON array of rows it printed
