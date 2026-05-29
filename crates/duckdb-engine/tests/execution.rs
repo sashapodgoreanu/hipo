@@ -8062,6 +8062,60 @@ fn code_shell_captures_stdout_and_exit_code() {
     );
 }
 
+/// code.shell regression: a command emitting more than the ~64 KiB OS
+/// pipe buffer used to deadlock - the runner drained stdout/stderr only
+/// after the child exited, so the child blocked writing while the engine
+/// blocked waiting (hung forever with no timeout; falsely "timed out"
+/// with one). The runner now drains both streams concurrently on threads.
+#[test]
+fn code_shell_large_output_does_not_deadlock() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // ~200 KiB of a single repeated char (no newlines, so it stays one
+    // CSV field) - comfortably over the pipe buffer, under DuckDB's CSV
+    // line-size limit.
+    let payload = "A".repeat(200 * 1024);
+    std::fs::write(tmp.path().join("payload.txt"), &payload).unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    // Dump a big file to stdout via a bare relative filename + workingDir.
+    // (Avoids quoting a path that may contain spaces - cmd.exe mangles the
+    // backslash-escaped quotes Rust emits, which is a separate issue.)
+    // `type` on cmd.exe, `cat` on /bin/sh.
+    let command = if cfg!(windows) { "type payload.txt" } else { "cat payload.txt" };
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.shell", json!({
+                "command": command,
+                "workingDir": tmp.path().to_string_lossy(),
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "code.shell large output hung/failed: {:?}", r.error);
+    // Assert on the node preview rather than reading a 200 KiB single-field
+    // CSV back (which trips DuckDB's line-size limit). The captured stdout
+    // must be intact - proves the runner drained the pipe instead of
+    // truncating/hanging at the buffer.
+    let preview = r
+        .preview
+        .iter()
+        .find(|p| p.node_id == "s")
+        .expect("preview for code.shell node");
+    let stdout_len = preview
+        .rows
+        .first()
+        .and_then(|row| row.get("stdout"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.len())
+        .unwrap_or(0);
+    assert!(
+        stdout_len >= 200 * 1024,
+        "stdout truncated below payload size: got {} bytes",
+        stdout_len
+    );
+}
+
 /// src.soap: POST a SOAP envelope, parse the XML response, walk the
 /// row_path into the response body, emit one row per match. Uses the
 /// same tiny TCP-listener pattern as the REST tests.

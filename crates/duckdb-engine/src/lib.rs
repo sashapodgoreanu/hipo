@@ -3136,14 +3136,53 @@ impl DuckdbEngine {
         let mut child = cmd
             .spawn()
             .map_err(|e| EngineError::Query(format!("shell spawn: {}", e)))?;
+        // Drain stdout AND stderr on dedicated threads, the same way run()
+        // does, so the child can never deadlock against a full OS pipe
+        // buffer (~64 KiB on Windows). The previous code polled try_wait()
+        // to exit and only read via wait_with_output() afterwards - a
+        // user command emitting more than the buffer (a verbose build log,
+        // a recursive listing, `type`/`cat` of a file) blocked writing
+        // stdout/stderr while we blocked waiting for exit. With no timeout
+        // that hung forever; with one it was killed and misreported as a
+        // timeout, discarding output. Concurrent readers keep both pipes
+        // drained regardless of size.
+        use std::io::Read;
+        let mut stdout_pipe = child
+            .stdout
+            .take()
+            .ok_or_else(|| EngineError::Query("shell: stdout not captured".into()))?;
+        let mut stderr_pipe = child
+            .stderr
+            .take()
+            .ok_or_else(|| EngineError::Query("shell: stderr not captured".into()))?;
+        let stdout_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            buf
+        });
         // Poll: cancel kills the child; timeout kills the child; else
         // wait for natural exit.
+        //
+        // On the abort paths (cancel / timeout / wait error) we DON'T join
+        // the reader threads: a shell spawns the real command as a
+        // grandchild that inherits the pipe write ends, and killing the
+        // shell does not kill the grandchild. read_to_end would then block
+        // until the grandchild exits on its own - which for a `sleep 30`
+        // is exactly the hang the timeout is meant to escape. We discard
+        // the output when aborting anyway, so the reader threads are left
+        // to finish on their own (they exit once the grandchild releases
+        // the pipe). Only the natural-exit path joins to collect output.
         let deadline = spec
             .timeout_ms
             .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
-        loop {
+        let status = loop {
             match child.try_wait() {
-                Ok(Some(_)) => break,
+                Ok(Some(s)) => break s,
                 Ok(None) => {}
                 Err(e) => {
                     let _ = child.kill();
@@ -3166,20 +3205,19 @@ impl DuckdbEngine {
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        let out = child
-            .wait_with_output()
-            .map_err(|e| EngineError::Query(format!("shell collect: {}", e)))?;
+        };
+        let stdout_bytes = stdout_reader.join().unwrap_or_default();
+        let stderr_bytes = stderr_reader.join().unwrap_or_default();
         let duration_ms = started.elapsed().as_millis() as i64;
-        let exit_code = out.status.code().unwrap_or(-1);
+        let exit_code = status.code().unwrap_or(-1);
         let mut row = serde_json::Map::new();
         row.insert(
             "stdout".into(),
-            JsonValue::String(String::from_utf8_lossy(&out.stdout).into_owned()),
+            JsonValue::String(String::from_utf8_lossy(&stdout_bytes).into_owned()),
         );
         row.insert(
             "stderr".into(),
-            JsonValue::String(String::from_utf8_lossy(&out.stderr).into_owned()),
+            JsonValue::String(String::from_utf8_lossy(&stderr_bytes).into_owned()),
         );
         row.insert("exit_code".into(), JsonValue::from(exit_code));
         row.insert("duration_ms".into(), JsonValue::from(duration_ms));
