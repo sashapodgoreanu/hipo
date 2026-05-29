@@ -841,6 +841,44 @@ fn distinct_on_subset_keeps_deterministic_row() {
 }
 
 #[test]
+fn compiled_sql_redacts_secrets() {
+    // Regression: the relational ATTACH interpolated the plaintext
+    // password into the SQL, which leaked into the Plan-tab / exported
+    // script (display-only SQL). compile_pipeline_sql now scrubs known
+    // secret values. (No engine needed - this is pure compilation.)
+    use duckle_duckdb_engine::compile_pipeline_sql;
+    let d = doc(
+        json!([
+            node("s", "src.postgres", json!({
+                "host": "db.example.com",
+                "port": 5432,
+                "database": "app",
+                "user": "admin",
+                "password": "sup3rs3cr3tpw",
+                "tableName": "orders"
+            })),
+        ]),
+        json!([]),
+    );
+    let stages = compile_pipeline_sql(&d).expect("compile_pipeline_sql");
+    let all_sql = stages
+        .iter()
+        .map(|s| s.sql.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !all_sql.contains("sup3rs3cr3tpw"),
+        "plaintext password leaked into compiled SQL: {}",
+        all_sql
+    );
+    assert!(
+        all_sql.contains("***REDACTED***"),
+        "expected a redaction marker in compiled SQL: {}",
+        all_sql
+    );
+}
+
+#[test]
 fn sink_error_mode_refuses_to_overwrite() {
     let tmp = tempfile::tempdir().unwrap();
     let csv = write_file(tmp.path(), "in.csv", "a\n1\n");

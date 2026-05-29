@@ -7247,6 +7247,12 @@ pub struct StageSql {
 
 pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineError> {
     let compiled = plan::compile(doc)?;
+    // This SQL is for DISPLAY only (Plan tab, copy-to-clipboard, export) -
+    // it is never executed. The execution path uses the real credentials.
+    // Some stages (relational ATTACH, secrets prelude) interpolate a
+    // plaintext password / token / key into the SQL, which would otherwise
+    // leak into the exported script. Redact those secret VALUES here.
+    let secrets = collect_secret_values(doc);
     Ok(compiled
         .stages
         .into_iter()
@@ -7259,7 +7265,7 @@ pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineEr
             let sql = if s.sql.trim().is_empty() {
                 procedural_note(&s)
             } else {
-                s.sql
+                redact_secret_values(&s.sql, &secrets)
             };
             StageSql {
                 node_id: s.node_id,
@@ -7272,6 +7278,56 @@ pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineEr
             }
         })
         .collect())
+}
+
+/// True for a property key that holds a credential (case-insensitive
+/// substring match), so its value should never appear in exported SQL.
+fn is_secret_prop_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    [
+        "password", "passwd", "secret", "token", "apikey", "api_key",
+        "privatekey", "private_key", "accesskey", "access_key", "pat",
+        "clientsecret", "client_secret", "connectionstring", "connection_string",
+        "sas", "credential",
+    ]
+    .iter()
+    .any(|needle| k.contains(needle))
+}
+
+/// Collect the plaintext secret VALUES configured anywhere in the
+/// pipeline, so they can be scrubbed from display-only SQL. Only strings
+/// of a few chars or more are taken, to avoid redacting incidental short
+/// values that collide with SQL tokens. Sorted longest-first so a value
+/// that contains another is replaced first.
+fn collect_secret_values(doc: &PipelineDoc) -> Vec<String> {
+    let mut vals: Vec<String> = Vec::new();
+    for node in &doc.nodes {
+        if let Some(JsonValue::Object(props)) = node.data.properties.as_ref() {
+            for (key, val) in props {
+                if is_secret_prop_key(key) {
+                    if let Some(s) = val.as_str() {
+                        if s.len() >= 4 {
+                            vals.push(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    vals.sort_by(|a, b| b.len().cmp(&a.len()));
+    vals.dedup();
+    vals
+}
+
+/// Replace each known secret value in `sql` with a redaction marker.
+fn redact_secret_values(sql: &str, secrets: &[String]) -> String {
+    let mut out = sql.to_string();
+    for secret in secrets {
+        if out.contains(secret.as_str()) {
+            out = out.replace(secret.as_str(), "***REDACTED***");
+        }
+    }
+    out
 }
 
 /// A human-readable comment describing a stage that has no DuckDB SQL
