@@ -1524,15 +1524,12 @@ fn derive_output_columns(
     if component == "xf.rename" {
         let mut set = upstream.cloned()?;
         if let Some(p) = props {
-            if let Some(renames) = p.get("renames").and_then(JsonValue::as_array) {
-                for r in renames {
-                    let from = r.get("from").and_then(JsonValue::as_str);
-                    let to = r.get("to").and_then(JsonValue::as_str);
-                    if let (Some(f), Some(t)) = (from, to) {
-                        set.remove(f);
-                        set.insert(t.to_string());
-                    }
-                }
+            // Use the same pair extraction build_rename uses, so the
+            // derived schema reflects the renames regardless of which
+            // prop shape the UI saved (renames/columns array OR mapping).
+            for (from, to) in rename_pairs(p) {
+                set.remove(&from);
+                set.insert(to);
             }
         }
         return Some(set);
@@ -1666,14 +1663,12 @@ fn validate_column_refs(
             }
         }
         "xf.rename" => {
-            if let Some(arr) = p.get("renames").and_then(JsonValue::as_array) {
-                for entry in arr {
-                    if let Some(c) = entry.get("from").and_then(JsonValue::as_str) {
-                        let c = c.trim();
-                        if !c.is_empty() {
-                            check(c)?;
-                        }
-                    }
+            // Validate the old (from) names against the upstream schema,
+            // across every prop shape (renames/columns array OR mapping).
+            for (from, _to) in rename_pairs(p) {
+                let c = from.trim();
+                if !c.is_empty() {
+                    check(c)?;
                 }
             }
         }
@@ -6135,61 +6130,62 @@ fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> 
     ))
 }
 
-fn build_rename(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
-    let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
-    let renames = props
+/// All (old, new) rename pairs a Rename node carries, across every prop
+/// shape the UI / older docs use: a `renames` or `columns` array of
+/// {from|source, to|target}, OR the current Rename form's `mapping`
+/// array of {key=old, value=new}. Shared by build_rename, the schema
+/// derivation, and validation so they never disagree about which column
+/// names exist downstream (a mismatch made the validator reject the new
+/// name and accept the renamed-away old one).
+fn rename_pairs(props: &JsonValue) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(arr) = props
         .get("renames")
         .or_else(|| props.get("columns"))
         .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    // RENAME via SELECT * REPLACE - keeps unrelated columns intact.
-    // DuckDB doesn't support * REPLACE for renames directly; we use
-    // SELECT *, col AS new_col then DROP not possible without listing.
-    // Cleanest: enumerate explicit aliases. Need to know all columns.
-    // For now, emit a CTE that selects everything then renames each
-    // listed pair using a fresh wrapper.
-    //   SELECT x.* EXCLUDE (a,b), x.a AS new_a, x.b AS new_b FROM up x
-    let mut excludes = Vec::new();
-    let mut aliases = Vec::new();
-    for r in &renames {
-        let from = r
-            .get("from")
-            .or_else(|| r.get("source"))
-            .and_then(JsonValue::as_str);
-        let to = r
-            .get("to")
-            .or_else(|| r.get("target"))
-            .and_then(JsonValue::as_str);
-        if let (Some(from), Some(to)) = (from, to) {
-            excludes.push(quote_ident(from));
-            aliases.push(format!(
-                "{}.{} AS {}",
-                quote_ident(upstream),
-                quote_ident(from),
-                quote_ident(to)
-            ));
+    {
+        for r in arr {
+            let from = r.get("from").or_else(|| r.get("source")).and_then(JsonValue::as_str);
+            let to = r.get("to").or_else(|| r.get("target")).and_then(JsonValue::as_str);
+            if let (Some(f), Some(t)) = (from, to) {
+                if !f.is_empty() && !t.is_empty() {
+                    out.push((f.to_string(), t.to_string()));
+                }
+            }
         }
     }
-    // The Rename form writes `mapping` as key-value pairs: old -> new.
-    if aliases.is_empty() {
-        if let Some(pairs) = props.get("mapping").and_then(JsonValue::as_array) {
-            for kv in pairs {
+    // The current Rename form writes `mapping` as key-value pairs
+    // (old -> new); only consulted when the array shapes are absent,
+    // matching build_rename's precedence.
+    if out.is_empty() {
+        if let Some(arr) = props.get("mapping").and_then(JsonValue::as_array) {
+            for kv in arr {
                 let old = kv.get("key").and_then(JsonValue::as_str);
                 let new = kv.get("value").and_then(JsonValue::as_str);
-                if let (Some(old), Some(new)) = (old, new) {
-                    if !old.is_empty() && !new.is_empty() {
-                        excludes.push(quote_ident(old));
-                        aliases.push(format!(
-                            "{}.{} AS {}",
-                            quote_ident(upstream),
-                            quote_ident(old),
-                            quote_ident(new)
-                        ));
+                if let (Some(o), Some(n)) = (old, new) {
+                    if !o.is_empty() && !n.is_empty() {
+                        out.push((o.to_string(), n.to_string()));
                     }
                 }
             }
         }
+    }
+    out
+}
+
+fn build_rename(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
+    let pairs = rename_pairs(props);
+    let mut excludes = Vec::new();
+    let mut aliases = Vec::new();
+    for (from, to) in &pairs {
+        excludes.push(quote_ident(from));
+        aliases.push(format!(
+            "{}.{} AS {}",
+            quote_ident(upstream),
+            quote_ident(from),
+            quote_ident(to)
+        ));
     }
     if aliases.is_empty() {
         return Ok(format!("SELECT * FROM {}", quote_ident(upstream)));
