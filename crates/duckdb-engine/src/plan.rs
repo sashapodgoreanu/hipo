@@ -4544,9 +4544,28 @@ fn build_take(inputs: &NodeInputs, props: &JsonValue, kind: TakeKind) -> Result<
         .or_else(|| props.get("limit").and_then(JsonValue::as_u64))
         .unwrap_or(100);
     let from = quote_ident(upstream);
+    // Optional `orderBy` (comma-separated columns) makes LIMIT / OFFSET
+    // deterministic. A bare LIMIT/OFFSET picks an arbitrary slice under
+    // preserve_insertion_order=false whenever an upstream operator
+    // reorders rows, so xf.skip/xf.topn/xf.limit could skip or keep a
+    // different set run-to-run (audit B4). We do NOT auto-inject an
+    // ordering (it would change both which rows survive and their order
+    // for every existing node, plus cost a full sort) and do NOT require
+    // it (would break existing nodes); it's opt-in.
+    let order_by = {
+        let cols = columns_list(props, "orderBy");
+        if cols.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ORDER BY {}",
+                cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ")
+            )
+        }
+    };
     Ok(match kind {
-        TakeKind::Limit => format!("SELECT * FROM {} LIMIT {}", from, n),
-        TakeKind::Offset => format!("SELECT * FROM {} OFFSET {}", from, n),
+        TakeKind::Limit => format!("SELECT * FROM {}{} LIMIT {}", from, order_by, n),
+        TakeKind::Offset => format!("SELECT * FROM {}{} OFFSET {}", from, order_by, n),
         TakeKind::Sample => format!("SELECT * FROM {} USING SAMPLE {} ROWS", from, n),
     })
 }
@@ -5988,9 +6007,26 @@ fn build_quality(
         }
         let partition = keys.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         let cmp = if reject { ">" } else { "=" };
+        // ROW_NUMBER() with no ORDER BY picks an arbitrary survivor per
+        // duplicate group, which is non-deterministic under
+        // preserve_insertion_order=false + multi-threading: the same input
+        // can keep a different row run-to-run (audit B4). An optional
+        // `tieBreak` prop (comma-separated columns) makes the survivor
+        // deterministic. We do NOT impose a default ordering - that would
+        // change which row currently survives for every existing qa.unique
+        // node, and there's no safe all-column default (breaks on
+        // LIST/STRUCT/MAP). Per-port row COUNTS are unchanged regardless;
+        // the prop only fixes WHICH row of each group is kept.
+        let order = columns_list(props, "tieBreak");
+        let window = if order.is_empty() {
+            format!("ROW_NUMBER() OVER (PARTITION BY {})", partition)
+        } else {
+            let ob = order.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            format!("ROW_NUMBER() OVER (PARTITION BY {} ORDER BY {})", partition, ob)
+        };
         return Ok(format!(
-            "SELECT * EXCLUDE (__dq_rn) FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY {}) AS __dq_rn FROM {}) WHERE __dq_rn {} 1",
-            partition, from, cmp
+            "SELECT * EXCLUDE (__dq_rn) FROM (SELECT *, {} AS __dq_rn FROM {}) WHERE __dq_rn {} 1",
+            window, from, cmp
         ));
     }
     let predicate = quality_pass_predicate(component_id, props)?;
@@ -9304,6 +9340,59 @@ mod tests {
             add.sql.contains("TRY_CAST((v) AS BIGINT)"),
             "typed addcol should TRY_CAST by default, got: {}",
             add.sql
+        );
+    }
+
+    #[test]
+    fn qa_unique_tiebreak_makes_survivor_deterministic() {
+        // audit B4: with a tieBreak prop, qa.unique's ROW_NUMBER gets an
+        // ORDER BY so the kept duplicate is deterministic. Without it, no
+        // ORDER BY (unchanged behavior).
+        let with_tb = build_quality(
+            &{
+                let mut ni = NodeInputs::default();
+                ni.ports.insert("main".into(), vec!["up".into()]);
+                ni
+            },
+            &serde_json::json!({"columns": ["k"], "tieBreak": ["ts"]}),
+            "qa.unique",
+            false,
+        )
+        .unwrap();
+        assert!(
+            with_tb.contains("PARTITION BY \"k\" ORDER BY \"ts\""),
+            "tieBreak should add ORDER BY, got: {}",
+            with_tb
+        );
+        let without = build_quality(
+            &{
+                let mut ni = NodeInputs::default();
+                ni.ports.insert("main".into(), vec!["up".into()]);
+                ni
+            },
+            &serde_json::json!({"columns": ["k"]}),
+            "qa.unique",
+            false,
+        )
+        .unwrap();
+        assert!(
+            !without.contains("ORDER BY"),
+            "no tieBreak should not add ORDER BY, got: {}",
+            without
+        );
+    }
+
+    #[test]
+    fn skip_orderby_makes_offset_deterministic() {
+        // audit B4: xf.skip with an orderBy prop emits ORDER BY before
+        // OFFSET so the skipped slice is repeatable.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let sql = build_take(&ni, &serde_json::json!({"count": 5, "orderBy": ["id"]}), TakeKind::Offset).unwrap();
+        assert!(
+            sql.contains("ORDER BY \"id\" OFFSET 5"),
+            "skip with orderBy should sort before offset, got: {}",
+            sql
         );
     }
 
