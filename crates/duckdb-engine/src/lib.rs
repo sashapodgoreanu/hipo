@@ -750,12 +750,21 @@ impl DuckdbEngine {
 
             match result {
                 Ok(_) => {
-                    let rows_opt = match stage.kind {
-                        StageKind::Sink => stage
-                            .from
-                            .as_ref()
-                            .and_then(|f| self.count_rows(&db_path, f).ok()),
-                        StageKind::View => self.count_rows(&db_path, &stage.node_id).ok(),
+                    // A View stage needs count + schema + preview rows; fetch
+                    // all three in ONE duckdb spawn (count_and_preview)
+                    // instead of three separate ones - saves ~2 process
+                    // spawns/stage of fixed overhead on the per-stage path
+                    // (audit B8). Sink stages only need a count of their
+                    // upstream and have no preview.
+                    let (rows_opt, view_preview) = match stage.kind {
+                        StageKind::Sink => (
+                            stage
+                                .from
+                                .as_ref()
+                                .and_then(|f| self.count_rows(&db_path, f).ok()),
+                            None,
+                        ),
+                        StageKind::View => self.count_and_preview(&db_path, &stage.node_id),
                     };
                     nodes.insert(
                         stage.node_id.clone(),
@@ -775,10 +784,8 @@ impl DuckdbEngine {
                         duration_ms: elapsed_ms,
                         error: None,
                     });
-                    if stage.kind == StageKind::View {
-                        if let Ok(p) = self.preview_table(&db_path, &stage.node_id) {
-                            preview.push(p);
-                        }
+                    if let Some(p) = view_preview {
+                        preview.push(p);
                     }
                 }
                 Err(EngineError::Cancelled) => {
@@ -6358,18 +6365,42 @@ impl DuckdbEngine {
         Ok(n)
     }
 
-    fn preview_table(&self, db: &Path, name: &str) -> Result<NodePreview, EngineError> {
+    /// Count + schema + preview for a view stage's relation in ONE duckdb
+    /// spawn instead of three (count_rows + a DESCRIBE + a SELECT). Runs the
+    /// three statements together; -json mode prints one result array per
+    /// statement, which parse_json_arrays splits. Returns (count, preview);
+    /// both None when the relation can't be read (e.g. ctl.switch /
+    /// xf.assert nodes that never create a plain `<node>` relation) -
+    /// matching the old behavior where count_rows().ok() was None and the
+    /// preview was skipped.
+    fn count_and_preview(&self, db: &Path, name: &str) -> (Option<u64>, Option<NodePreview>) {
         let q = plan::quote_ident(name);
-        let cols = self.run_rows(Some(db), &format!("DESCRIBE {};", q))?;
-        let schema: Vec<Column> = cols.iter().filter_map(parse_describe_row).collect();
-        let rows = self
-            .run_rows(Some(db), &format!("SELECT * FROM {} LIMIT {};", q, PREVIEW_ROW_LIMIT))
-            .unwrap_or_default();
-        Ok(NodePreview {
-            node_id: name.to_string(),
-            columns: schema,
-            rows,
-        })
+        let sql = format!(
+            "SELECT COUNT(*) AS n FROM {q}; SELECT * FROM (DESCRIBE {q}); SELECT * FROM {q} LIMIT {lim};",
+            q = q,
+            lim = PREVIEW_ROW_LIMIT
+        );
+        // -bail makes a missing relation fail the whole invocation; treat
+        // that as "nothing to report".
+        let out = match self.run(Some(db), &sql, true) {
+            Ok(o) => o,
+            Err(_) => return (None, None),
+        };
+        let arrays = parse_json_arrays(&out);
+        let count = arrays
+            .first()
+            .and_then(|a| a.first())
+            .and_then(|r| r.get("n"))
+            .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|x| x.max(0) as u64)));
+        let preview = arrays.get(1).map(|schema_rows| {
+            let schema: Vec<Column> = schema_rows.iter().filter_map(parse_describe_row).collect();
+            NodePreview {
+                node_id: name.to_string(),
+                columns: schema,
+                rows: arrays.get(2).cloned().unwrap_or_default(),
+            }
+        });
+        (count, preview)
     }
 }
 
