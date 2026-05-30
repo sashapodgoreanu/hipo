@@ -10247,7 +10247,7 @@ mod tests {
             name: "amt".into(),
             data_type: duckle_metadata::DataType::String,
             nullable: true,
-            primary_key: false,
+            primary_key: None,
         }];
         let sql = build_cloud_source(
             "s3",
