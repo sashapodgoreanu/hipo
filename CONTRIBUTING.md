@@ -2,6 +2,8 @@
 
 Thanks for your interest in Duckle. This project is in early development; contributions, issues, and design discussion are all welcome.
 
+By participating you agree to abide by the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
 ## Prerequisites
 
 - **Rust** stable, installed via [rustup](https://rustup.rs). The repository pins the toolchain in `rust-toolchain.toml`.
@@ -25,11 +27,19 @@ The desktop app launches Vite's dev server automatically and opens a Tauri windo
 
 ## Repository layout
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md). In short:
-
 - `apps/desktop/` - Tauri 2 shell.
 - `crates/` - Rust crates for runtime, connectors, engines, workflow, scheduling, plugins.
 - `frontend/` - React + TypeScript UI.
+
+## Submitting a pull request
+
+1. Fork the repository and create a branch off `main`.
+2. Make your change, following the style and test guidance below.
+3. Run the checks locally: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `npm --prefix frontend run lint` if the frontend changed.
+4. Push to your fork and open a pull request against `main`. The PR template will prompt for a summary, related issue, and the checklist.
+5. CI runs fmt, clippy, and tests on Linux, macOS, and Windows. Keep the PR focused; a green CI run and a clear description make review fast.
+
+There is no required-reviewer gate, so a maintainer will merge once it looks good. Small, self-contained PRs are merged fastest.
 
 ## Style and conventions
 
