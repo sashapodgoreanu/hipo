@@ -674,6 +674,8 @@ Connections live in `workspace/connections/` as JSON. The token/password field i
 
 To use a connection in a pipeline, the Properties panel of any compatible source/sink shows a **Connection** dropdown - pick one and the fields auto-fill.
 
+The **Copy SQL** / **Export SQL** output is display-only and never executed. Secret values (passwords, tokens, keys, connection strings) are replaced with named placeholders such as `${DUCKLE_PASSWORD}`, so the exported script stays valid and is safe to share - substitute the real value at run time. To emit the real credentials instead (so the script runs unchanged), set the environment variable `DUCKLE_EXPORT_INCLUDE_SECRETS=1`; the output then contains live secrets and should be handled accordingly.
+
 ---
 
 ## Context variables

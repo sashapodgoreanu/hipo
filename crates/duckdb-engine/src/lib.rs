@@ -7782,13 +7782,37 @@ pub struct StageSql {
 }
 
 pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineError> {
+    // By default the exported / displayed SQL has its secret values
+    // replaced with named placeholders. Setting DUCKLE_EXPORT_INCLUDE_SECRETS
+    // to a truthy value (1/true/yes/on) opts in to emitting the real
+    // credentials so the script runs unchanged against the source (issue
+    // #9). The value is then live and the output must be handled with care.
+    let include_secrets = std::env::var("DUCKLE_EXPORT_INCLUDE_SECRETS")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    compile_pipeline_sql_opts(doc, include_secrets)
+}
+
+/// Compile a pipeline to display-only SQL, choosing explicitly whether to
+/// keep real secret values (`include_secrets = true`) or replace them with
+/// named placeholders. `compile_pipeline_sql` is the env-driven wrapper;
+/// this variant lets callers (and tests) decide deterministically.
+pub fn compile_pipeline_sql_opts(
+    doc: &PipelineDoc,
+    include_secrets: bool,
+) -> Result<Vec<StageSql>, EngineError> {
     let compiled = plan::compile(doc)?;
     // This SQL is for DISPLAY only (Plan tab, copy-to-clipboard, export) -
     // it is never executed. The execution path uses the real credentials.
     // Some stages (relational ATTACH, secrets prelude) interpolate a
     // plaintext password / token / key into the SQL, which would otherwise
-    // leak into the exported script. Redact those secret VALUES here.
-    let secrets = collect_secret_values(doc);
+    // leak into the exported script. Replace those secret VALUES with named
+    // placeholders unless the caller explicitly opted in to raw secrets.
+    let secrets = if include_secrets {
+        Vec::new()
+    } else {
+        collect_secrets(doc)
+    };
     Ok(compiled
         .stages
         .into_iter()
@@ -7830,37 +7854,74 @@ fn is_secret_prop_key(key: &str) -> bool {
     .any(|needle| k.contains(needle))
 }
 
-/// Collect the plaintext secret VALUES configured anywhere in the
-/// pipeline, so they can be scrubbed from display-only SQL. Only strings
-/// of a few chars or more are taken, to avoid redacting incidental short
-/// values that collide with SQL tokens. Sorted longest-first so a value
-/// that contains another is replaced first.
-fn collect_secret_values(doc: &PipelineDoc) -> Vec<String> {
-    let mut vals: Vec<String> = Vec::new();
+/// A secret found in the pipeline: its plaintext VALUE and the named
+/// placeholder that stands in for it in exported SQL (e.g. value
+/// "sup3r" under prop key "password" -> placeholder "${DUCKLE_PASSWORD}").
+struct Secret {
+    value: String,
+    placeholder: String,
+}
+
+/// Turn a secret prop key into an env-style placeholder name, e.g.
+/// "password" -> "${DUCKLE_PASSWORD}", "client_secret" ->
+/// "${DUCKLE_CLIENT_SECRET}", "apiKey" -> "${DUCKLE_API_KEY}". Non
+/// alphanumeric characters become underscores; camelCase boundaries are
+/// split so the result reads as a conventional env var.
+fn secret_placeholder(key: &str) -> String {
+    let mut out = String::from("DUCKLE_");
+    let mut prev_lower = false;
+    for ch in key.chars() {
+        if ch.is_ascii_uppercase() && prev_lower {
+            out.push('_');
+        }
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_uppercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+        prev_lower = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+    }
+    format!("${{{}}}", out.trim_end_matches('_'))
+}
+
+/// Collect the plaintext secrets configured anywhere in the pipeline, so
+/// they can be replaced in display-only SQL. Only strings of a few chars
+/// or more are taken, to avoid redacting incidental short values that
+/// collide with SQL tokens. Sorted longest-value-first so a value that
+/// contains another is replaced first.
+fn collect_secrets(doc: &PipelineDoc) -> Vec<Secret> {
+    let mut out: Vec<Secret> = Vec::new();
     for node in &doc.nodes {
         if let Some(JsonValue::Object(props)) = node.data.properties.as_ref() {
             for (key, val) in props {
                 if is_secret_prop_key(key) {
                     if let Some(s) = val.as_str() {
                         if s.len() >= 4 {
-                            vals.push(s.to_string());
+                            out.push(Secret {
+                                value: s.to_string(),
+                                placeholder: secret_placeholder(key),
+                            });
                         }
                     }
                 }
             }
         }
     }
-    vals.sort_by(|a, b| b.len().cmp(&a.len()));
-    vals.dedup();
-    vals
+    out.sort_by(|a, b| b.value.len().cmp(&a.value.len()));
+    out.dedup_by(|a, b| a.value == b.value);
+    out
 }
 
-/// Replace each known secret value in `sql` with a redaction marker.
-fn redact_secret_values(sql: &str, secrets: &[String]) -> String {
+/// Replace each known secret value in `sql` with its named placeholder
+/// (e.g. ${DUCKLE_PASSWORD}), so the exported script stays structurally
+/// valid and is safe to share - the user substitutes the real value at
+/// run time. The export path can opt out of this entirely to emit raw
+/// credentials (DUCKLE_EXPORT_INCLUDE_SECRETS=1).
+fn redact_secret_values(sql: &str, secrets: &[Secret]) -> String {
     let mut out = sql.to_string();
     for secret in secrets {
-        if out.contains(secret.as_str()) {
-            out = out.replace(secret.as_str(), "***REDACTED***");
+        if out.contains(secret.value.as_str()) {
+            out = out.replace(secret.value.as_str(), &secret.placeholder);
         }
     }
     out
@@ -8611,9 +8672,19 @@ fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String> {
 mod tests {
     use super::{
         aws_sigv4_sign, chunk_text, cosine_similarity, glob_match, mssql_numeric_to_string,
-        parse_link_next, pii_patterns, read_marker, render_prompt_template, unwrap_dynamodb_attrs,
-        MarkerState,
+        parse_link_next, pii_patterns, read_marker, render_prompt_template, secret_placeholder,
+        unwrap_dynamodb_attrs, MarkerState,
     };
+
+    #[test]
+    fn secret_placeholder_derives_env_style_name() {
+        // Issue #9: secret values are replaced with a named placeholder so
+        // the exported SQL stays valid; the name comes from the prop key.
+        assert_eq!(secret_placeholder("password"), "${DUCKLE_PASSWORD}");
+        assert_eq!(secret_placeholder("client_secret"), "${DUCKLE_CLIENT_SECRET}");
+        assert_eq!(secret_placeholder("apiKey"), "${DUCKLE_API_KEY}");
+        assert_eq!(secret_placeholder("connectionString"), "${DUCKLE_CONNECTION_STRING}");
+    }
 
     #[test]
     fn link_next_basic_and_quoted() {

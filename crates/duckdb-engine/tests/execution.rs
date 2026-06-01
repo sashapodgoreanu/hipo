@@ -844,9 +844,11 @@ fn distinct_on_subset_keeps_deterministic_row() {
 fn compiled_sql_redacts_secrets() {
     // Regression: the relational ATTACH interpolated the plaintext
     // password into the SQL, which leaked into the Plan-tab / exported
-    // script (display-only SQL). compile_pipeline_sql now scrubs known
-    // secret values. (No engine needed - this is pure compilation.)
-    use duckle_duckdb_engine::compile_pipeline_sql;
+    // script (display-only SQL). compile_pipeline_sql now replaces known
+    // secret values with named placeholders. (No engine needed - this is
+    // pure compilation.) Issue #9: the placeholder keeps the script
+    // structurally valid and shareable.
+    use duckle_duckdb_engine::compile_pipeline_sql_opts;
     let d = doc(
         json!([
             node("s", "src.postgres", json!({
@@ -860,7 +862,8 @@ fn compiled_sql_redacts_secrets() {
         ]),
         json!([]),
     );
-    let stages = compile_pipeline_sql(&d).expect("compile_pipeline_sql");
+    // Default (include_secrets = false): value replaced by ${DUCKLE_PASSWORD}.
+    let stages = compile_pipeline_sql_opts(&d, false).expect("compile_pipeline_sql_opts");
     let all_sql = stages
         .iter()
         .map(|s| s.sql.clone())
@@ -872,9 +875,24 @@ fn compiled_sql_redacts_secrets() {
         all_sql
     );
     assert!(
-        all_sql.contains("***REDACTED***"),
-        "expected a redaction marker in compiled SQL: {}",
+        all_sql.contains("${DUCKLE_PASSWORD}"),
+        "expected a named placeholder in compiled SQL: {}",
         all_sql
+    );
+
+    // Opt-in (include_secrets = true): real value emitted so the exported
+    // script runs unchanged; no placeholder.
+    let raw = compile_pipeline_sql_opts(&d, true).expect("compile_pipeline_sql_opts raw");
+    let raw_sql = raw.iter().map(|s| s.sql.clone()).collect::<Vec<_>>().join("\n");
+    assert!(
+        raw_sql.contains("sup3rs3cr3tpw"),
+        "include_secrets should emit the real value: {}",
+        raw_sql
+    );
+    assert!(
+        !raw_sql.contains("${DUCKLE_PASSWORD}"),
+        "include_secrets should not insert a placeholder: {}",
+        raw_sql
     );
 }
 
