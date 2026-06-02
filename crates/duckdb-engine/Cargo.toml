@@ -123,6 +123,17 @@ rustls-connector = { version = "0.21", default-features = false, features = ["ru
 # to src.email (the IMAP reader). Builder + smtp-transport features;
 # default native-tls disabled so we don't drag OpenSSL on Linux.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
+# ADBC (Arrow Database Connectivity) source. adbc_core loads a prebuilt
+# ADBC driver shared library at runtime (libloading) and returns Arrow
+# RecordBatches; we stream them to a Parquet temp file and materialize via
+# DuckDB read_parquet (no in-process DuckDB). arrow 53 unifies with the
+# workspace arrow/parquet pins so the driver's RecordBatch and the parquet
+# writer share one arrow version. The driver .dll/.so/.dylib is bundled
+# per-OS (conda-forge) and located at runtime; absent driver -> clear error.
+adbc_core = { version = "0.16", features = ["driver_manager"] }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+parquet = { workspace = true }
 
 [features]
 default = ["oracle"]

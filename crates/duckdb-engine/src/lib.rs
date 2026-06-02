@@ -645,6 +645,8 @@ impl DuckdbEngine {
                     self.run_oracle_sink(&db_path, spec)
                 } else if let Some(spec) = stage.oracle_source.as_ref() {
                     self.run_oracle_source(&db_path, spec)
+                } else if let Some(spec) = stage.adbc_source.as_ref() {
+                    self.run_adbc_source(&db_path, spec)
                 } else if let Some(spec) = stage.redis_sink.as_ref() {
                     self.run_redis_sink(&db_path, spec)
                 } else if let Some(spec) = stage.redis_source.as_ref() {
@@ -2074,6 +2076,102 @@ impl DuckdbEngine {
              `oracle` feature. Default builds include Oracle support."
                 .into(),
         ))
+    }
+
+    /// src.adbc: load a prebuilt ADBC driver at runtime, run the query, and
+    /// stream the Arrow result to a Parquet temp file, then materialize it
+    /// into the node's DuckDB table via read_parquet (no in-process DuckDB).
+    /// Not feature-gated: adbc_core links unconditionally; a missing or
+    /// incompatible driver surfaces as a clear engine error at load time.
+    fn run_adbc_source(
+        &self,
+        db: &Path,
+        spec: &plan::AdbcSourceSpec,
+    ) -> Result<String, EngineError> {
+        use adbc_core::{
+            driver_manager::ManagedDriver,
+            options::{AdbcVersion, OptionDatabase, OptionValue},
+            Connection, Database, Driver, Statement,
+        };
+        use arrow_array::RecordBatchReader;
+        use parquet::arrow::ArrowWriter;
+
+        // Prepend the driver's own directory to PATH so a self-contained
+        // bundled driver folder (driver lib + its dependent libs, e.g.
+        // sqlite3.dll) loads without extra setup.
+        let driver_path = Path::new(&spec.driver);
+        if let Some(parent) = driver_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let cur = std::env::var("PATH").unwrap_or_default();
+                let sep = if cfg!(windows) { ';' } else { ':' };
+                std::env::set_var("PATH", format!("{}{}{}", parent.display(), sep, cur));
+            }
+        }
+
+        let entry: Option<&[u8]> = spec.entrypoint.as_deref().map(|s| s.as_bytes());
+        let looks_like_path = spec.driver.contains('/')
+            || spec.driver.contains('\\')
+            || spec.driver.ends_with(".dll")
+            || spec.driver.ends_with(".so")
+            || spec.driver.ends_with(".dylib");
+        let mut driver = if looks_like_path {
+            ManagedDriver::load_dynamic_from_filename(&spec.driver, entry, AdbcVersion::V110)
+        } else {
+            ManagedDriver::load_dynamic_from_name(&spec.driver, entry, AdbcVersion::V110)
+        }
+        .map_err(|e| EngineError::Query(format!("adbc: load driver '{}': {}", spec.driver, e)))?;
+
+        let opts = spec
+            .options
+            .iter()
+            .map(|(k, v)| (OptionDatabase::from(k.as_str()), OptionValue::String(v.clone())));
+        let mut database = driver
+            .new_database_with_opts(opts)
+            .map_err(|e| EngineError::Query(format!("adbc: open database: {}", e)))?;
+        let mut conn = database
+            .new_connection()
+            .map_err(|e| EngineError::Query(format!("adbc: connect: {}", e)))?;
+        let mut stmt = conn
+            .new_statement()
+            .map_err(|e| EngineError::Query(format!("adbc: statement: {}", e)))?;
+        stmt.set_sql_query(&spec.query)
+            .map_err(|e| EngineError::Query(format!("adbc: set query: {}", e)))?;
+        let reader = stmt
+            .execute()
+            .map_err(|e| EngineError::Query(format!("adbc: execute: {}", e)))?;
+
+        let schema = reader.schema();
+        let parquet_path =
+            std::env::temp_dir().join(format!("duckle-adbc-{}.parquet", spec.node_id));
+        let file = std::fs::File::create(&parquet_path)
+            .map_err(|e| EngineError::Query(format!("adbc: temp parquet: {}", e)))?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)
+            .map_err(|e| EngineError::Query(format!("adbc: parquet writer: {}", e)))?;
+        let mut count = 0usize;
+        for batch in reader {
+            self.check_cancelled()?;
+            let batch = batch.map_err(|e| EngineError::Query(format!("adbc: read batch: {}", e)))?;
+            count += batch.num_rows();
+            writer
+                .write(&batch)
+                .map_err(|e| EngineError::Query(format!("adbc: write parquet: {}", e)))?;
+        }
+        writer
+            .close()
+            .map_err(|e| EngineError::Query(format!("adbc: close parquet: {}", e)))?;
+
+        let ppath = parquet_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''");
+        let create = format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_parquet('{}')",
+            plan::quote_ident(&spec.node_id),
+            ppath
+        );
+        self.run(Some(db), &create, false)?;
+        let _ = std::fs::remove_file(&parquet_path);
+        Ok(format!("adbc: materialized {} rows into {}", count, spec.node_id))
     }
 
     /// Convert one cell of a SQL Server row to JSON without silently

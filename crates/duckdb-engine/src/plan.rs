@@ -118,6 +118,9 @@ pub struct Stage {
     pub oracle_sink: Option<OracleSinkSpec>,
     /// Oracle SELECT (opt-in behind `oracle` feature).
     pub oracle_source: Option<OracleSourceSpec>,
+    /// ADBC (Arrow Database Connectivity) SELECT: loads a prebuilt ADBC
+    /// driver at runtime and materializes its Arrow result via Parquet.
+    pub adbc_source: Option<AdbcSourceSpec>,
     /// Redis SET batch via the redis sync client.
     pub redis_sink: Option<RedisSinkSpec>,
     /// Redis SCAN + GET via the redis sync client.
@@ -239,6 +242,7 @@ impl Stage {
             && self.cassandra_source.is_none()
             && self.oracle_sink.is_none()
             && self.oracle_source.is_none()
+            && self.adbc_source.is_none()
             && self.redis_sink.is_none()
             && self.redis_source.is_none()
             && self.qdrant_source.is_none()
@@ -366,6 +370,21 @@ pub struct OracleSourceSpec {
     pub connect: String,
     pub user: String,
     pub password: String,
+    pub query: String,
+}
+
+/// src.adbc: read via a prebuilt ADBC (Arrow Database Connectivity) driver
+/// loaded at runtime. The driver returns Arrow batches which the executor
+/// streams to a Parquet temp file and materializes via DuckDB read_parquet.
+#[derive(Debug, Clone)]
+pub struct AdbcSourceSpec {
+    pub node_id: String,
+    /// Path to the driver shared library (preferred) or a bare driver name.
+    pub driver: String,
+    /// Custom init entrypoint; defaults to AdbcDriverInit when None.
+    pub entrypoint: Option<String>,
+    /// ADBC database options (uri, username, password, driver-specific keys).
+    pub options: Vec<(String, String)>,
     pub query: String,
 }
 
@@ -1958,6 +1977,7 @@ fn build_stage(
     let mut cassandra_source: Option<CassandraSourceSpec> = None;
     let mut oracle_sink: Option<OracleSinkSpec> = None;
     let mut oracle_source: Option<OracleSourceSpec> = None;
+    let mut adbc_source: Option<AdbcSourceSpec> = None;
     let mut redis_sink: Option<RedisSinkSpec> = None;
     let mut redis_source: Option<RedisSourceSpec> = None;
     let mut qdrant_source: Option<QdrantSourceSpec> = None;
@@ -2958,6 +2978,39 @@ fn build_stage(
             connect,
             user,
             password: string_prop(&props, "password").unwrap_or_default(),
+            query,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.adbc" {
+        // Generic ADBC source: a prebuilt driver lib + database options +
+        // a SQL query. Friendly wrappers (e.g. src.snowflake.adbc) can map
+        // their own fields onto `driver`/`options` before reaching here.
+        let driver = string_prop(&props, "driver")
+            .or_else(|| string_prop(&props, "driverPath"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: driver (path or name) required", component_id)))?;
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: query required", component_id)))?;
+        let mut options: Vec<(String, String)> = Vec::new();
+        if let Some(arr) = props.get("options").and_then(JsonValue::as_array) {
+            for kv in arr {
+                let k = kv.get("key").and_then(|v| v.as_str()).unwrap_or("").trim();
+                let v = kv.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                if !k.is_empty() {
+                    options.push((k.to_string(), v.to_string()));
+                }
+            }
+        }
+        // Convenience: a bare `uri` prop maps to the canonical ADBC uri key.
+        if let Some(uri) = string_prop(&props, "uri").filter(|s| !s.is_empty()) {
+            options.push(("uri".to_string(), uri));
+        }
+        adbc_source = Some(AdbcSourceSpec {
+            node_id: node.id.clone(),
+            driver,
+            entrypoint: string_prop(&props, "entrypoint").filter(|s| !s.is_empty()),
+            options,
             query,
         });
         (String::new(), StageKind::View, None)
@@ -4185,6 +4238,7 @@ fn build_stage(
         cassandra_source,
         oracle_sink,
         oracle_source,
+        adbc_source,
         redis_sink,
         redis_source,
         qdrant_source,
