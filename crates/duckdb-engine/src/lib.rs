@@ -1910,15 +1910,17 @@ impl DuckdbEngine {
         }
         mark("preparing query");
 
-        // Issue #4: the default Oracle prefetch is tiny (often 1 row
-        // per round trip). On a 10 000-row x 37-column table that's
-        // 10 000 network round trips, which presented to users as
-        // "the query never finishes". A large prefetch keeps the socket
-        // busy: at 5 000 rows/fetch a 2M-row pull is ~400 round trips
-        // instead of ~2 000, which measurably cuts large-table read time.
+        // Issue #4: the default Oracle prefetch is tiny (often 1-2 rows
+        // per round trip). Two knobs matter for a bulk pull and BOTH must be
+        // raised: prefetch_rows is OCI's server prefetch, and fetch_array_size
+        // (ODPI default 100) is how many rows the client buffers per fetch.
+        // Left at 100, a 2M-row pull is ~20 000 client fetches and the OCI
+        // fetch dominated wall-clock (profiled at ~12s). Matching both at
+        // 5 000 cuts that to ~400 fetches.
         let mut stmt = conn
             .statement(&spec.query)
             .prefetch_rows(5000)
+            .fetch_array_size(5000)
             .build()
             .map_err(|e| EngineError::Query(format!("oracle prepare: {}", e)))?;
         let rs = stmt
