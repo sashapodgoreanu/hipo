@@ -1,0 +1,1781 @@
+//! Planner unit tests (extracted from plan/mod.rs; gated via mod.rs).
+
+    use super::*;
+
+    fn pipeline_from_json(s: &str) -> PipelineDoc {
+        serde_json::from_str(s).expect("valid pipeline JSON")
+    }
+
+    fn map_sql(doc: &PipelineDoc) -> String {
+        compile(doc)
+            .unwrap()
+            .stages
+            .iter()
+            .find(|s| s.node_id == "m")
+            .unwrap()
+            .sql
+            .clone()
+    }
+
+    #[test]
+    fn map_with_lookups_emits_join_chain() {
+        // tMap-style: main CSV + two lookup CSVs, joined, with expressions
+        // referencing each input and a filter referencing a lookup.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"orders","componentId":"src.csv","properties":{"path":"/tmp/o.csv","hasHeader":true}}},
+                {"id":"c","position":{"x":0,"y":0},"data":{"label":"cust","componentId":"src.csv","properties":{"path":"/tmp/c.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{"label":"region","componentId":"src.csv","properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"m","position":{"x":0,"y":0},"data":{"label":"Map","componentId":"xf.map","properties":{
+                  "lookups":[
+                    {"port":"lookup_1","leftKey":"customer_id","rightKey":"cust_id","joinType":"left"},
+                    {"port":"lookup_2","leftKey":"region_code","rightKey":"code","joinType":"inner"}
+                  ],
+                  "expressions":[
+                    {"key":"order_id","value":"main.id"},
+                    {"key":"customer_name","value":"lookup_1.name"},
+                    {"key":"region_name","value":"lookup_2.label"},
+                    {"key":"net","value":"main.amount * 1.08"}
+                  ],
+                  "filter":"lookup_2.active = true"
+                }}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/out.csv","hasHeader":true}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"o","target":"m","data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"m","targetHandle":"lookup_1","data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"r","target":"m","targetHandle":"lookup_2","data":{"connectionType":"lookup"}},
+                {"id":"e4","source":"m","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let sql = map_sql(&doc);
+        assert!(sql.contains("LEFT JOIN \"c\" ON \"o\".\"customer_id\" = \"c\".\"cust_id\""), "left join: {}", sql);
+        assert!(sql.contains("INNER JOIN \"r\" ON \"o\".\"region_code\" = \"r\".\"code\""), "inner join: {}", sql);
+        assert!(sql.contains("\"o\".\"id\" AS \"order_id\""), "main expr: {}", sql);
+        assert!(sql.contains("\"c\".\"name\" AS \"customer_name\""), "lookup_1 expr: {}", sql);
+        assert!(sql.contains("\"o\".\"amount\" * 1.08 AS \"net\""), "arithmetic expr: {}", sql);
+        assert!(sql.contains("WHERE \"r\".\"active\" = true"), "filter qualified: {}", sql);
+    }
+
+    #[test]
+    fn map_without_lookups_is_unchanged() {
+        // No lookups + no lookup refs: behaves like the original mapper.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"orders","componentId":"src.csv","properties":{"path":"/tmp/o.csv","hasHeader":true}}},
+                {"id":"m","position":{"x":0,"y":0},"data":{"label":"Map","componentId":"xf.map","properties":{
+                  "expressions":[{"key":"net","value":"main.amount * 1.08"}]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/out.csv","hasHeader":true}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"o","target":"m","data":{"connectionType":"main"}},
+                {"id":"e2","source":"m","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let sql = map_sql(&doc);
+        assert!(sql.contains("amount * 1.08 AS \"net\""), "strip-prefix path: {}", sql);
+        assert!(!sql.contains("JOIN"), "no join when no lookups: {}", sql);
+    }
+
+    #[test]
+    fn map_unconfigured_lookup_ref_errors() {
+        // Referencing lookup_1 without a lookups[] entry for it must error
+        // clearly, not emit broken SQL.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"o","position":{"x":0,"y":0},"data":{"label":"orders","componentId":"src.csv","properties":{"path":"/tmp/o.csv","hasHeader":true}}},
+                {"id":"m","position":{"x":0,"y":0},"data":{"label":"Map","componentId":"xf.map","properties":{
+                  "expressions":[{"key":"x","value":"lookup_1.name"}]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"/tmp/out.csv","hasHeader":true}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"o","target":"m","data":{"connectionType":"main"}},
+                {"id":"e2","source":"m","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&doc).unwrap_err().to_string();
+        assert!(err.contains("lookup_1") && err.contains("lookups"), "clear error: {}", err);
+    }
+
+    #[test]
+    fn map_string_literal_with_dot_prefix_not_corrupted() {
+        // A string literal containing 'main.' / 'lookup_1.' must be left
+        // untouched by qualification (the qualifier is string-aware).
+        let aliases: std::collections::BTreeMap<String, String> = [
+            ("main".to_string(), "\"o\"".to_string()),
+            ("lookup_1".to_string(), "\"c\"".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            qualify_port_refs("main.id || 'see lookup_1.x or main.y'", &aliases),
+            "\"o\".\"id\" || 'see lookup_1.x or main.y'"
+        );
+        // Escaped quotes inside the literal don't end it early.
+        assert_eq!(
+            qualify_port_refs("'it''s main.x' || main.id", &aliases),
+            "'it''s main.x' || \"o\".\"id\""
+        );
+    }
+
+    #[test]
+    fn cast_honors_on_error_try_vs_hard_cast() {
+        // Default "Set to NULL" must emit TRY_CAST (bad values -> NULL);
+        // "Fail pipeline" must emit a hard CAST. Previously onError was
+        // ignored and the engine always emitted CAST, crashing the run on
+        // dirty data even though the UI default promised NULLs.
+        let try_doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"column":"amount","targetType":"int64","onError":"null"}}}
+              ],
+              "edges":[{"id":"e","source":"s","target":"c","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let sql = compile(&try_doc).unwrap().stages.iter()
+            .find(|s| s.node_id == "c").unwrap().sql.clone();
+        assert!(sql.contains("TRY_CAST"), "default onError should TRY_CAST: {}", sql);
+
+        let fail_doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"column":"amount","targetType":"int64","onError":"fail"}}}
+              ],
+              "edges":[{"id":"e","source":"s","target":"c","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let sql = compile(&fail_doc).unwrap().stages.iter()
+            .find(|s| s.node_id == "c").unwrap().sql.clone();
+        assert!(sql.contains("CAST") && !sql.contains("TRY_CAST"),
+            "onError=fail should hard CAST: {}", sql);
+    }
+
+    #[test]
+    fn addcol_wraps_expression_in_declared_type() {
+        // The Add-Column form's type selector must actually type the new
+        // column (CAST the expression), not be cosmetic.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"a","position":{"x":0,"y":0},"data":{
+                  "label":"Add","componentId":"xf.addcol",
+                  "properties":{"name":"total","type":"int64","expression":"qty * price"}}}
+              ],
+              "edges":[{"id":"e","source":"s","target":"a","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let sql = compile(&doc).unwrap().stages.iter()
+            .find(|s| s.node_id == "a").unwrap().sql.clone();
+        assert!(sql.contains("CAST((qty * price) AS BIGINT)"),
+            "addcol should cast expr to declared type: {}", sql);
+    }
+
+    #[test]
+    fn downstream_ref_to_window_added_column_is_not_rejected() {
+        // Regression: xf.rownum ADDS a column ("row_num"). A downstream
+        // transform referencing that added column must NOT be falsely
+        // rejected by the column-existence validator. Column-adding
+        // transforms report "schema unknown" so downstream validation
+        // is skipped rather than wrong. (Reported as "most transforms
+        // erroneous" - the validator over-fired on column-adder chains.)
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/in.csv","hasHeader":true},
+                  "schema":[{"name":"amount","type":"int64","nullable":true}]}},
+                {"id":"rn","position":{"x":0,"y":0},"data":{
+                  "label":"Row Number","componentId":"xf.rownum",
+                  "properties":{"outputColumn":"row_num","orderBy":["amount"]}}},
+                {"id":"d1","position":{"x":0,"y":0},"data":{
+                  "label":"Distinct","componentId":"xf.distinct",
+                  "properties":{"columns":["row_num"]}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"rn",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"rn","target":"d1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        // Must compile cleanly - the distinct on the rownum-added column
+        // must not trip the validator.
+        assert!(compile(&p).is_ok(), "rownum-added column must not be rejected downstream");
+    }
+
+    #[test]
+    fn distinct_on_missing_column_errors_with_available_list() {
+        // The genuine error case (issue screenshot): a customers CSV has
+        // no order_id column, so xf.distinct on order_id must fail at
+        // planner time with a message that lists the real columns.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/c.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"Index","type":"int64","nullable":true},
+                    {"name":"Customer Id","type":"string","nullable":true}
+                  ]}},
+                {"id":"d1","position":{"x":0,"y":0},"data":{
+                  "label":"Distinct","componentId":"xf.distinct",
+                  "properties":{"columns":["order_id"]}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"d1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).unwrap_err().to_string();
+        assert!(err.contains("order_id"), "got: {}", err);
+        assert!(
+            err.contains("Available columns") && err.contains("Customer Id"),
+            "error should list available columns, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn pure_sql_pipeline_marks_every_stage_batchable() {
+        // CSV -> filter -> Parquet has no driver-based stages and no
+        // ctl.* hooks, so every stage must report is_pure_sql() = true.
+        // The batched executor uses exactly this predicate to decide
+        // whether to collapse the pipeline into one CLI spawn.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/in.csv","hasHeader":true}}},
+                {"id":"f1","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"x > 0"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"Parquet","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"f1",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        assert_eq!(compiled.stages.len(), 3);
+        for stage in &compiled.stages {
+            assert!(
+                stage.is_pure_sql(),
+                "stage {} ({}) should be batchable",
+                stage.node_id,
+                stage.component_id
+            );
+        }
+    }
+
+    #[test]
+    fn rest_source_pipeline_is_not_batchable() {
+        // src.rest hits the Rust-side ureq driver mid-pipeline, so
+        // its stage must report is_pure_sql() = false. Any single
+        // false stage forces the per-stage execution path.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"REST","componentId":"src.rest",
+                  "properties":{"url":"https://example.com/users",
+                                "responsePath":"data"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/out.csv"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let any_non_batchable = compiled.stages.iter().any(|s| !s.is_pure_sql());
+        assert!(
+            any_non_batchable,
+            "src.rest pipeline must contain at least one non-pure stage"
+        );
+    }
+
+    #[test]
+    fn compiles_csv_filter_parquet() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/orders.csv","hasHeader":true}}},
+                {"id":"f1","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"status = 'paid'"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"Parquet","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"f1",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        assert_eq!(compiled.stages.len(), 3);
+        assert_eq!(compiled.stages[0].node_id, "s1");
+        assert!(compiled.stages[0]
+            .sql
+            .contains("read_csv_auto('/tmp/orders.csv'"));
+        assert!(compiled.stages[1].sql.contains("WHERE status = 'paid'"));
+        // Perf regression guard: a filter whose reject port is unwired must
+        // compile to a lazy VIEW (so DuckDB pushes the predicate into the
+        // source read) and must NOT materialize the rejected rows. The old
+        // behaviour wrote every rejected row to a `__reject` table - on a
+        // 10M-row source that dominated the whole run (~16s).
+        assert!(
+            compiled.stages[1].sql.contains("CREATE OR REPLACE VIEW \"f1\""),
+            "unwired-reject filter must be a VIEW, got: {}",
+            compiled.stages[1].sql
+        );
+        assert!(
+            !compiled.stages[1].sql.contains("__reject"),
+            "unwired-reject filter must not materialize a reject table, got: {}",
+            compiled.stages[1].sql
+        );
+        assert_eq!(compiled.stages[2].kind, StageKind::Sink);
+        assert!(compiled.stages[2]
+            .sql
+            .contains("TO '/tmp/out.parquet' (FORMAT PARQUET"));
+    }
+
+    #[test]
+    fn filter_with_single_consumer_reject_is_a_lazy_view() {
+        // When the reject port is consumed by exactly one downstream node,
+        // it must be a lazy VIEW (inlined into that consumer), NOT a
+        // materialized table. The old code always made reject a TABLE, which
+        // wrote the entire rejected set to disk (8M rows on a 10M source)
+        // even when its only consumer was a sink that would just COPY it.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/orders.csv","hasHeader":true}}},
+                {"id":"f1","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"status = 'paid'"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"Pass","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/pass.parquet"}}},
+                {"id":"k2","position":{"x":0,"y":0},"data":{
+                  "label":"Rejected","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/rej.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"f1",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f1","target":"k1",
+                  "data":{"connectionType":"main"}},
+                {"id":"e3","source":"f1","sourceHandle":"reject","target":"k2",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let filter = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "f1")
+            .expect("filter stage");
+        assert!(
+            filter.sql.contains("CREATE OR REPLACE VIEW \"f1__reject\""),
+            "single-consumer reject must be a lazy VIEW, got: {}",
+            filter.sql
+        );
+        assert!(
+            !filter.sql.contains("CREATE OR REPLACE TABLE \"f1__reject\""),
+            "single-consumer reject must not materialize a table, got: {}",
+            filter.sql
+        );
+        // The pass side is also single-consumer, so it stays a lazy view too.
+        assert!(
+            filter.sql.contains("CREATE OR REPLACE VIEW \"f1\""),
+            "single-consumer pass must be a lazy VIEW, got: {}",
+            filter.sql
+        );
+    }
+
+    #[test]
+    fn filter_with_multi_consumer_reject_materializes_table() {
+        // 2+ consumers of the reject port -> materialize it once as a TABLE
+        // so the body isn't re-evaluated per consumer.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/orders.csv","hasHeader":true}}},
+                {"id":"f1","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"status = 'paid'"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"R1","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/r1.parquet"}}},
+                {"id":"k2","position":{"x":0,"y":0},"data":{
+                  "label":"R2","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/r2.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"f1",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f1","sourceHandle":"reject","target":"k1",
+                  "data":{"connectionType":"main"}},
+                {"id":"e3","source":"f1","sourceHandle":"reject","target":"k2",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let filter = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "f1")
+            .expect("filter stage");
+        assert!(
+            filter.sql.contains("CREATE OR REPLACE TABLE \"f1__reject\""),
+            "multi-consumer reject must materialize a table, got: {}",
+            filter.sql
+        );
+    }
+
+    #[test]
+    fn cdc_diff_requires_compare_columns() {
+        // Regression (audit B3): without compareColumns, build_cdc_diff's
+        // `updated` arm is empty so every changed row is tagged 'unchanged'
+        // and dropped by rejectUnchanged. compile() must reject it.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"cur","position":{"x":0,"y":0},"data":{
+                  "label":"cur","componentId":"src.csv",
+                  "properties":{"path":"/tmp/cur.csv","hasHeader":true}}},
+                {"id":"prev","position":{"x":0,"y":0},"data":{
+                  "label":"prev","componentId":"src.csv",
+                  "properties":{"path":"/tmp/prev.csv","hasHeader":true}}},
+                {"id":"d","position":{"x":0,"y":0},"data":{
+                  "label":"Diff","componentId":"xf.cdc.diff",
+                  "properties":{"naturalKey":["id"]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"out","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/o.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"cur","target":"d","data":{"connectionType":"main"}},
+                {"id":"e2","source":"prev","sourceHandle":"main","target":"d","targetHandle":"lookup","data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"d","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).expect_err("cdc.diff without compareColumns must fail");
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("compare columns"),
+            "error should name compare columns, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn scd1_uses_union_all_by_name() {
+        // Regression (audit B3): SCD1 retains unmatched-previous rows via
+        // UNION ALL, which must align cur/prev by column NAME. Positional
+        // UNION ALL silently swaps values when the two inputs present
+        // columns in a different order.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"cur","position":{"x":0,"y":0},"data":{
+                  "label":"cur","componentId":"src.csv",
+                  "properties":{"path":"/tmp/cur.csv","hasHeader":true}}},
+                {"id":"prev","position":{"x":0,"y":0},"data":{
+                  "label":"prev","componentId":"src.csv",
+                  "properties":{"path":"/tmp/prev.csv","hasHeader":true}}},
+                {"id":"scd","position":{"x":0,"y":0},"data":{
+                  "label":"SCD1","componentId":"xf.cdc.scd1",
+                  "properties":{"naturalKey":["id"]}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"out","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/o.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"cur","target":"scd",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"prev","sourceHandle":"main","target":"scd","targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"scd","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let scd = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "scd")
+            .expect("scd1 stage");
+        assert!(
+            scd.sql.contains("UNION ALL BY NAME"),
+            "SCD1 must align by name, got: {}",
+            scd.sql
+        );
+    }
+
+    #[test]
+    fn printf_escapes_stray_percent_but_keeps_specs() {
+        // audit B5: a literal % not forming a spec must be doubled so
+        // printf prints it; real conversion specs are preserved.
+        assert_eq!(escape_stray_printf_percents("100% done"), "100%% done");
+        assert_eq!(escape_stray_printf_percents("%s"), "%s");
+        assert_eq!(escape_stray_printf_percents("%.2f"), "%.2f");
+        assert_eq!(escape_stray_printf_percents("val %s (100%%)"), "val %s (100%%)");
+        assert_eq!(escape_stray_printf_percents("50% off %d items"), "50%% off %d items");
+        assert_eq!(escape_stray_printf_percents("no percents"), "no percents");
+    }
+
+    #[test]
+    fn numeric_rejects_non_finite_argument() {
+        // audit B5: 'inf'/'nan' as a numeric op argument bind as columns
+        // in DuckDB -> confusing binder error. Reject at plan time.
+        for bad in ["inf", "Infinity", "nan", "-inf"] {
+            let p = pipeline_from_json(&format!(
+                r#"{{
+                  "nodes": [
+                    {{"id":"s","position":{{"x":0,"y":0}},"data":{{
+                      "label":"CSV","componentId":"src.csv",
+                      "properties":{{"path":"/tmp/x.csv","hasHeader":true}}}}}},
+                    {{"id":"n","position":{{"x":0,"y":0}},"data":{{
+                      "label":"Pow","componentId":"xf.num.power",
+                      "properties":{{"column":"v","argument":"{}"}}}}}},
+                    {{"id":"k","position":{{"x":0,"y":0}},"data":{{
+                      "label":"out","componentId":"snk.parquet",
+                      "properties":{{"path":"/tmp/o.parquet"}}}}}}
+                  ],
+                  "edges": [
+                    {{"id":"e1","source":"s","target":"n","data":{{"connectionType":"main"}}}},
+                    {{"id":"e2","source":"n","target":"k","data":{{"connectionType":"main"}}}}
+                  ]
+                }}"#,
+                bad
+            ));
+            assert!(
+                compile(&p).is_err(),
+                "numeric op with argument '{}' should be rejected",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn addcol_typed_expr_defaults_to_try_cast() {
+        // audit B5: a typed Add-Column should TRY_CAST by default so one
+        // bad value nulls the cell instead of aborting the run.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"a","position":{"x":0,"y":0},"data":{
+                  "label":"Add","componentId":"xf.addcol",
+                  "properties":{"name":"n","type":"int64","expression":"v"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"out","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/o.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"a","data":{"connectionType":"main"}},
+                {"id":"e2","source":"a","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let add = compiled.stages.iter().find(|s| s.node_id == "a").unwrap();
+        assert!(
+            add.sql.contains("TRY_CAST((v) AS BIGINT)"),
+            "typed addcol should TRY_CAST by default, got: {}",
+            add.sql
+        );
+    }
+
+    #[test]
+    fn qa_unique_tiebreak_makes_survivor_deterministic() {
+        // audit B4: with a tieBreak prop, qa.unique's ROW_NUMBER gets an
+        // ORDER BY so the kept duplicate is deterministic. Without it, no
+        // ORDER BY (unchanged behavior).
+        let with_tb = build_quality(
+            &{
+                let mut ni = NodeInputs::default();
+                ni.ports.insert("main".into(), vec!["up".into()]);
+                ni
+            },
+            &serde_json::json!({"columns": ["k"], "tieBreak": ["ts"]}),
+            "qa.unique",
+            false,
+        )
+        .unwrap();
+        assert!(
+            with_tb.contains("PARTITION BY \"k\" ORDER BY \"ts\""),
+            "tieBreak should add ORDER BY, got: {}",
+            with_tb
+        );
+        let without = build_quality(
+            &{
+                let mut ni = NodeInputs::default();
+                ni.ports.insert("main".into(), vec!["up".into()]);
+                ni
+            },
+            &serde_json::json!({"columns": ["k"]}),
+            "qa.unique",
+            false,
+        )
+        .unwrap();
+        assert!(
+            !without.contains("ORDER BY"),
+            "no tieBreak should not add ORDER BY, got: {}",
+            without
+        );
+    }
+
+    #[test]
+    fn skip_orderby_makes_offset_deterministic() {
+        // audit B4: xf.skip with an orderBy prop emits ORDER BY before
+        // OFFSET so the skipped slice is repeatable.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let sql = build_take(&ni, &serde_json::json!({"count": 5, "orderBy": ["id"]}), TakeKind::Offset).unwrap();
+        assert!(
+            sql.contains("ORDER BY \"id\" OFFSET 5"),
+            "skip with orderBy should sort before offset, got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn distinct_orderby_prop_replaces_order_by_all() {
+        // audit B10: keyed DISTINCT defaults to ORDER BY ALL (deterministic
+        // but a full sort, >100x slower). An `orderBy` prop sorts only the
+        // keys + tiebreak columns; default is unchanged.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let default_sql = build_distinct(&ni, &serde_json::json!({"columns": ["status"]})).unwrap();
+        assert!(
+            default_sql.contains("ORDER BY ALL"),
+            "default keyed distinct must keep ORDER BY ALL, got: {}",
+            default_sql
+        );
+        let fast_sql = build_distinct(
+            &ni,
+            &serde_json::json!({"columns": ["status"], "orderBy": ["amount"]}),
+        )
+        .unwrap();
+        assert!(
+            fast_sql.contains("ORDER BY \"status\", \"amount\"") && !fast_sql.contains("ORDER BY ALL"),
+            "orderBy prop must sort keys+tiebreak, not ALL, got: {}",
+            fast_sql
+        );
+    }
+
+    #[test]
+    fn csv_declared_schema_overrides_autodetect() {
+        // Regression for issue #3: when the user sets a column to
+        // VARCHAR in the Schema panel (typical fix for dd/mm/yy dates
+        // that DuckDB would otherwise misparse as yyyy-mm-dd), the
+        // generated read_csv_auto must include `types = {...}` so
+        // DuckDB uses the requested types instead of inferring them.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/dates.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"id","type":"int64","nullable":false},
+                    {"name":"event_date","type":"string","nullable":true}
+                  ]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/out.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let src_sql = &compiled.stages[0].sql;
+        assert!(
+            src_sql.contains("types = {"),
+            "missing types= clause: {}",
+            src_sql
+        );
+        assert!(
+            src_sql.contains("'event_date': 'VARCHAR'"),
+            "date column not forced to VARCHAR: {}",
+            src_sql
+        );
+        assert!(
+            src_sql.contains("'id': 'BIGINT'"),
+            "int64 not mapped to BIGINT: {}",
+            src_sql
+        );
+    }
+
+    #[test]
+    fn csv_date_format_passes_through_to_reader() {
+        // Follow-up to #3: a user with dd/mm/yyyy dates can now keep
+        // the column as a real DATE instead of forcing VARCHAR, by
+        // setting the dateFormat prop. The generated SQL must include
+        // dateformat='%d/%m/%Y' so DuckDB picks the right parser.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true,
+                                "dateFormat":"%d/%m/%Y",
+                                "timestampFormat":"%d/%m/%Y %H:%M:%S"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[0].sql;
+        assert!(sql.contains("dateformat='%d/%m/%Y'"), "missing dateformat: {}", sql);
+        assert!(sql.contains("timestampformat='%d/%m/%Y %H:%M:%S'"), "missing timestampformat: {}", sql);
+    }
+
+    #[test]
+    fn csv_per_column_format_wraps_with_try_strptime() {
+        // Issue #10: two date/timestamp columns with DIFFERENT formats on
+        // one read. Each is forced to VARCHAR in types= and re-parsed with
+        // its own format via try_strptime inside a SELECT * REPLACE wrap.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"d1","type":"date","format":"%d/%m/%Y"},
+                    {"name":"ts","type":"timestamp","format":"%Y-%m-%d %H:%M:%S"}
+                  ]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[0].sql;
+        assert!(sql.contains("SELECT * REPLACE ("), "missing REPLACE wrap: {}", sql);
+        assert!(
+            sql.contains("try_strptime(\"d1\", '%d/%m/%Y')::DATE AS \"d1\""),
+            "missing d1 strptime: {}",
+            sql
+        );
+        assert!(
+            sql.contains("try_strptime(\"ts\", '%Y-%m-%d %H:%M:%S')::TIMESTAMP AS \"ts\""),
+            "missing ts strptime: {}",
+            sql
+        );
+        assert!(sql.contains("'d1': 'VARCHAR'"), "d1 not forced VARCHAR: {}", sql);
+        assert!(sql.contains("'ts': 'VARCHAR'"), "ts not forced VARCHAR: {}", sql);
+        assert!(sql.contains("FROM read_csv_auto("), "missing reader: {}", sql);
+    }
+
+    #[test]
+    fn csv_date_column_without_format_keeps_native_type() {
+        // A DATE column with no format (or empty format) must NOT trigger
+        // the REPLACE wrap; its declared type goes straight into types=.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true},
+                  "schema":[{"name":"d","type":"date","format":""}]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[0].sql;
+        assert!(!sql.contains("REPLACE ("), "should not wrap without format: {}", sql);
+        assert!(sql.contains("'d': 'DATE'"), "date type not preserved: {}", sql);
+    }
+
+    #[test]
+    fn csv_mixed_format_and_plain_columns() {
+        // One formatted date column + one plain int column: only the date
+        // is rewritten; the int keeps its type and is carried through *.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"d","type":"date","format":"%d/%m/%Y"},
+                    {"name":"n","type":"int64"}
+                  ]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[0].sql;
+        assert!(sql.contains("SELECT * REPLACE ("), "missing REPLACE wrap: {}", sql);
+        assert!(sql.contains("try_strptime(\"d\", '%d/%m/%Y')::DATE AS \"d\""), "missing d: {}", sql);
+        assert!(!sql.contains("\"n\")") && !sql.contains("AS \"n\""), "n should not be rewritten: {}", sql);
+        assert!(sql.contains("'n': 'BIGINT'"), "int type not preserved: {}", sql);
+    }
+
+    #[test]
+    fn csv_per_column_format_quotes_identifier() {
+        // A formatted date column whose name needs quoting: both the
+        // try_strptime arg and the AS alias must be double-quoted.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true},
+                  "schema":[{"name":"Order Date","type":"date","format":"%d/%m/%Y"}]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[0].sql;
+        assert!(
+            sql.contains("try_strptime(\"Order Date\", '%d/%m/%Y')::DATE AS \"Order Date\""),
+            "identifier not quoted: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn cast_referencing_unknown_column_errors_at_planner() {
+        // When the upstream source has a declared schema (Autodetect
+        // or hand-typed), downstream xf.cast that references a column
+        // not in the schema errors at compile time instead of waiting
+        // for DuckDB's runtime "column not found".
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"id","type":"int64","nullable":false},
+                    {"name":"name","type":"string","nullable":true}
+                  ]}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"column":"NAME","targetType":"VARCHAR"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"c",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).err().expect("expected an Err");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("'NAME'"), "should name the bad column: {}", msg);
+        assert!(
+            msg.contains("did you mean 'name'"),
+            "should suggest the case-insensitive match: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn cast_referencing_truly_missing_column_errors_without_hint() {
+        // No close match: error still surfaces but no "did you mean".
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"id","type":"int64","nullable":false}
+                  ]}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"column":"price","targetType":"DOUBLE"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"c",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).err().expect("expected an Err");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("'price'"), "should name the bad column: {}", msg);
+        assert!(msg.contains("not found"), "should say not found: {}", msg);
+    }
+
+    #[test]
+    fn fill_forward_with_unknown_column_errors() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"id","type":"int64","nullable":false},
+                    {"name":"reading","type":"float64","nullable":true},
+                    {"name":"ts","type":"timestamp","nullable":false}
+                  ]}},
+                {"id":"f","position":{"x":0,"y":0},"data":{
+                  "label":"Fill","componentId":"xf.fill_forward",
+                  "properties":{"column":"Reading","orderBy":"ts"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"f",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).err().expect("expected an Err");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("'Reading'"), "should name the bad column: {}", msg);
+        assert!(
+            msg.contains("did you mean 'reading'"),
+            "should suggest the close match: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn cast_with_valid_column_in_schema_compiles() {
+        // The positive case: with a declared schema and a valid column
+        // reference, compile succeeds and emits the cast SQL.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"id","type":"int64","nullable":false},
+                    {"name":"amount","type":"string","nullable":true}
+                  ]}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"column":"amount","targetType":"DOUBLE"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"c",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).expect("should compile cleanly");
+        let cast_sql = compiled.stages.iter().find(|s| s.node_id == "c").unwrap().sql.as_str();
+        assert!(cast_sql.contains("CAST(\"amount\" AS DOUBLE)"), "wrong cast SQL: {}", cast_sql);
+    }
+
+    #[test]
+    fn cast_with_all_empty_columns_errors_loudly() {
+        // Used to silently emit `SELECT * FROM upstream` (no-op) when
+        // every cast entry had an empty column - the user wondered
+        // why their column type didn't change.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"casts":[
+                    {"column":"","targetType":"INTEGER"},
+                    {"column":"   ","targetType":"DOUBLE"}
+                  ]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"c",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).err().expect("expected an Err");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("Cast:"), "should mention Cast: {}", msg);
+        assert!(msg.contains("no column name"), "should mention the empty-column gap: {}", msg);
+    }
+
+    #[test]
+    fn cast_with_duplicate_columns_errors_loudly() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Cast","componentId":"xf.cast",
+                  "properties":{"casts":[
+                    {"column":"amount","targetType":"INTEGER"},
+                    {"column":"amount","targetType":"DOUBLE"}
+                  ]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"c",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).err().expect("expected an Err");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("'amount'"), "should name the duplicate column: {}", msg);
+    }
+
+    #[test]
+    fn window_without_order_by_errors_clearly() {
+        // xf.rank / xf.lead / xf.lag / etc. all need ORDER BY. DuckDB's
+        // native error for missing ORDER BY arrives two stages later
+        // and reads as "Binder Error: OVER clause requires ORDER BY";
+        // we want a planner-side error mentioning the function name and
+        // pointing at the right form field.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"Rank","componentId":"xf.rank",
+                  "properties":{"partitionBy":["dept"]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"r",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let err = compile(&p).err().expect("expected an Err from missing ORDER BY");
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.to_lowercase().contains("order by"),
+            "error should mention Order By: {}",
+            msg
+        );
+        assert!(
+            msg.contains("rank"),
+            "error should mention the window function name: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn union_uses_by_name_to_dodge_positional_silent_corruption() {
+        // ETL users almost always expect by-name semantics. Standard SQL
+        // UNION matches by position - reordering columns in one input
+        // silently produces garbage with no error. DuckDB's UNION BY NAME
+        // matches column names + pads missing columns with NULL.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"a","position":{"x":0,"y":0},"data":{
+                  "label":"A","componentId":"src.csv",
+                  "properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"b","position":{"x":0,"y":0},"data":{
+                  "label":"B","componentId":"src.csv",
+                  "properties":{"path":"/tmp/b.csv","hasHeader":true}}},
+                {"id":"u","position":{"x":0,"y":0},"data":{
+                  "label":"Union","componentId":"xf.unionall","properties":{}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"a","target":"u",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"b","target":"u",
+                  "data":{"connectionType":"main"}},
+                {"id":"e3","source":"u","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let union_sql = compiled.stages.iter().find(|s| s.node_id == "u").unwrap().sql.as_str();
+        assert!(union_sql.contains("UNION ALL BY NAME"), "expected BY NAME variant: {}", union_sql);
+    }
+
+    #[test]
+    fn arr_contains_is_null_safe() {
+        // list_contains(NULL_array, x) returns NULL. Without the COALESCE
+        // shield, downstream WHERE _contains would silently drop the row.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"c","position":{"x":0,"y":0},"data":{
+                  "label":"Contains","componentId":"xf.arr.contains",
+                  "properties":{"column":"tags","value":"red"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"c",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"c","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = compiled.stages.iter().find(|s| s.node_id == "c").unwrap().sql.as_str();
+        assert!(sql.contains("COALESCE(list_contains"), "missing COALESCE shield: {}", sql);
+        assert!(sql.contains(", FALSE)"), "missing FALSE fallback: {}", sql);
+    }
+
+    #[test]
+    fn join_with_same_key_name_uses_using_clause() {
+        // When leftKey == rightKey, USING() dedupes the join column
+        // and downstream `SELECT id FROM joined` is unambiguous.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join.inner",
+                  "properties":{"leftKey":"customer_id","rightKey":"customer_id"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(join_sql.contains("USING (\"customer_id\")"), "missing USING clause: {}", join_sql);
+        assert!(!join_sql.contains("m.\"customer_id\" = r.\"customer_id\""), "should have used USING not ON: {}", join_sql);
+    }
+
+    #[test]
+    fn join_with_different_key_names_excludes_right_key() {
+        // Different key names: ON + EXCLUDE the right-side key so the
+        // join column isn't duplicated in the output.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join.left",
+                  "properties":{"leftKey":"customer_id","rightKey":"cust_id"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(join_sql.contains("EXCLUDE (\"cust_id\")"), "missing EXCLUDE: {}", join_sql);
+        assert!(join_sql.contains("m.\"customer_id\" = r.\"cust_id\""), "missing ON clause: {}", join_sql);
+        assert!(join_sql.contains("LEFT JOIN"), "wrong kind: {}", join_sql);
+    }
+
+    #[test]
+    fn join_composite_keys_two_columns() {
+        // Composite keys via comma-separated input. Both sides must
+        // have the same arity or compile fails loudly.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join.inner",
+                  "properties":{"leftKey":"customer_id, order_date","rightKey":"customer_id, order_date"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(
+            join_sql.contains("USING (\"customer_id\", \"order_date\")"),
+            "composite USING wrong: {}",
+            join_sql
+        );
+    }
+
+    #[test]
+    fn semi_join_uses_exists_not_in() {
+        // Anti-join was silently dropping all rows when the right side
+        // had any NULL key, because `x NOT IN (subq with NULL)` evaluates
+        // to UNKNOWN. NOT EXISTS doesn't have that quirk.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Anti","componentId":"xf.anti",
+                  "properties":{"leftKey":"id","rightKey":"id"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j",
+                  "targetHandle":"lookup",
+                  "data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(join_sql.contains("NOT EXISTS"), "anti should use NOT EXISTS: {}", join_sql);
+        assert!(!join_sql.contains("NOT IN"), "should not emit NOT IN: {}", join_sql);
+    }
+
+    #[test]
+    fn row_hash_emits_concat_ws_with_casts() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"h","position":{"x":0,"y":0},"data":{
+                  "label":"Hash","componentId":"xf.row_hash",
+                  "properties":{"columns":["id","email","status"],"algorithm":"sha256","outputColumn":"fp"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"h",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"h","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[1].sql;
+        assert!(sql.contains("sha256("), "wrong algorithm: {}", sql);
+        assert!(sql.contains("concat_ws('||'"), "wrong separator: {}", sql);
+        assert!(sql.contains("CAST(\"id\" AS VARCHAR)"), "id not cast: {}", sql);
+        assert!(sql.contains("CAST(\"email\" AS VARCHAR)"), "email not cast: {}", sql);
+        assert!(sql.contains(" AS \"fp\""), "custom output column not honoured: {}", sql);
+    }
+
+    #[test]
+    fn row_hash_default_algorithm_is_md5() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"h","position":{"x":0,"y":0},"data":{
+                  "label":"Hash","componentId":"xf.row_hash",
+                  "properties":{"columns":["id"]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"h",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"h","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[1].sql;
+        assert!(sql.contains("md5("), "default should be md5: {}", sql);
+        assert!(sql.contains(" AS \"_row_hash\""), "default output column wrong: {}", sql);
+    }
+
+    #[test]
+    fn audit_emits_selected_columns_only() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"a","position":{"x":0,"y":0},"data":{
+                  "label":"Audit","componentId":"xf.audit",
+                  "properties":{"loadedAt":true,"loadedDate":false,"source":"orders_etl","batchId":"2026-05-27"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"a",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"a","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[1].sql;
+        assert!(sql.contains("current_timestamp AS _loaded_at"), "loaded_at missing: {}", sql);
+        assert!(!sql.contains("_loaded_date"), "loaded_date should be off: {}", sql);
+        assert!(sql.contains("'orders_etl' AS _source"), "source literal missing: {}", sql);
+        assert!(sql.contains("'2026-05-27' AS _batch_id"), "batch_id missing: {}", sql);
+    }
+
+    #[test]
+    fn fill_constant_string_value_quoted() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"f","position":{"x":0,"y":0},"data":{
+                  "label":"Fill","componentId":"xf.fill_constant",
+                  "properties":{"column":"status","value":"unknown"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"f",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[1].sql;
+        assert!(sql.contains("COALESCE(\"status\", 'unknown')"), "string literal not quoted: {}", sql);
+    }
+
+    #[test]
+    fn fill_constant_numeric_value_unquoted() {
+        // Bare numbers (`0`, `-1.5`) pass through unquoted so DuckDB
+        // sees a numeric literal and doesn't try to cast a string.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/x.csv","hasHeader":true}}},
+                {"id":"f","position":{"x":0,"y":0},"data":{
+                  "label":"Fill","componentId":"xf.fill_constant",
+                  "properties":{"column":"qty","value":"0"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s","target":"f",
+                  "data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"k",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sql = &compiled.stages[1].sql;
+        assert!(sql.contains("COALESCE(\"qty\", 0)"), "numeric literal got quoted: {}", sql);
+    }
+
+    #[test]
+    fn csv_without_declared_schema_uses_autodetect() {
+        // Inverse check: no schema -> no columns clause, so DuckDB
+        // falls back to its normal autodetect.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/d.csv","hasHeader":true}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        assert!(
+            !compiled.stages[0].sql.contains("types = {"),
+            "should not emit types clause without a declared schema: {}",
+            compiled.stages[0].sql
+        );
+    }
+
+    #[test]
+    fn cloud_parquet_source_projects_declared_columns() {
+        // audit B1: a cloud parquet source must honor the `columns`
+        // projection like the local builder (delegation), not read SELECT *.
+        let sql = build_cloud_source(
+            "s3",
+            &serde_json::json!({"format": "parquet", "path": "s3://b/k.parquet", "columns": "id, amount"}),
+            None,
+        );
+        assert!(
+            sql.contains("SELECT \"id\", \"amount\" FROM read_parquet('s3://b/k.parquet')"),
+            "cloud parquet must project declared columns, got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn cloud_csv_source_threads_declared_schema() {
+        // audit B1: a cloud CSV source must honor a Schema-panel declaration
+        // via types= (issue #3 parity), not a bare read_csv_auto.
+        let cols = vec![duckle_metadata::Column {
+            name: "amt".into(),
+            data_type: duckle_metadata::DataType::String,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        }];
+        let sql = build_cloud_source(
+            "s3",
+            &serde_json::json!({"format": "csv", "path": "s3://b/k.csv", "hasHeader": true}),
+            Some(&cols),
+        );
+        assert!(
+            sql.contains("types = {") && sql.contains("'amt': 'VARCHAR'"),
+            "cloud csv must thread declared schema via types=, got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn cloud_csv_sink_honors_options_but_not_partitionby() {
+        // audit B1: a cloud CSV sink must honor delimiter/nullValue (ignored
+        // before), but must NOT emit PARTITION_BY (unvalidated over httpfs).
+        let sql = build_cloud_sink(
+            &serde_json::json!({
+                "format": "csv", "path": "s3://b/out.csv",
+                "delimiter": "|", "nullValue": "NA", "partitionBy": "id"
+            }),
+            "v",
+        );
+        assert!(
+            sql.contains("FORMAT CSV") && sql.contains("DELIM '|'") && sql.contains("NULLSTR 'NA'"),
+            "cloud csv sink must honor options, got: {}",
+            sql
+        );
+        assert!(
+            !sql.contains("PARTITION_BY"),
+            "cloud sink must not emit PARTITION_BY, got: {}",
+            sql
+        );
+        assert!(sql.contains("'s3://b/out.csv'"), "must write to the cloud path, got: {}", sql);
+    }
+
+    #[test]
+    fn csv_partial_declared_schema_uses_types_not_columns() {
+        // Regression (audit B2): a Schema-panel declaration that covers only
+        // SOME of a wider file's columns must emit `types = {...}` (name-
+        // match, partial-ok), NOT `columns = {...}` (positional, requires
+        // the full schema). The old `columns` emission made read_csv_auto
+        // hard-fail with a sniffer arity error for the common "declare just
+        // the column I care about" case.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/wide.csv","hasHeader":true},
+                  "schema":[
+                    {"name":"amt","type":"string","nullable":true}
+                  ]}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let src_sql = &compiled.stages[0].sql;
+        assert!(
+            src_sql.contains("types = {") && src_sql.contains("'amt': 'VARCHAR'"),
+            "partial declaration must emit types= with the declared column: {}",
+            src_sql
+        );
+        assert!(
+            !src_sql.contains("columns = {"),
+            "partial declaration must NOT emit columns= (positional, full-schema): {}",
+            src_sql
+        );
+    }
+
+    #[test]
+    fn quack_source_emits_attach_with_secret() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"Quack","componentId":"src.quack",
+                  "properties":{"host":"duck.example.com","port":9494,
+                                "token":"super_secret","tableName":"orders"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/out.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        // Single-consumer quack now materializes via the attach-parquet path,
+        // so the ATTACH + secret live on the spec; concatenate spec.attach +
+        // body to assert the same logic regardless of where it lands.
+        let stage = &compiled.stages[0];
+        let src_sql = match stage.runtime.as_ref() {
+            Some(RuntimeSpec::AttachParquetSource(s)) => format!("{}{}", s.attach, s.body),
+            _ => stage.sql.clone(),
+        };
+        assert!(
+            src_sql.contains("CREATE OR REPLACE SECRET duckle_quack_secret"),
+            "missing SECRET creation: {}",
+            src_sql
+        );
+        assert!(src_sql.contains("TYPE QUACK"), "wrong SECRET type: {}", src_sql);
+        assert!(src_sql.contains("'super_secret'"), "token not in SECRET: {}", src_sql);
+        assert!(
+            src_sql.contains("ATTACH 'quack:duck.example.com:9494'"),
+            "wrong ATTACH URL: {}",
+            src_sql
+        );
+        assert!(src_sql.contains("AS duckle_src"), "wrong alias: {}", src_sql);
+        assert!(src_sql.contains("READ_ONLY"), "missing READ_ONLY: {}", src_sql);
+        assert!(
+            src_sql.contains("SELECT * FROM duckle_src"),
+            "missing SELECT from alias: {}",
+            src_sql
+        );
+    }
+
+    #[test]
+    fn quack_source_omits_secret_when_no_token() {
+        // Unauthenticated test servers: leave the SECRET off entirely
+        // rather than emitting an empty TOKEN clause.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"Quack","componentId":"src.quack",
+                  "properties":{"host":"localhost","tableName":"t"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1",
+                  "data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let stage = &compiled.stages[0];
+        let src_sql = match stage.runtime.as_ref() {
+            Some(RuntimeSpec::AttachParquetSource(s)) => format!("{}{}", s.attach, s.body),
+            _ => stage.sql.clone(),
+        };
+        assert!(
+            !src_sql.contains("CREATE OR REPLACE SECRET"),
+            "should not emit empty SECRET: {}",
+            src_sql
+        );
+        // Default port 9494 is appended when host has no explicit port.
+        assert!(
+            src_sql.contains("'quack:localhost:9494'"),
+            "missing default port: {}",
+            src_sql
+        );
+    }
+
+    #[test]
+    fn rejects_cycles() {
+        let p = pipeline_from_json(
+            r#"{
+              "nodes":[
+                {"id":"a","position":{"x":0,"y":0},"data":{"label":"A","componentId":"xf.filter","properties":{}}},
+                {"id":"b","position":{"x":0,"y":0},"data":{"label":"B","componentId":"xf.filter","properties":{}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"a","target":"b","data":{"connectionType":"main"}},
+                {"id":"e2","source":"b","target":"a","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        assert!(compile(&p).is_err());
+    }
