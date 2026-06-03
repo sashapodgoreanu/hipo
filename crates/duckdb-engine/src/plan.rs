@@ -121,6 +121,9 @@ pub struct Stage {
     /// ADBC (Arrow Database Connectivity) SELECT: loads a prebuilt ADBC
     /// driver at runtime and materializes its Arrow result via Parquet.
     pub adbc_source: Option<AdbcSourceSpec>,
+    /// Single-consumer network-DB ATTACH source materialized as a temp parquet
+    /// + read_parquet VIEW instead of an on-disk table (faster, with pushdown).
+    pub attach_parquet_source: Option<AttachParquetSourceSpec>,
     /// Redis SET batch via the redis sync client.
     pub redis_sink: Option<RedisSinkSpec>,
     /// Redis SCAN + GET via the redis sync client.
@@ -243,6 +246,7 @@ impl Stage {
             && self.oracle_sink.is_none()
             && self.oracle_source.is_none()
             && self.adbc_source.is_none()
+            && self.attach_parquet_source.is_none()
             && self.redis_sink.is_none()
             && self.redis_source.is_none()
             && self.qdrant_source.is_none()
@@ -391,6 +395,25 @@ pub struct AdbcSourceSpec {
     /// (skipping the table copy + enabling projection / predicate pushdown);
     /// 2+ consumers get a real TABLE so the rows are decoded once.
     pub single_consumer: bool,
+}
+
+/// Single-consumer network-DB source (postgres / mysql / mariadb / cockroach /
+/// redshift) read via DuckDB's ATTACH extensions. Instead of inserting the
+/// rows into an on-disk run-db TABLE, the executor COPYs the already-typed
+/// result to a temp parquet once and exposes a lazy read_parquet VIEW - the
+/// parquet write is cheaper than the table insert and the consumer gets
+/// projection / predicate pushdown. Same proven path as src.adbc, and lossless
+/// because the rows are already typed (unlike the read_json_auto sources).
+/// Only built when exactly one stage consumes the source; 2+ consumers keep
+/// the plain CREATE TABLE so the rows are materialized once.
+#[derive(Debug, Clone)]
+pub struct AttachParquetSourceSpec {
+    pub node_id: String,
+    /// INSTALL/LOAD/ATTACH preamble (ends with a trailing space); creates the
+    /// process-local `duckle_src` alias the body reads from.
+    pub attach: String,
+    /// The source SELECT body (e.g. `SELECT * FROM duckle_src."orders"`).
+    pub body: String,
 }
 
 /// snk.redis: SET each input row's keyColumn -> valueColumn into Redis
@@ -1983,6 +2006,7 @@ fn build_stage(
     let mut oracle_sink: Option<OracleSinkSpec> = None;
     let mut oracle_source: Option<OracleSourceSpec> = None;
     let mut adbc_source: Option<AdbcSourceSpec> = None;
+    let mut attach_parquet_source: Option<AttachParquetSourceSpec> = None;
     let mut redis_sink: Option<RedisSinkSpec> = None;
     let mut redis_source: Option<RedisSourceSpec> = None;
     let mut qdrant_source: Option<QdrantSourceSpec> = None;
@@ -4209,13 +4233,45 @@ fn build_stage(
             !uses_dynamic_pivot && !attach_backed && (force_views || consumers <= 1)
         };
         let main_kw = if view_ok(main_consumers) { "VIEW" } else { "TABLE" };
-        let mut sql = format!(
-            "{}CREATE OR REPLACE {} {} AS {}",
-            attach,
-            main_kw,
-            quote_ident(&node.id),
-            body
-        );
+        // Slow network-DB sources (postgres / mysql / mariadb / cockroach /
+        // redshift) that exactly one stage consumes: COPY the already-typed
+        // rows to a temp parquet once and expose a read_parquet VIEW instead of
+        // inserting them into the on-disk run-db table. The parquet write is
+        // cheaper than the table insert and the consumer gets projection /
+        // predicate pushdown - the same proven path as src.adbc, and lossless
+        // because the rows are already typed. The executor fills in the run-
+        // scoped temp path, so we hand it the attach prelude + the SELECT body.
+        // Local file ATTACHes (sqlite / duckdb) stay on the table path: they
+        // have no scan bottleneck and the parquet round-trip would only add
+        // overhead. 2+ consumers also stay a table (materialize once), and the
+        // reject-split components never take this branch.
+        const NETWORK_DB_SOURCES: &[&str] = &[
+            "src.postgres",
+            "src.mysql",
+            "src.mariadb",
+            "src.cockroach",
+            "src.redshift",
+        ];
+        let mut sql = if attach_backed
+            && main_consumers <= 1
+            && reject_sql.is_none()
+            && NETWORK_DB_SOURCES.contains(&component_id)
+        {
+            attach_parquet_source = Some(AttachParquetSourceSpec {
+                node_id: node.id.clone(),
+                attach: attach.to_string(),
+                body: body.to_string(),
+            });
+            String::new()
+        } else {
+            format!(
+                "{}CREATE OR REPLACE {} {} AS {}",
+                attach,
+                main_kw,
+                quote_ident(&node.id),
+                body
+            )
+        };
         // Components that split rows (filter, quality validators) also emit
         // a `<node>__reject` relation - but only when the reject port is
         // wired (see reject_sql above), and as a VIEW unless it has 2+
@@ -4266,6 +4322,7 @@ fn build_stage(
         oracle_sink,
         oracle_source,
         adbc_source,
+        attach_parquet_source,
         redis_sink,
         redis_source,
         qdrant_source,

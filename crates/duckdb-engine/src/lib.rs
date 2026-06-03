@@ -647,6 +647,8 @@ impl DuckdbEngine {
                     self.run_oracle_source(&db_path, spec)
                 } else if let Some(spec) = stage.adbc_source.as_ref() {
                     self.run_adbc_source(&db_path, spec)
+                } else if let Some(spec) = stage.attach_parquet_source.as_ref() {
+                    self.run_attach_parquet_source(&db_path, spec)
                 } else if let Some(spec) = stage.redis_sink.as_ref() {
                     self.run_redis_sink(&db_path, spec)
                 } else if let Some(spec) = stage.redis_source.as_ref() {
@@ -2227,6 +2229,46 @@ impl DuckdbEngine {
             let _ = std::fs::remove_file(&parquet_path);
         }
         Ok(format!("adbc: materialized {} rows into {}", count, spec.node_id))
+    }
+
+    /// Single-consumer network-DB source (postgres / mysql / ...): COPY the
+    /// already-typed ATTACH result to a temp parquet, then expose a lazy
+    /// read_parquet VIEW. The parquet write is cheaper than an on-disk table
+    /// insert and the consumer gets projection / predicate pushdown; typed
+    /// parquet is lossless. The ATTACH prelude + COPY + VIEW run in one CLI
+    /// call (the duckle_src alias is live for the COPY; the VIEW references the
+    /// parquet file, so downstream stages read it with no re-attach). The
+    /// parquet is keyed off the run db and swept by the run's TempDbGuard.
+    fn run_attach_parquet_source(
+        &self,
+        db: &Path,
+        spec: &plan::AttachParquetSourceSpec,
+    ) -> Result<String, EngineError> {
+        let safe_node: String = spec
+            .node_id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+        let db_name = db
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let parquet_path = db.with_file_name(format!("{}.attsrc-{}.parquet", db_name, safe_node));
+        let ppath = parquet_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''");
+        let sql = format!(
+            "{}COPY ({}) TO '{}' (FORMAT PARQUET); \
+             CREATE OR REPLACE VIEW {} AS SELECT * FROM read_parquet('{}')",
+            spec.attach,
+            spec.body,
+            ppath,
+            plan::quote_ident(&spec.node_id),
+            ppath
+        );
+        self.run(Some(db), &sql, false)?;
+        Ok(format!("attach-parquet: materialized {}", spec.node_id))
     }
 
     /// Convert one cell of a SQL Server row to JSON without silently
@@ -6688,8 +6730,9 @@ impl DuckdbEngine {
 }
 
 /// Removes the temp run database (and its WAL) when dropped, plus any
-/// `<db>.adbc-*.parquet` temp files that single-consumer src.adbc sources kept
-/// alive as lazy read_parquet VIEWs for the duration of the run.
+/// `<db>.*.parquet` temp files that single-consumer sources kept alive as lazy
+/// read_parquet VIEWs for the duration of the run (src.adbc -> `<db>.adbc-*`,
+/// network-DB sources -> `<db>.attsrc-*`).
 struct TempDbGuard(PathBuf);
 impl Drop for TempDbGuard {
     fn drop(&mut self) {
@@ -6697,13 +6740,14 @@ impl Drop for TempDbGuard {
         let mut wal = self.0.clone().into_os_string();
         wal.push(".wal");
         let _ = std::fs::remove_file(PathBuf::from(wal));
-        // Sweep this run's ADBC view parquets (named "<db_file>.adbc-*.parquet"
-        // as a sibling of the run db).
+        // Sweep this run's view parquets, all named "<db_file>.*.parquet" as a
+        // sibling of the run db (keyed off the unique run db name so concurrent
+        // runs never sweep each other's files).
         if let (Some(dir), Some(db_name)) = (
             self.0.parent(),
             self.0.file_name().map(|s| s.to_string_lossy().into_owned()),
         ) {
-            let prefix = format!("{}.adbc-", db_name);
+            let prefix = format!("{}.", db_name);
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
