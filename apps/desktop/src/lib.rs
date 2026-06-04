@@ -223,11 +223,13 @@ async fn run_pipeline(
     pipeline: PipelineDoc,
     on_event: Channel<PipelineEvent>,
     pipeline_id: Option<String>,
+    pipeline_name: Option<String>,
     workspace_path: Option<String>,
 ) -> Result<RunResult, String> {
     let engine = engine()?;
+    let name = pipeline_name.clone();
     let result = tokio::task::spawn_blocking(move || {
-        engine.execute_pipeline_with_events(&pipeline, None, |evt| {
+        engine.execute_pipeline_with_events(&pipeline, None, name.as_deref(), |evt| {
             let _ = on_event.send(evt);
         })
     })
@@ -260,14 +262,21 @@ async fn run_pipeline_partial(
     target_node_id: String,
     on_event: Channel<PipelineEvent>,
     pipeline_id: Option<String>,
+    pipeline_name: Option<String>,
     workspace_path: Option<String>,
 ) -> Result<RunResult, String> {
     let engine = engine()?;
     let target = target_node_id;
+    let name = pipeline_name.clone();
     let result = tokio::task::spawn_blocking(move || {
-        engine.execute_pipeline_with_events(&pipeline, Some(target.as_str()), |evt| {
-            let _ = on_event.send(evt);
-        })
+        engine.execute_pipeline_with_events(
+            &pipeline,
+            Some(target.as_str()),
+            name.as_deref(),
+            |evt| {
+                let _ = on_event.send(evt);
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -324,8 +333,12 @@ fn schedule_set_workspace(path: String) -> Result<(), String> {
     // the workspace changes, so this stays in sync.
     if path.is_empty() {
         std::env::remove_var("DUCKLE_WORKSPACE");
+        std::env::remove_var("DUCKLE_LOG_DIR");
     } else {
         std::env::set_var("DUCKLE_WORKSPACE", &path);
+        // Universal, component-level run logging lands in the user's chosen
+        // workspace under logs/ (NDJSON) for Splunk / Dynatrace ingestion.
+        std::env::set_var("DUCKLE_LOG_DIR", PathBuf::from(&path).join("logs"));
     }
     let p = if path.is_empty() {
         None

@@ -26,6 +26,7 @@ use thiserror::Error;
 pub mod history;
 pub mod plan;
 mod connectors;
+mod run_log;
 mod util;
 pub(crate) use util::*;
 pub use history::{append_run_record, load_run_history, RunRecord};
@@ -245,6 +246,24 @@ impl DuckdbEngine {
         Ok(parse_json_arrays(&out).into_iter().next().unwrap_or_default())
     }
 
+    /// Row count of an already-materialized upstream view/table, for the
+    /// ctl.log / ctl.warn `{rows}` token and ctl.die row-based conditions.
+    /// Returns 0 when there's no input or the count can't be read - the
+    /// caller treats "couldn't count" the same as empty rather than failing.
+    fn count_view(&self, db: &Path, view: Option<&str>) -> u64 {
+        let Some(view) = view else { return 0 };
+        let sql = format!("SELECT count(*) AS c FROM {}", plan::quote_ident(view));
+        self.run_rows(Some(db), &sql)
+            .ok()
+            .and_then(|rows| rows.into_iter().next())
+            .and_then(|row| row.get("c").cloned())
+            .and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+            })
+            .unwrap_or(0)
+    }
+
     // ---- Inspection ----------------------------------------------------
 
     /// Inspect a source for its schema and a small preview. `format` is
@@ -293,7 +312,15 @@ impl DuckdbEngine {
     // ---- Execution -----------------------------------------------------
 
     pub fn execute_pipeline(&self, doc: &PipelineDoc) -> RunResult {
-        self.execute_pipeline_with_events(doc, None::<&str>, |_| {})
+        self.execute_pipeline_with_events(doc, None::<&str>, None, |_| {})
+    }
+
+    /// Like [`execute_pipeline`], naming the per-pipeline run-log folder
+    /// (`<DUCKLE_LOG_DIR>/<pipeline_name>/runtime.log`). Used by headless
+    /// runners (the scheduler) that have no event sink but still want the
+    /// run logged under the pipeline's name rather than the fallback folder.
+    pub fn execute_pipeline_named(&self, doc: &PipelineDoc, pipeline_name: &str) -> RunResult {
+        self.execute_pipeline_with_events(doc, None::<&str>, Some(pipeline_name), |_| {})
     }
 
     /// Execute a pipeline, optionally only the subgraph upstream of
@@ -302,7 +329,8 @@ impl DuckdbEngine {
         &self,
         doc: &PipelineDoc,
         target: Option<&str>,
-        mut on_event: F,
+        pipeline_name: Option<&str>,
+        mut user_on_event: F,
     ) -> RunResult
     where
         F: FnMut(PipelineEvent),
@@ -324,6 +352,33 @@ impl DuckdbEngine {
         let compiled = match compiled {
             Ok(c) => c,
             Err(e) => return RunResult::failed(total_start, e.to_string()),
+        };
+
+        // Component-level run log (Splunk / Dynatrace), gated on
+        // DUCKLE_LOG_DIR. We tee every event through it so BOTH the fast
+        // batched path and the per-stage path log uniformly, for every run
+        // mode (interactive, scheduled, sub-pipeline). The map gives each
+        // line its component id + label.
+        let node_meta: std::collections::HashMap<String, run_log::NodeMeta> = doc
+            .nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.id.clone(),
+                    run_log::NodeMeta {
+                        component: n.data.component_id.clone().unwrap_or_default(),
+                        label: n.data.label.clone(),
+                    },
+                )
+            })
+            .collect();
+        let run_id = format!("run-{}-{}", std::process::id(), now_nanos());
+        let mut runlog = run_log::RunLog::open(pipeline_name, run_id, node_meta);
+        let mut on_event = |evt: PipelineEvent| {
+            if runlog.enabled() {
+                runlog.record(&evt);
+            }
+            user_on_event(evt);
         };
 
         on_event(PipelineEvent::Started {
@@ -630,6 +685,37 @@ impl DuckdbEngine {
                         continue;
                     }
                 }
+                // ctl.log / ctl.warn: emit a diagnostic line ({rows} -> the
+                // upstream count), then fall through to the pass-through SQL.
+                if let Some(RuntimeSpec::Log { level, message }) = stage.runtime.as_ref() {
+                    let rows = self.count_view(&db_path, stage.from.as_deref());
+                    let msg = message.replace("{rows}", &rows.to_string());
+                    on_event(PipelineEvent::Log {
+                        node_id: stage.node_id.clone(),
+                        level: level.clone(),
+                        message: msg,
+                    });
+                }
+                // ctl.die: fail the run when the condition holds against the
+                // upstream row count.
+                if let Some(RuntimeSpec::Die { message, condition }) = stage.runtime.as_ref() {
+                    let rows = self.count_view(&db_path, stage.from.as_deref());
+                    let fire = match condition.as_str() {
+                        "has-rows" => rows > 0,
+                        "no-rows" => rows == 0,
+                        _ => true, // "always"
+                    };
+                    if fire {
+                        let msg = message.replace("{rows}", &rows.to_string());
+                        on_event(PipelineEvent::Log {
+                            node_id: stage.node_id.clone(),
+                            level: "error".into(),
+                            message: msg.clone(),
+                        });
+                        result = Err(EngineError::Query(format!("ctl.die: {}", msg)));
+                        continue;
+                    }
+                }
                 result = match stage.runtime.as_ref() {
                     // HTTP sink (snk.webhook / snk.rest): materialize the
                     // upstream as JSON via DuckDB, then dispatch one request
@@ -744,9 +830,10 @@ impl DuckdbEngine {
                         self.run_text_search(&db_path, &secret_prefix, &stage.node_id, spec)
                     }
                     // Control-flow variants (RunJob / InstallFallback /
-                    // Iterate / Foreach) already ran their side effect above, so
-                    // they fall through here to the stage's pass-through SQL -
-                    // as does a plain SQL stage (None).
+                    // Iterate / Foreach / Log / Warn / non-firing Die) already
+                    // ran their side effect above, so they fall through here to
+                    // the stage's pass-through SQL - as does a plain SQL stage
+                    // (None).
                     _ => {
                         if stage.sink_mode.as_deref() == Some("error")
                             && stage
@@ -2784,6 +2871,13 @@ pub enum PipelineEvent {
         error: Option<String>,
     },
     Cancelled,
+    /// A diagnostic line from a ctl.log / ctl.warn node (and, on failure,
+    /// the ctl.die message). `level` is "info" / "warn" / "error".
+    Log {
+        node_id: String,
+        level: String,
+        message: String,
+    },
     Finished {
         status: String,
         duration_ms: u64,

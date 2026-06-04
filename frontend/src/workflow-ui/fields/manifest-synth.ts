@@ -377,6 +377,20 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         };
     }
 
+    // Log / Warn - pass-through diagnostic: one input, one output.
+    if (id === 'ctl.log' || id === 'ctl.warn') {
+        return { inputs: [MAIN_IN], outputs: [MAIN_OUT] };
+    }
+
+    // Die - one input; an optional output so a non-firing Die can still
+    // chain downstream (it passes rows through when its condition is false).
+    if (id === 'ctl.die') {
+        return {
+            inputs: [MAIN_IN],
+            outputs: [{ id: 'main', label: 'main', type: 'main', optional: true }],
+        };
+    }
+
     // Quality validators - pass + reject
     if (comp.kind === 'quality') {
         return {
@@ -3288,6 +3302,58 @@ function synthErrorControl(comp: ComponentDef): ComponentManifest {
     return synthGeneric(comp, 'upstream');
 }
 
+function synthLoggingControl(comp: ComponentDef): ComponentManifest {
+    const id = comp.id;
+    if (id === 'ctl.log' || id === 'ctl.warn') {
+        const isWarn = id === 'ctl.warn';
+        return base(comp, [
+            {
+                label: isWarn ? 'Warn' : 'Log message',
+                fields: [
+                    {
+                        key: 'message',
+                        label: 'Message',
+                        kind: 'text',
+                        required: true,
+                        placeholder: isWarn ? 'Unexpected {rows} rows' : 'Processed {rows} rows',
+                        description: 'Use {rows} for the upstream row count. Written to the workspace run log (logs/duckle.jsonl).',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'ctl.die') {
+        return base(comp, [
+            {
+                label: 'Die / Fail',
+                fields: [
+                    {
+                        key: 'message',
+                        label: 'Error message',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'Rejected rows present - failing the run',
+                        description: 'Use {rows} for the upstream row count.',
+                    },
+                    {
+                        key: 'condition',
+                        label: 'Fire when',
+                        kind: 'select',
+                        defaultValue: 'always',
+                        options: [
+                            { label: 'Always', value: 'always' },
+                            { label: 'Input has rows', value: 'has-rows' },
+                            { label: 'Input is empty', value: 'no-rows' },
+                        ],
+                        description: 'Always stop, or only when the input has / has no rows (guard a reject branch or missing data).',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    return synthGeneric(comp, 'upstream');
+}
+
 function synthQualityValidation(comp: ComponentDef): ComponentManifest {
     const id = comp.id;
     const onFail: Field = {
@@ -4171,6 +4237,7 @@ export function synthesizeManifest(componentId: string): ComponentManifest | und
     if (groupId === 'ctl.timing') return synthTimingControl(comp);
     if (groupId === 'ctl.pipeline') return synthPipelineControl(comp);
     if (groupId === 'ctl.errors') return synthErrorControl(comp);
+    if (groupId === 'ctl.logging') return synthLoggingControl(comp);
 
     // Quality
     if (groupId === 'qa.validation') return synthQualityValidation(comp);

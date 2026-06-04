@@ -236,9 +236,13 @@ impl Scheduler {
         let pipeline = load_pipeline(&workspace, &pipeline_id)?;
         let engine = self.engine.clone();
         let started = Utc::now();
-        let result = tokio::task::spawn_blocking(move || engine.execute_pipeline(&pipeline))
-            .await
-            .map_err(|e| e.to_string())?;
+        // Log scheduled runs under the pipeline id (the scheduler has no
+        // friendly name handy) so they still land in the per-pipeline log.
+        let log_name = pipeline_id.clone();
+        let result =
+            tokio::task::spawn_blocking(move || engine.execute_pipeline_named(&pipeline, &log_name))
+                .await
+                .map_err(|e| e.to_string())?;
         self.record_run(id, started, &result);
         Ok(result)
     }

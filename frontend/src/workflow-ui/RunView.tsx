@@ -46,6 +46,19 @@ export default function RunView({ runResult, isRunning, nodeLabels }: Props) {
             {runResult.error ? (
                 <pre className="run-error-body">{runResult.error}</pre>
             ) : null}
+            {runResult.messages && runResult.messages.length > 0 ? (
+                <ul className="run-messages">
+                    {runResult.messages.map((m, i) => (
+                        <li key={i} className={`run-message run-message-${m.level}`}>
+                            <span className="run-message-level">{m.level}</span>
+                            <span className="run-message-node">
+                                {nodeLabels[m.node_id] ?? m.node_id}
+                            </span>
+                            <span className="run-message-text">{m.message}</span>
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
             <table className="run-table">
                 <thead>
                     <tr>

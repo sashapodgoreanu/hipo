@@ -61,7 +61,7 @@
 - [Sinks](#sinks-58-available)
 - [Data quality](#data-quality-12-available)
 - [Custom code](#custom-code-7-available)
-- [Control flow](#control-flow-14-available)
+- [Control flow](#control-flow-19-available)
 - [Advanced settings](#advanced-settings-per-node)
 - [Engines](#engines)
 - [Configuration](#configuration)
@@ -289,7 +289,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Vector / AI databases** | pgvector, Pinecone (`/vectors/upsert`), Qdrant (`/points` PUT), Weaviate (`/v1/batch/objects`), Milvus (`/v1/vector/insert`) | Available |
 | **Vector / AI databases** | Chroma, LanceDB | Preview (need vendor SDK) |
 
-### Control flow (14 available)
+### Control flow (19 available)
 
 | Component | What it does |
 |---|---|
@@ -301,10 +301,15 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Checkpoint** | Pass rows through and also write a parquet snapshot to a path |
 | **Dead Letter Queue** | Terminal sink for rejected rows (JSON / CSV / Parquet) |
 | **Run Pipeline** | Inline-execute another pipeline file (`ctl.runpipeline`) |
+| **Run Job** | Call a child pipeline (picked from the workspace) passing parent context variables; chain several to build a Master Job (`ctl.runjob`) |
+| **Parallelize** | Run the downstream branches wired to its outputs concurrently; branches are unlimited (`ctl.parallelize`) |
 | **Iterate** | Run a sub-pipeline N times with `${ITER_INDEX}` substitution |
 | **For Each** | Run a sub-pipeline once per input row with `${ITER_ITEM_<FIELD>}` substitution |
 | **Try / Catch** | Install a fallback sub-pipeline if the wrapped stage fails |
 | **Retry** | Per-stage retry policy (configure on Advanced tab) |
+| **Log Message** | Emit an info log line (`{rows}` = upstream count), pass rows through (`ctl.log`) |
+| **Warn** | Emit a warning log line, pass rows through (`ctl.warn`) |
+| **Die / Fail** | Stop the run with a message: always, only when the input has rows, or only when empty (`ctl.die`) |
 | **Schedule** | Cron / interval / file-watch triggers via the orchestration crate |
 
 ### Advanced settings (per-node)
@@ -323,6 +328,7 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 | Capability | What it does |
 |---|---|
 | **Run feedback** | Streaming run events light nodes up stage by stage, with per-node row counts, real mid-query cancel, and run history. |
+| **Run logs** | Every run writes component-level NDJSON to `<workspace>/logs/<pipeline name>/runtime.log` (start/finish per stage, row counts, durations, `ctl.log` / `ctl.warn` / `ctl.die` messages). Tail it straight into Splunk or Dynatrace. |
 | **Schedules** | Cron, fixed-interval, and file-watch triggers, driven by an in-process scheduler. |
 | **Context variables** | Per-environment variables; bind any field to one via a Manual / Context dropdown, or reference `${var}` inline. Resolved at run time. |
 | **Cloud credentials** | Saved S3 / GCS / Azure connections become DuckDB SECRETs; cloud reads / writes go through `httpfs`. S3-compatible endpoints (MinIO / R2 / B2) supported via `ENDPOINT` + `URL_STYLE`. |

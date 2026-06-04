@@ -612,6 +612,15 @@ export const PALETTE: Category[] = [
                     ctl('deadletter', 'Dead Letter Queue', 'available', 'Terminal sink for rejected rows - parquet or csv at a configurable path; conventionally wired to an upstream node\'s reject port'),
                 ],
             },
+            {
+                id: 'ctl.logging',
+                label: 'Logging & Alerts',
+                components: [
+                    ctl('log', 'Log Message', 'available', 'Emit an info log line, then pass rows through unchanged. Use {rows} in the message for the upstream row count. Lines are written to the run log under the workspace logs/ folder (NDJSON) so Splunk / Dynatrace can ingest them.'),
+                    ctl('warn', 'Warn', 'available', 'Emit a warning log line (does not fail the run), then pass rows through. Same {rows} templating and workspace log output as Log Message.'),
+                    ctl('die', 'Die / Fail', 'available', 'Stop the pipeline with an error message. Condition controls when it fires: always, only when the input has rows (guard a reject branch), or only when the input is empty (guard missing data).'),
+                ],
+            },
         ],
     },
     {

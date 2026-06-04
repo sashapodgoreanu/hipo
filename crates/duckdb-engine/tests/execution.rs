@@ -8643,6 +8643,111 @@ fn runjob_resolves_bare_pipeline_id_via_workspace_env() {
 }
 
 #[test]
+fn run_log_writes_per_pipeline_ndjson() {
+    // With DUCKLE_LOG_DIR set, a run appends component-level NDJSON to
+    // <dir>/<pipeline name>/runtime.log, including the ctl.log line.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let logdir = tmp.path().join("logs");
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n2\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("lg", "ctl.log", json!({ "message": "saw {rows} rows" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "lg"), main_edge("e2", "lg", "k")]),
+    );
+    std::env::set_var("DUCKLE_LOG_DIR", &logdir);
+    let r = engine.execute_pipeline_named(&d, "Daily Load");
+    std::env::remove_var("DUCKLE_LOG_DIR");
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+
+    let log_file = logdir.join("Daily Load").join("runtime.log");
+    let body = std::fs::read_to_string(&log_file)
+        .unwrap_or_else(|e| panic!("run log {} not written: {}", log_file.display(), e));
+    assert!(body.contains("\"event\":\"run_started\""), "no run_started line: {}", body);
+    assert!(body.contains("\"event\":\"stage_finished\""), "no stage_finished line: {}", body);
+    assert!(body.contains("saw 2 rows"), "ctl.log message missing: {}", body);
+    assert!(body.contains("\"component\":\"ctl.log\""), "component name missing: {}", body);
+    // Every non-empty line must be valid JSON (NDJSON contract).
+    for line in body.lines().filter(|l| !l.trim().is_empty()) {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|e| panic!("invalid NDJSON line '{}': {}", line, e));
+    }
+}
+
+#[test]
+fn ctl_log_passes_through_rows() {
+    // ctl.log emits a diagnostic and passes the upstream through unchanged,
+    // so a downstream sink still gets every row.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n2\n3\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("lg", "ctl.log", json!({ "message": "processed {rows} rows" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "lg"), main_edge("e2", "lg", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "ctl.log run failed: {:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+#[test]
+fn ctl_die_always_fails_the_run() {
+    // ctl.die with the default "always" condition stops the run.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("die", "ctl.die", json!({ "message": "halt", "condition": "always" })),
+        ]),
+        json!([main_edge("e1", "s", "die")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "error", "ctl.die should have failed the run");
+    assert!(
+        r.error.as_deref().unwrap_or("").contains("halt"),
+        "die message not surfaced: {:?}",
+        r.error
+    );
+}
+
+#[test]
+fn ctl_die_has_rows_guards_a_reject_branch() {
+    // ctl.die with condition "has-rows" fires only when its input has rows.
+    // Here the validator's reject port carries the bad row, so Die fires.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,v\n1,10\n2,\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("nn", "qa.notnull", json!({ "columns": ["v"] })),
+            node("die", "ctl.die", json!({ "message": "rejects present", "condition": "has-rows" })),
+        ]),
+        json!([
+            main_edge("e1", "s", "nn"),
+            port_edge("e2", "nn", "reject", "die"),
+        ]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(
+        r.status, "error",
+        "ctl.die(has-rows) should fail when rejects exist: {:?}",
+        r
+    );
+}
+
+#[test]
 fn parallelize_runs_independent_branches() {
     // Parallelize: ctl.parallelize snapshots its upstream once, then runs the
     // two independent downstream branches concurrently (each in its own temp

@@ -88,6 +88,13 @@ pub enum RuntimeSpec {
     Iterate { path: String, count: u64 },
     Foreach(String),
     Parallelize(ParallelizeSpec),
+    /// ctl.log / ctl.warn: emit a log line at `level` ("info" / "warn")
+    /// then pass the upstream through. `{rows}` in the message is replaced
+    /// with the upstream row count.
+    Log { level: String, message: String },
+    /// ctl.die: fail the run with `message` when `condition` holds against
+    /// the upstream row count ("always" / "has-rows" / "no-rows").
+    Die { message: String, condition: String },
     Webhook(WebhookSpec),
     SnowflakeSink(SnowflakeSinkSpec),
     DatabricksSink(DatabricksSinkSpec),
@@ -422,6 +429,9 @@ fn build_stage(
     let mut iterate_pipeline_path: Option<String> = None;
     let mut iterate_count: Option<u64> = None;
     let mut foreach_pipeline_path: Option<String> = None;
+    // (level, message) for ctl.log / ctl.warn; (message, condition) for ctl.die.
+    let mut log_spec: Option<(String, String)> = None;
+    let mut die_spec: Option<(String, String)> = None;
     let mut snowflake_sink: Option<SnowflakeSinkSpec> = None;
     let mut databricks_sink: Option<DatabricksSinkSpec> = None;
     let mut snowflake_source: Option<SnowflakeSourceSpec> = None;
@@ -1303,6 +1313,45 @@ fn build_stage(
         let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
         let sql = passthrough_view_sql(&node.id, from_view);
         (sql, StageKind::View, Some(from_view.to_string()))
+    } else if component_id == "ctl.log" || component_id == "ctl.warn" {
+        // Emit a log line as a side effect, then pass the upstream through.
+        // The executor substitutes {rows} with the upstream count and emits
+        // a PipelineEvent::Log (also written to the workspace run log).
+        let message = string_prop(&props, "message")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| {
+                if component_id == "ctl.warn" { "warning".into() } else { "log".into() }
+            });
+        let level = if component_id == "ctl.warn" { "warn" } else { "info" };
+        log_spec = Some((level.to_string(), message));
+        // `from` carries the upstream view so the executor can count its rows.
+        let (sql, from) = match inputs.main() {
+            Some(from_view) => (
+                passthrough_view_sql(&node.id, from_view),
+                Some(from_view.to_string()),
+            ),
+            None => (passthrough_placeholder_sql(&node.id, "logged"), None),
+        };
+        (sql, StageKind::View, from)
+    } else if component_id == "ctl.die" {
+        // Fail the run with a message when the condition holds against the
+        // upstream row count. Pass-through otherwise so the node previews.
+        let message = string_prop(&props, "message")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "Pipeline stopped by Die".into());
+        let condition = string_prop(&props, "condition")
+            .or_else(|| string_prop(&props, "dieIf"))
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "always".into());
+        die_spec = Some((message, condition));
+        let (sql, from) = match inputs.main() {
+            Some(from_view) => (
+                passthrough_view_sql(&node.id, from_view),
+                Some(from_view.to_string()),
+            ),
+            None => (passthrough_placeholder_sql(&node.id, "die"), None),
+        };
+        (sql, StageKind::View, from)
     } else if component_id == "ctl.wait" {
         // Pass-through view. Engine sleeps wait_ms before running the SQL.
         // Form writes { duration: int, unit: 'milliseconds'|'seconds'|'minutes'|'hours' }.
@@ -2765,6 +2814,8 @@ fn build_stage(
         .or_else(|| iterate_pipeline_path
             .map(|path| RuntimeSpec::Iterate { path, count: iterate_count.unwrap_or(0) }))
         .or_else(|| foreach_pipeline_path.map(RuntimeSpec::Foreach))
+        .or_else(|| log_spec.map(|(level, message)| RuntimeSpec::Log { level, message }))
+        .or_else(|| die_spec.map(|(message, condition)| RuntimeSpec::Die { message, condition }))
         .or_else(|| webhook.map(RuntimeSpec::Webhook))
         .or_else(|| snowflake_sink.map(RuntimeSpec::SnowflakeSink))
         .or_else(|| databricks_sink.map(RuntimeSpec::DatabricksSink))

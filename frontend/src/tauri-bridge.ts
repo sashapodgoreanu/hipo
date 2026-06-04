@@ -43,12 +43,21 @@ export type NodePreview = {
     rows: Record<string, unknown>[];
 };
 
+export type RunLogLine = {
+    node_id: string;
+    level: 'info' | 'warn' | 'error';
+    message: string;
+};
+
 export type RunResult = {
     status: 'ok' | 'error' | 'cancelled';
     duration_ms: number;
     nodes: Record<string, NodeRunStatus>;
     preview: NodePreview[];
     error?: string;
+    /** Diagnostic lines from ctl.log / ctl.warn nodes, accumulated live
+     *  from streamed `log` events (not part of the engine's RunResult). */
+    messages?: RunLogLine[];
 };
 
 export type PipelineEvent =
@@ -64,6 +73,7 @@ export type PipelineEvent =
           error?: string;
       }
     | { type: 'cancelled' }
+    | { type: 'log'; node_id: string; level: 'info' | 'warn' | 'error'; message: string }
     | { type: 'finished'; status: 'ok' | 'error' | 'cancelled'; duration_ms: number };
 
 export async function runPipeline(
@@ -72,6 +82,7 @@ export async function runPipeline(
     onEvent?: (evt: PipelineEvent) => void,
     pipelineId?: string,
     workspacePath?: string | null,
+    pipelineName?: string | null,
 ): Promise<RunResult | null> {
     if (!isTauri()) return null;
     const channel = new Channel<PipelineEvent>();
@@ -81,6 +92,7 @@ export async function runPipeline(
             pipeline: { nodes, edges },
             onEvent: channel,
             pipelineId: pipelineId ?? null,
+            pipelineName: pipelineName ?? null,
             workspacePath: workspacePath ?? null,
         });
     } catch (err) {
@@ -102,6 +114,7 @@ export async function runPipelinePartial(
     onEvent?: (evt: PipelineEvent) => void,
     pipelineId?: string,
     workspacePath?: string | null,
+    pipelineName?: string | null,
 ): Promise<RunResult | null> {
     if (!isTauri()) return null;
     const channel = new Channel<PipelineEvent>();
@@ -112,6 +125,7 @@ export async function runPipelinePartial(
             targetNodeId,
             onEvent: channel,
             pipelineId: pipelineId ?? null,
+            pipelineName: pipelineName ?? null,
             workspacePath: workspacePath ?? null,
         });
     } catch (err) {

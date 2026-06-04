@@ -375,6 +375,27 @@ export default function App() {
         engine,
     ]);
 
+    // Ctrl/Cmd+S: flush the active pipeline + repo + metadata to disk now.
+    // Saves are normally debounced; this makes the familiar gesture work
+    // (and stops the webview's "save page" dialog from hijacking it).
+    useEffect(() => {
+        if (!isInTauri()) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return;
+            e.preventDefault();
+            if (!workspacePathState) return;
+            const ws = workspacePathState;
+            void (async () => {
+                const active = pipelineData[activeJobId];
+                if (active) await savePipelineFile(ws, activeJobId, active);
+                await saveRepository(ws, repo as unknown as Array<Record<string, unknown>>);
+                await saveMetadata(ws, { engine, jobs, activeJobId });
+            })();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [workspacePathState, pipelineData, activeJobId, repo, engine, jobs]);
+
     const handlePickedWorkspace = useCallback((path: string) => {
         setWorkspacePath(path);
         setWorkspacePathState(path);
@@ -718,7 +739,7 @@ export default function App() {
                       };
                 switch (evt.type) {
                     case 'started':
-                        return { status: 'ok', duration_ms: 0, nodes: {}, preview: [] };
+                        return { status: 'ok', duration_ms: 0, nodes: {}, preview: [], messages: [] };
                     case 'stage_started':
                         next.nodes[evt.node_id] = { status: 'running', kind: evt.kind };
                         break;
@@ -734,6 +755,12 @@ export default function App() {
                     case 'cancelled':
                         next.status = 'cancelled';
                         break;
+                    case 'log':
+                        next.messages = [
+                            ...(next.messages ?? []),
+                            { node_id: evt.node_id, level: evt.level, message: evt.message },
+                        ];
+                        break;
                     case 'finished':
                         next.status = evt.status;
                         next.duration_ms = evt.duration_ms;
@@ -748,7 +775,13 @@ export default function App() {
     const finishRun = useCallback(
         (start: number, result: RunResult | null) => {
             if (result) {
-                setRunResult(result);
+                // The engine's RunResult has no messages; carry over the
+                // log/warn lines accumulated from the streamed events.
+                setRunResult(prev =>
+                    prev?.messages?.length
+                        ? { ...result, messages: prev.messages }
+                        : result,
+                );
                 // Merge the previews back into each node's data so the
                 // Preview tab and the inline schema badge stay in sync
                 // with what just ran.
@@ -808,7 +841,8 @@ export default function App() {
         // Inline SQL routines + substitute ${context.var} before running;
         // the canvas keeps the editable, un-substituted values.
         const runNodes = resolveForRun(nodes, repo, workspacePathState);
-        void runPipeline(runNodes, edges, handleEvent, activeJobId, workspacePathState)
+        const pipelineName = repo.find(r => r.id === activeJobId)?.name ?? activeJobId;
+        void runPipeline(runNodes, edges, handleEvent, activeJobId, workspacePathState, pipelineName)
             .then(result => finishRun(start, result))
             .finally(() => setIsRunning(false));
     }, [nodes, edges, repo, handleEvent, finishRun, activeJobId, workspacePathState, validation.errorCount]);
@@ -823,6 +857,7 @@ export default function App() {
             setRunResult(null);
             const start = performance.now();
             const runNodes = resolveForRun(nodes, repo, workspacePathState);
+            const pipelineName = repo.find(r => r.id === activeJobId)?.name ?? activeJobId;
             void runPipelinePartial(
                 runNodes,
                 edges,
@@ -830,6 +865,7 @@ export default function App() {
                 handleEvent,
                 activeJobId,
                 workspacePathState,
+                pipelineName,
             )
                 .then(result => finishRun(start, result))
                 .finally(() => setIsRunning(false));
