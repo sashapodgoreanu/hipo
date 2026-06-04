@@ -8892,6 +8892,75 @@ fn incremental_load_advances_watermark_across_runs() {
 }
 
 #[test]
+fn ducklake_cdc_reads_incremental_changes() {
+    // src.ducklake.changes reads DuckLake's change feed since the last
+    // consumed snapshot (saved in workspace state). First run sees all
+    // changes; after a new commit, the second run sees only the new delta.
+    // Requires a DuckDB build with the `ducklake` extension (set
+    // DUCKLE_DUCKDB_BIN to v1.5+). The state lives under DUCKLE_WORKSPACE.
+    let engine = engine_or_skip!();
+    let bin = std::env::var("DUCKLE_DUCKDB_BIN").unwrap();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::env::set_var("DUCKLE_WORKSPACE", ws);
+    let cat = ws.join("lake.ducklake").to_string_lossy().replace('\\', "/");
+    let out = out_path(ws, "cdc1.csv");
+    let out2 = out_path(ws, "cdc2.csv");
+
+    let cli = |sql: &str| {
+        let o = std::process::Command::new(&bin)
+            .arg("-c")
+            .arg(sql)
+            .output()
+            .expect("run duckdb cli");
+        assert!(
+            o.status.success(),
+            "duckdb cli failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    let attach = format!(
+        "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS lake; ",
+        cat
+    );
+    // Build a catalog: create + two inserts (one commit).
+    cli(&format!(
+        "{}CREATE TABLE lake.t(id INT, name VARCHAR); INSERT INTO lake.t VALUES (1,'a'),(2,'b');",
+        attach
+    ));
+    if !std::path::Path::new(&cat).exists() {
+        std::env::remove_var("DUCKLE_WORKSPACE");
+        eprintln!("skipping: ducklake extension unavailable for this DuckDB build");
+        return;
+    }
+
+    let pipe = |o: &str| {
+        doc(
+            json!([
+                node("c", "src.ducklake.changes", json!({ "path": cat, "table": "t" })),
+                node("k", "snk.csv", json!({ "path": o, "hasHeader": true, "mode": "overwrite" })),
+            ]),
+            json!([main_edge("e", "c", "k")]),
+        )
+    };
+
+    // Run 1: all changes so far -> two insert rows.
+    let r1 = engine.execute_pipeline_named(&pipe(&out), "LakeCDC");
+    assert_eq!(r1.status, "ok", "cdc run1 failed: {:?}", r1.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2, "run1 should see 2 inserts");
+
+    // New commit, then run 2: only the new delta (id=3 insert).
+    cli(&format!("{}INSERT INTO lake.t VALUES (3,'c');", attach));
+    let r2 = engine.execute_pipeline_named(&pipe(&out2), "LakeCDC");
+    std::env::remove_var("DUCKLE_WORKSPACE");
+    assert_eq!(r2.status, "ok", "cdc run2 failed: {:?}", r2.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out2)), 1, "run2 should see only the new row");
+    let n = scalar_string(&format!("SELECT name FROM read_csv_auto('{}') WHERE id = 3", out2));
+    assert_eq!(n, "c", "run2 should carry the new id=3 change, got {}", n);
+}
+
+#[test]
 fn run_log_writes_per_pipeline_ndjson() {
     // With DUCKLE_LOG_DIR set, a run appends component-level NDJSON to
     // <dir>/<pipeline name>/runtime.log, including the ctl.log line.

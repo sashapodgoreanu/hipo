@@ -5378,6 +5378,105 @@ impl DuckdbEngine {
         ))
     }
 
+    /// src.ducklake.changes: DuckLake change-data-feed (CDC) source. ATTACHes
+    /// the catalog, reads the current snapshot id and the last consumed one
+    /// (workspace state), materializes `table_changes(table, last, current)`
+    /// (rows with snapshot_id > last, so the boundary snapshot isn't re-read),
+    /// and queues the new snapshot id to persist on run success.
+    pub(crate) fn run_ducklake_cdc(
+        &self,
+        db: &Path,
+        spec: &plan::DuckLakeCdcSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<(std::path::PathBuf, JsonValue)>,
+    ) -> Result<String, EngineError> {
+        let path = spec.path.replace('\\', "/").replace('\'', "''");
+        let attach = format!(
+            "INSTALL ducklake; LOAD ducklake; ATTACH 'ducklake:{}' AS duckle_src (READ_ONLY); ",
+            path
+        );
+        let node_q = plan::quote_ident(&spec.node_id);
+        // Table arg for table_changes() is a string; qualify with the schema
+        // when one is configured (DuckLake defaults to `main`).
+        let table_arg = match &spec.schema {
+            Some(s) if !s.is_empty() => format!("{}.{}", s, spec.table),
+            _ => spec.table.clone(),
+        }
+        .replace('\'', "''");
+
+        // Current snapshot id from the catalog.
+        let cur_rows = self.run_rows(
+            Some(db),
+            &format!("{}SELECT max(snapshot_id) AS cur FROM duckle_src.snapshots();", attach),
+        )?;
+        let current = cur_rows
+            .into_iter()
+            .next()
+            .and_then(|r| r.get("cur").cloned())
+            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok())))
+            .unwrap_or(0);
+
+        let state_path = incremental_state_path(pipeline_name, &spec.node_id);
+        let last = state_path
+            .as_ref()
+            .and_then(read_snapshot_state)
+            .unwrap_or(spec.initial_snapshot);
+
+        let type_filter = if spec.inserts_only {
+            " AND change_type = 'insert'"
+        } else {
+            ""
+        };
+
+        if current == 0 || last >= current {
+            // No snapshots yet, or nothing new: emit an empty result that still
+            // carries the change-feed schema when the catalog has snapshots.
+            let empty_sql = if current == 0 {
+                format!("CREATE OR REPLACE TABLE {node} AS SELECT NULL::BIGINT AS snapshot_id, NULL::VARCHAR AS change_type LIMIT 0;", node = node_q)
+            } else {
+                format!(
+                    "{attach}CREATE OR REPLACE TABLE {node} AS SELECT * FROM duckle_src.table_changes('{tbl}', {cur}, {cur}) WHERE 1=0;",
+                    attach = attach, node = node_q, tbl = table_arg, cur = current,
+                )
+            };
+            self.run(Some(db), &empty_sql, false)?;
+            return Ok(format!(
+                "ducklake-cdc: no new changes (snapshot {} -> {})",
+                last, current
+            ));
+        }
+
+        let materialize = format!(
+            "{attach}CREATE OR REPLACE TABLE {node} AS SELECT * FROM duckle_src.table_changes('{tbl}', {last}, {cur}) WHERE snapshot_id > {last}{type_filter};",
+            attach = attach,
+            node = node_q,
+            tbl = table_arg,
+            last = last,
+            cur = current,
+            type_filter = type_filter,
+        );
+        self.run(Some(db), &materialize, false)?;
+
+        let rows = self
+            .run_rows(
+                Some(db),
+                &format!("SELECT count(*) AS c FROM {};", node_q),
+            )?
+            .into_iter()
+            .next()
+            .and_then(|r| r.get("c").cloned())
+            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok())))
+            .unwrap_or(0);
+
+        if let Some(path) = state_path {
+            pending.push((path, serde_json::json!({ "snapshot_id": current })));
+        }
+        Ok(format!(
+            "ducklake-cdc: {} change row(s) from snapshot {} to {}",
+            rows, last, current
+        ))
+    }
+
     /// Best-effort type of a column from a sample non-null row, e.g.
     /// "BIGINT" / "TIMESTAMP". None when the upstream has no rows to probe.
     fn probe_column_type(&self, db: &Path, up_q: &str, col_q: &str) -> Option<String> {
@@ -5859,6 +5958,15 @@ fn read_incremental_state(path: &std::path::PathBuf) -> Option<(String, String)>
         .unwrap_or("VARCHAR")
         .to_string();
     Some((value, ty))
+}
+
+/// Read a saved DuckLake snapshot id from CDC state. Missing / unreadable
+/// reads as "no prior snapshot".
+fn read_snapshot_state(path: &std::path::PathBuf) -> Option<u64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: JsonValue = serde_json::from_str(&text).ok()?;
+    v.get("snapshot_id")
+        .and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse::<u64>().ok())))
 }
 
 /// Keep a DuckDB type name safe to splice into a CAST. typeof() output is

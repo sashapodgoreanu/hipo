@@ -97,6 +97,8 @@ pub enum RuntimeSpec {
     Die { message: String, condition: String },
     /// xf.incremental: watermark-based incremental load (see IncrementalSpec).
     Incremental(IncrementalSpec),
+    /// src.ducklake.changes: DuckLake change-data-feed source (see DuckLakeCdcSpec).
+    DuckLakeCdc(DuckLakeCdcSpec),
     Webhook(WebhookSpec),
     SnowflakeSink(SnowflakeSinkSpec),
     DatabricksSink(DatabricksSinkSpec),
@@ -446,6 +448,7 @@ fn build_stage(
     let mut log_spec: Option<(String, String)> = None;
     let mut die_spec: Option<(String, String)> = None;
     let mut incremental: Option<IncrementalSpec> = None;
+    let mut ducklake_cdc: Option<DuckLakeCdcSpec> = None;
     let mut snowflake_sink: Option<SnowflakeSinkSpec> = None;
     let mut databricks_sink: Option<DatabricksSinkSpec> = None;
     let mut snowflake_source: Option<SnowflakeSourceSpec> = None;
@@ -1369,6 +1372,35 @@ fn build_stage(
             None => (passthrough_placeholder_sql(&node.id, "die"), None),
         };
         (sql, StageKind::View, from)
+    } else if component_id == "src.ducklake.changes" || component_id == "xf.ducklake.cdc" {
+        // DuckLake change-data-feed (CDC) source. The executor ATTACHes the
+        // catalog, reads the last consumed snapshot id from workspace state,
+        // materializes table_changes(table, last, current), and persists the
+        // new snapshot id on run success. Placeholder SQL; the RuntimeSpec arm
+        // replaces it.
+        let path = string_prop(&props, "path")
+            .or_else(|| string_prop(&props, "catalog"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: catalog path required", component_id))
+            })?;
+        let table = string_prop(&props, "table")
+            .or_else(|| string_prop(&props, "tableName"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: table required", component_id)))?;
+        ducklake_cdc = Some(DuckLakeCdcSpec {
+            node_id: node.id.clone(),
+            path,
+            schema: string_prop(&props, "schema").filter(|s| !s.is_empty()),
+            table,
+            initial_snapshot: props.get("initialSnapshot").and_then(|v| v.as_u64()).unwrap_or(0),
+            inserts_only: props.get("insertsOnly").and_then(|v| v.as_bool()).unwrap_or(false),
+        });
+        (
+            passthrough_placeholder_sql(&node.id, "ducklake-cdc"),
+            StageKind::View,
+            None,
+        )
     } else if component_id == "xf.incremental" {
         // Watermark incremental load. The executor reads the saved high-water
         // mark, materializes only rows past it, and persists the new mark on
@@ -2857,6 +2889,7 @@ fn build_stage(
         .or_else(|| log_spec.map(|(level, message)| RuntimeSpec::Log { level, message }))
         .or_else(|| die_spec.map(|(message, condition)| RuntimeSpec::Die { message, condition }))
         .or_else(|| incremental.map(RuntimeSpec::Incremental))
+        .or_else(|| ducklake_cdc.map(RuntimeSpec::DuckLakeCdc))
         .or_else(|| webhook.map(RuntimeSpec::Webhook))
         .or_else(|| snowflake_sink.map(RuntimeSpec::SnowflakeSink))
         .or_else(|| databricks_sink.map(RuntimeSpec::DatabricksSink))

@@ -841,6 +841,14 @@ impl DuckdbEngine {
                         pipeline_name,
                         &mut pending_watermarks,
                     ),
+                    // DuckLake change-data-feed source: materialize table_changes
+                    // since the saved snapshot; persist the new snapshot on success.
+                    Some(RuntimeSpec::DuckLakeCdc(spec)) => self.run_ducklake_cdc(
+                        &db_path,
+                        spec,
+                        pipeline_name,
+                        &mut pending_watermarks,
+                    ),
                     // Control-flow variants (RunJob / InstallFallback /
                     // Iterate / Foreach / Log / Warn / non-firing Die) already
                     // ran their side effect above, so they fall through here to

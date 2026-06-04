@@ -31,6 +31,26 @@ pub struct IncrementalSpec {
     pub initial: Option<String>,
 }
 
+/// src.ducklake.changes: DuckLake change-data-feed (CDC) source. ATTACHes a
+/// DuckLake catalog, reads the last consumed snapshot id from workspace state
+/// (same mechanism as xf.incremental), and materializes
+/// `table_changes(table, last, current)` - the row-level insert / delete /
+/// update_preimage / update_postimage deltas, with the change_type column
+/// preserved. The new snapshot id is persisted only on run success.
+#[derive(Debug, Clone)]
+pub struct DuckLakeCdcSpec {
+    pub node_id: String,
+    /// DuckLake catalog path (a local `.ducklake` file or a metadata DB DSN).
+    pub path: String,
+    /// DuckLake schema; default "main".
+    pub schema: Option<String>,
+    pub table: String,
+    /// Snapshot id to start from on the very first run (0 = from the start).
+    pub initial_snapshot: u64,
+    /// Keep only `insert` change rows when true; otherwise all change types.
+    pub inserts_only: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextSearchSpec {
     pub from_view: String,
