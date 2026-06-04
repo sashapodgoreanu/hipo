@@ -3977,7 +3977,9 @@ fn snk_snowflake_jwt_auth_signs_request() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        // Two requests now: the auto-create CREATE TABLE, then the INSERT.
+        // Both carry the same JWT auth, so asserting on the first is fine.
+        for stream in listener.incoming().take(2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -4073,7 +4075,8 @@ fn snk_snowflake_posts_multirow_insert() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        // Two requests now: the auto-create CREATE TABLE, then the INSERT.
+        for stream in listener.incoming().take(2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -4123,9 +4126,19 @@ fn snk_snowflake_posts_multirow_insert() {
     ));
     assert_eq!(r.status, "ok", "snowflake sink failed: {:?}", r.error);
 
-    let req = rx.recv_timeout(Duration::from_secs(5)).expect("expected 1 Snowflake request");
+    let req1 = rx.recv_timeout(Duration::from_secs(5)).expect("expected create request");
+    let req2 = rx.recv_timeout(Duration::from_secs(5)).expect("expected insert request");
     let _ = handle.join();
-    let body = String::from_utf8_lossy(&req).to_string();
+    let body = format!(
+        "{}{}",
+        String::from_utf8_lossy(&req1),
+        String::from_utf8_lossy(&req2)
+    );
+    assert!(
+        body.contains(r#"CREATE TABLE IF NOT EXISTS \"MYDB\".\"PUBLIC\".\"USERS\""#),
+        "expected auto-create: {}",
+        body
+    );
     assert!(body.contains("Bearer secret-pat"), "expected Bearer auth: {}", body);
     // The SQL is embedded inside a JSON string, so the identifiers'
     // double quotes are backslash-escaped: \"MYDB\".\"PUBLIC\".\"USERS\".
