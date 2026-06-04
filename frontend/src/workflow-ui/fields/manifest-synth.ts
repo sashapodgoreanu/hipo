@@ -76,6 +76,29 @@ const writeModeField = (): Field => ({
     ],
 });
 
+// Write-mode + conflict-columns for driver DB sinks that support MERGE upsert
+// (SQL Server, Oracle, Snowflake). Upsert MERGEs on the conflict columns.
+const upsertModeFields = (): Field[] => [
+    {
+        key: 'mode',
+        label: 'Write mode',
+        kind: 'select',
+        defaultValue: 'overwrite',
+        options: [
+            { label: 'Overwrite (create / append)', value: 'overwrite' },
+            { label: 'Append (insert)', value: 'append' },
+            { label: 'Upsert (MERGE on key)', value: 'upsert' },
+        ],
+        description: 'Upsert runs a MERGE: update rows that match the conflict columns, insert the rest.',
+    },
+    {
+        key: 'conflictColumns',
+        label: 'Conflict columns (upsert key)',
+        kind: 'columns',
+        description: 'Key columns to match on for Upsert / MERGE. Required when Write mode is Upsert.',
+    },
+];
+
 const compressionField = (): Field => ({
     key: 'compression',
     label: 'Compression',
@@ -910,6 +933,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                     { key: 'schema', label: 'Schema', kind: 'text' },
                     { key: 'tableName', label: 'Table', kind: 'text', required: true },
                     { key: 'batchSize', label: 'Insert batch size', kind: 'integer', defaultValue: 1000 },
+                    ...upsertModeFields(),
                 ],
             },
             {
@@ -945,6 +969,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                     { key: 'schema', label: 'Schema', kind: 'text', defaultValue: 'dbo' },
                     { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'orders' },
                     { key: 'batchSize', label: 'Insert batch size (max 1000)', kind: 'integer', defaultValue: 1000 },
+                    ...upsertModeFields(),
                 ],
             },
         ], 'upstream');
@@ -1203,6 +1228,7 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                         defaultValue: 1000,
                         description: 'Rows per multi-row INSERT. Larger = fewer round-trips, but the SQL API has a body-size limit (~16 MB).',
                     },
+                    ...upsertModeFields(),
                 ],
             },
         ], 'upstream');
