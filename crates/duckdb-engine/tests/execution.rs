@@ -8,6 +8,17 @@ use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
+use std::sync::Mutex;
+
+/// Serializes tests that mutate process-global env vars (DUCKLE_WORKSPACE /
+/// DUCKLE_LOG_DIR). `cargo test` runs tests in parallel, so without this two
+/// such tests would clobber each other's env mid-run. Poison is ignored so a
+/// failing test doesn't cascade into the others.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// These tests drive the real DuckDB CLI. Point DUCKLE_DUCKDB_BIN at a
 /// `duckdb` binary to run them; otherwise they soft-skip so `cargo test`
@@ -8599,6 +8610,7 @@ fn runjob_resolves_bare_pipeline_id_via_workspace_env() {
     // (not a path). Headless runs (scheduler) execute the saved file
     // directly, so the engine must resolve a bare id against
     // $DUCKLE_WORKSPACE/pipelines/<id>.json. This proves that resolution.
+    let _env = env_guard();
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path();
@@ -8647,6 +8659,7 @@ fn incremental_load_advances_watermark_across_runs() {
     // xf.incremental loads only rows past the saved high-water mark. First
     // run loads everything and saves MAX(id); after more rows arrive, the
     // second run loads only the new ones. State persists under the workspace.
+    let _env = env_guard();
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path();
@@ -8690,6 +8703,7 @@ fn incremental_load_advances_watermark_across_runs() {
 fn run_log_writes_per_pipeline_ndjson() {
     // With DUCKLE_LOG_DIR set, a run appends component-level NDJSON to
     // <dir>/<pipeline name>/runtime.log, including the ctl.log line.
+    let _env = env_guard();
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
     let logdir = tmp.path().join("logs");
