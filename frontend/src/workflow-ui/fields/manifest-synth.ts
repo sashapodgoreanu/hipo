@@ -752,6 +752,27 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
 }
 
 function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'src.ducklake.changes') {
+        // DuckLake change-data-feed: reads table_changes() incrementally,
+        // tracking the consumed snapshot in workspace state.
+        return base(comp, [
+            {
+                label: 'Catalog',
+                fields: [
+                    { key: 'path', label: 'Catalog path', kind: 'text', required: true, placeholder: '/var/lakes/catalog.ducklake', description: 'Path to the DuckLake catalog (a .ducklake file or metadata DB DSN).' },
+                ],
+            },
+            {
+                label: 'Change feed',
+                fields: [
+                    { key: 'schema', label: 'Schema', kind: 'text', defaultValue: 'main' },
+                    { key: 'table', label: 'Table', kind: 'text', required: true, placeholder: 'orders' },
+                    { key: 'insertsOnly', label: 'Inserts only', kind: 'bool', defaultValue: false, description: 'Keep only insert changes (drop updates/deletes).' },
+                    { key: 'initialSnapshot', label: 'Initial snapshot (first run)', kind: 'integer', defaultValue: 0, description: 'Snapshot id to start from before any state is saved; 0 = from the beginning.' },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.ducklake') {
         // DuckLake attaches a catalog (path) and then names a specific
         // table inside it.

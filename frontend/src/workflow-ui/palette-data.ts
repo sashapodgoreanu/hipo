@@ -105,6 +105,7 @@ export const PALETTE: Category[] = [
                     src('iceberg', 'Apache Iceberg', 'available', 'Read Iceberg tables via DuckDB iceberg_scan'),
                     src('delta', 'Delta Lake', 'available', 'Read Delta Lake tables via DuckDB delta_scan'),
                     src('ducklake', 'DuckLake', 'available', 'Read tables from a DuckLake catalog (DuckDB native lakehouse)'),
+                    src('ducklake.changes', 'DuckLake CDC', 'available', 'Change-data-feed source: reads table_changes() since the last consumed snapshot (saved in workspace state), emitting row-level insert / delete / update_preimage / update_postimage with a change_type column. True incremental CDC for DuckLake-managed tables.'),
                 ],
             },
             {
