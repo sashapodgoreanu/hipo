@@ -81,6 +81,7 @@ import type {
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData } from './pipeline-types';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
+import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
 
 type RuntimeState = 'connecting' | 'ready' | 'offline';
@@ -468,6 +469,22 @@ export default function App() {
     const markDirty = useCallback(() => {
         setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: true } : j)));
     }, [activeJobId]);
+
+    // Undo/redo: restore a whole {nodes, edges} snapshot for the active
+    // pipeline. The hook records history off `activePipeline` changes and
+    // drives Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / Ctrl+R.
+    const applyPipelineSnapshot = useCallback(
+        (snapshot: CanvasSnapshot) => {
+            setPipelineData(d => ({ ...d, [activeJobId]: snapshot as unknown as PipelineState }));
+            markDirty();
+        },
+        [activeJobId, markDirty],
+    );
+    const { undo, redo } = useUndoRedo(
+        activeJobId,
+        activePipeline as unknown as CanvasSnapshot,
+        applyPipelineSnapshot,
+    );
 
     const handleNodesChange = useCallback(
         (changes: NodeChange[]) => {
@@ -1156,11 +1173,17 @@ export default function App() {
                 case 'select-all':
                     setNodes(ns => ns.map(n => ({ ...n, selected: true })));
                     break;
+                case 'undo':
+                    undo();
+                    break;
+                case 'redo':
+                    redo();
+                    break;
                 case 'paste':
                     break;
             }
         },
-        [handleAutoLayout, setNodes],
+        [handleAutoLayout, setNodes, undo, redo],
     );
 
     // Repository handlers ---------------------------------------------------

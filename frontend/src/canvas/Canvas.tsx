@@ -25,8 +25,10 @@ import {
     Pencil,
     Play,
     Power,
+    Redo2,
     Sparkles,
     Trash2,
+    Undo2,
 } from 'lucide-react';
 import DuckleNode from './nodes/DuckleNode';
 import DuckleEdge from './DuckleEdge';
@@ -69,7 +71,7 @@ export type NodeAction =
     | 'copy-id'
     | 'delete';
 
-export type PaneAction = 'paste' | 'select-all' | 'auto-layout' | 'fit-view';
+export type PaneAction = 'paste' | 'select-all' | 'auto-layout' | 'fit-view' | 'undo' | 'redo';
 
 type Props = {
     nodes: Node<DuckleNodeData>[];
@@ -359,6 +361,23 @@ function CanvasInner({
         (e: React.MouseEvent | MouseEvent) => {
             const items: MenuItem[] = [
                 { kind: 'header', key: 'header', label: 'Canvas' },
+                {
+                    kind: 'item',
+                    key: 'undo',
+                    label: 'Undo',
+                    icon: <Undo2 size={ICON_SIZE} />,
+                    shortcut: 'Ctrl+Z',
+                    onClick: () => onPaneAction('undo'),
+                },
+                {
+                    kind: 'item',
+                    key: 'redo',
+                    label: 'Redo',
+                    icon: <Redo2 size={ICON_SIZE} />,
+                    shortcut: 'Ctrl+Y',
+                    onClick: () => onPaneAction('redo'),
+                },
+                { kind: 'separator', key: 's0' },
                 {
                     kind: 'item',
                     key: 'fit',
