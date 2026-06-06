@@ -2760,11 +2760,17 @@ fn build_stage(
         });
         (String::new(), StageKind::View, None)
     } else {
+        // Is the node's reject port actually read downstream? Computed before
+        // the body so CSV/TSV sources can switch to the tolerant pass/reject
+        // split when (and only when) the reject port is wired (issue #15).
+        let reject_ref = output_table_ref(&node.id, Some("reject"));
+        let reject_consumers = consumer_count.get(&reject_ref).copied().unwrap_or(0);
         let body = build_view_sql(
             component_id,
             &props,
             inputs,
             node.data.schema.as_deref(),
+            reject_consumers >= 1,
         ).map_err(|e| {
             EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
         })?;
@@ -2785,15 +2791,13 @@ fn build_stage(
         // runtime helpers and the planner stage stays empty.
         let main_ref = output_table_ref(&node.id, None);
         let main_consumers = consumer_count.get(&main_ref).copied().unwrap_or(0);
-        // Only build the reject split when a downstream node actually reads
-        // the reject port. An unwired reject port (the common plain-Filter
-        // case) otherwise materialized the entire rejected set to disk for
-        // nothing: on a 10M-row -> 2M-pass filter that wrote the 8M rejected
-        // rows to a temp table, which dominated the stage's runtime (~12s).
-        let reject_ref = output_table_ref(&node.id, Some("reject"));
-        let reject_consumers = consumer_count.get(&reject_ref).copied().unwrap_or(0);
+        // reject_consumers computed above (drives both the CSV split body and
+        // whether we materialize the reject relation here). An unwired reject
+        // port (the common plain-Filter case) skips the split entirely: it
+        // otherwise materialized the whole rejected set to disk for nothing
+        // (a 10M -> 2M filter wrote 8M rejected rows, ~12s of pure waste).
         let reject_sql = if reject_consumers >= 1 {
-            build_reject_sql(component_id, &props, inputs).map_err(|e| {
+            build_reject_sql(component_id, &props, inputs, node.data.schema.as_deref()).map_err(|e| {
                 EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
             })?
         } else {

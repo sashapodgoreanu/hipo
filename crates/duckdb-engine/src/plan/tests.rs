@@ -1611,6 +1611,50 @@
     }
 
     #[test]
+    fn csv_reject_and_split_partition_bad_rows() {
+        // issue #15: a declared DATE column must yield a reject relation of the
+        // rows that fail to parse (raw text), and a tolerant split main that
+        // drops exactly those rows. The two predicates must be complementary.
+        let cols = vec![duckle_metadata::Column {
+            name: "order_date".into(),
+            data_type: duckle_metadata::DataType::Date,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        }];
+        let props = serde_json::json!({"path": "orders.csv", "hasHeader": true});
+
+        let reject = build_csv_reject_sql(&props, Some(&cols), false)
+            .expect("a declared DATE column must produce a reject relation");
+        // raw text read + present-but-unparseable predicate
+        assert!(reject.contains("'order_date': 'VARCHAR'"), "reject reads raw text: {reject}");
+        assert!(
+            reject.contains("try_cast(\"order_date\" AS DATE) IS NULL")
+                && reject.contains("\"order_date\" <> ''"),
+            "reject keeps only present-but-unparseable values: {reject}"
+        );
+
+        let split = build_csv_source_split(&props, Some(&cols), false);
+        // tolerant: casts back to the declared type and drops the failing rows
+        assert!(
+            split.contains("try_cast(\"order_date\" AS DATE) AS \"order_date\"")
+                && split.contains("WHERE NOT ("),
+            "split main casts + excludes the rejected rows: {split}"
+        );
+
+        // No declared schema (or all-text schema) => nothing to reject.
+        assert!(build_csv_reject_sql(&props, None, false).is_none());
+        let text_cols = vec![duckle_metadata::Column {
+            name: "name".into(),
+            data_type: duckle_metadata::DataType::String,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        }];
+        assert!(build_csv_reject_sql(&props, Some(&text_cols), false).is_none());
+    }
+
+    #[test]
     fn cloud_csv_sink_honors_options_but_not_partitionby() {
         // audit B1: a cloud CSV sink must honor delimiter/nullValue (ignored
         // before), but must NOT emit PARTITION_BY (unvalidated over httpfs).

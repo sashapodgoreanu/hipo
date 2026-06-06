@@ -33,13 +33,28 @@ pub(crate) fn build_view_sql(
     props: &JsonValue,
     inputs: &NodeInputs,
     declared: Option<&[duckle_metadata::Column]>,
+    reject_wired: bool,
 ) -> Result<String, String> {
     match component_id {
         // Sources - declared schema is consulted only by formats that
         // accept a `columns = {...}` override (CSV / TSV today). Other
         // sources auto-infer and ignore `declared`.
-        "src.csv" => Ok(build_csv_source(props, declared)),
-        "src.tsv" => Ok(build_tsv_source(props, declared)),
+        //
+        // When the reject port is wired (issue #15) the CSV/TSV main read
+        // switches to a tolerant split: declared columns are read as raw text,
+        // cast back to their type, and rows that fail parsing are dropped from
+        // main (they flow to the reject relation instead) rather than aborting
+        // the read. With the reject port unwired the SQL is unchanged.
+        "src.csv" => Ok(if reject_wired {
+            build_csv_source_split(props, declared, false)
+        } else {
+            build_csv_source(props, declared)
+        }),
+        "src.tsv" => Ok(if reject_wired {
+            build_csv_source_split(props, declared, true)
+        } else {
+            build_tsv_source(props, declared)
+        }),
         "src.parquet" => Ok(build_parquet_source(props)),
         "src.json" | "src.jsonl" => Ok(build_json_source(props)),
         "src.sqlite" => Ok(build_sqlite_source(props)),
@@ -1920,8 +1935,13 @@ pub(crate) fn build_reject_sql(
     component_id: &str,
     props: &JsonValue,
     inputs: &NodeInputs,
+    declared: Option<&[duckle_metadata::Column]>,
 ) -> Result<Option<String>, String> {
     match component_id {
+        // CSV / TSV sources: rows whose raw text fails to parse into a
+        // declared column type, kept as raw text for review (issue #15).
+        "src.csv" => Ok(build_csv_reject_sql(props, declared, false)),
+        "src.tsv" => Ok(build_csv_reject_sql(props, declared, true)),
         "xf.filter" => {
             let upstream = inputs.main().ok_or_else(|| "filter: missing main input".to_string())?;
             let predicate = filter_predicate_sql(props.get("predicate")).unwrap_or_default();
@@ -2711,7 +2731,12 @@ pub(crate) fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> 
 
 // ---- Sources ------------------------------------------------------------
 
-pub(crate) fn build_csv_source(props: &JsonValue, declared: Option<&[duckle_metadata::Column]>) -> String {
+/// The read_csv_auto arguments common to the main read and the reject read:
+/// path + header / delimiter / quote / null-sentinel / skip / encoding.
+/// The typed bits (`dateformat`, `types`, `all_varchar`) are appended by the
+/// caller, since the main read types columns and the reject read keeps them
+/// raw text.
+fn csv_read_args_base(props: &JsonValue) -> Vec<String> {
     let path = string_prop(props, "path").unwrap_or_default();
     let has_header = props
         .get("hasHeader")
@@ -2739,6 +2764,11 @@ pub(crate) fn build_csv_source(props: &JsonValue, declared: Option<&[duckle_meta
     if let Some(enc) = string_prop(props, "encoding").filter(|s| !s.is_empty()) {
         args.push(format!("encoding='{}'", sql_escape(&enc)));
     }
+    args
+}
+
+pub(crate) fn build_csv_source(props: &JsonValue, declared: Option<&[duckle_metadata::Column]>) -> String {
+    let mut args = csv_read_args_base(props);
     // Explicit date / timestamp parsing format. DuckDB's strptime tokens
     // (%d, %m, %Y, etc.) - the most common pain point is dd/mm/yyyy which
     // DuckDB otherwise mis-detects as mm/dd/yyyy. Setting this keeps the
@@ -2846,6 +2876,130 @@ pub(crate) fn build_tsv_source(props: &JsonValue, declared: Option<&[duckle_meta
         );
     }
     build_csv_source(&p, declared)
+}
+
+/// For a declared CSV column that is NOT text, derive the two SQL fragments the
+/// reject feature (issue #15) needs, reading the column as raw VARCHAR:
+///   - a parse-FAIL predicate: the value is present but unparseable into the
+///     declared type (a genuine empty / null-sentinel is NOT a failure), and
+///   - a cast expression for `SELECT * REPLACE (...)` that turns the raw text
+///     back into the declared type (NULL on a bad value).
+/// Returns None for text columns (they can never fail to parse).
+fn csv_typed_col_exprs(c: &duckle_metadata::Column) -> Option<(String, String)> {
+    use duckle_metadata::DataType;
+    let ty = data_type_to_duckdb_sql(&c.data_type);
+    if ty == "VARCHAR" {
+        return None;
+    }
+    let id = quote_ident(&c.name);
+    let fmt = c.format.as_deref().filter(|s| !s.is_empty());
+    let datey = matches!(c.data_type, DataType::Date | DataType::Timestamp);
+    let (parse_expr, cast_expr) = match (fmt, datey) {
+        (Some(fmt), true) => {
+            let cast = if matches!(c.data_type, DataType::Date) { "DATE" } else { "TIMESTAMP" };
+            (
+                format!("try_strptime({id}, '{f}')", id = id, f = sql_escape(fmt)),
+                format!("try_strptime({id}, '{f}')::{c} AS {id}", id = id, f = sql_escape(fmt), c = cast),
+            )
+        }
+        _ => (
+            format!("try_cast({id} AS {ty})", id = id, ty = ty),
+            format!("try_cast({id} AS {ty}) AS {id}", id = id, ty = ty),
+        ),
+    };
+    let fail = format!(
+        "({id} IS NOT NULL AND {id} <> '' AND {p} IS NULL)",
+        id = id,
+        p = parse_expr
+    );
+    Some((fail, cast_expr))
+}
+
+/// read_csv_auto args for the reject / split path: base args + force every
+/// declared column to raw VARCHAR so a bad value never aborts the read. TSV
+/// forces a tab delimiter, matching build_tsv_source.
+fn csv_raw_args(props: &JsonValue, declared: &[duckle_metadata::Column], is_tsv: bool) -> Vec<String> {
+    let owned;
+    let p: &JsonValue = if is_tsv {
+        let mut c = props.clone();
+        if let Some(obj) = c.as_object_mut() {
+            obj.insert("delimiter".into(), JsonValue::String("\t".into()));
+        }
+        owned = c;
+        &owned
+    } else {
+        props
+    };
+    let mut args = csv_read_args_base(p);
+    let pairs: Vec<String> = declared
+        .iter()
+        .map(|c| format!("'{}': 'VARCHAR'", sql_escape(&c.name)))
+        .collect();
+    args.push(format!("types = {{{}}}", pairs.join(", ")));
+    args
+}
+
+/// Reject relation for src.csv / src.tsv (issue #15): rows whose raw text
+/// cannot be parsed into a declared column type (e.g. an invalid date), emitted
+/// as raw text so they can be written straight to a CSV for review without
+/// re-triggering the parse that rejected them. Returns None when nothing could
+/// be rejected (no declared schema, or every declared column is text), so the
+/// planner skips materializing an always-empty reject relation.
+pub(crate) fn build_csv_reject_sql(
+    props: &JsonValue,
+    declared: Option<&[duckle_metadata::Column]>,
+    is_tsv: bool,
+) -> Option<String> {
+    let cols = declared.filter(|c| !c.is_empty())?;
+    let fails: Vec<String> = cols.iter().filter_map(|c| csv_typed_col_exprs(c).map(|(f, _)| f)).collect();
+    if fails.is_empty() {
+        return None;
+    }
+    let args = csv_raw_args(props, cols, is_tsv);
+    Some(format!(
+        "SELECT * FROM read_csv_auto({}) WHERE {}",
+        args.join(", "),
+        fails.join(" OR ")
+    ))
+}
+
+/// Main body for a CSV / TSV source whose reject port IS wired: read declared
+/// columns as raw text, cast them back to their declared types, and keep only
+/// the rows that parse cleanly. The rejected rows go to the complementary
+/// `build_csv_reject_sql`. Falls back to the normal `build_csv_source` when the
+/// declared schema has no typed columns (nothing to split on), so the SQL is
+/// identical to today in that case.
+pub(crate) fn build_csv_source_split(
+    props: &JsonValue,
+    declared: Option<&[duckle_metadata::Column]>,
+    is_tsv: bool,
+) -> String {
+    let cols = match declared.filter(|c| !c.is_empty()) {
+        Some(c) => c,
+        None => return csv_source_for(props, declared, is_tsv),
+    };
+    let typed: Vec<(String, String)> = cols.iter().filter_map(csv_typed_col_exprs).collect();
+    if typed.is_empty() {
+        return csv_source_for(props, declared, is_tsv);
+    }
+    let args = csv_raw_args(props, cols, is_tsv);
+    let replaces: Vec<&str> = typed.iter().map(|(_, c)| c.as_str()).collect();
+    let fails: Vec<&str> = typed.iter().map(|(f, _)| f.as_str()).collect();
+    format!(
+        "SELECT * REPLACE ({}) FROM read_csv_auto({}) WHERE NOT ({})",
+        replaces.join(", "),
+        args.join(", "),
+        fails.join(" OR ")
+    )
+}
+
+/// Dispatch to build_csv_source / build_tsv_source by the TSV flag.
+fn csv_source_for(props: &JsonValue, declared: Option<&[duckle_metadata::Column]>, is_tsv: bool) -> String {
+    if is_tsv {
+        build_tsv_source(props, declared)
+    } else {
+        build_csv_source(props, declared)
+    }
 }
 
 pub(crate) fn build_parquet_source(props: &JsonValue) -> String {
