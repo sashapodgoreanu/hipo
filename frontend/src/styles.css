@@ -7004,6 +7004,11 @@ html[dir='rtl'] .topbar-lang {
     width: 560px;
     max-width: 92vw;
 }
+/* Keep long paths / config from scrolling the whole modal sideways; the
+   code blocks scroll inside themselves instead. */
+.mcp-modal .modal-body {
+    overflow-x: hidden;
+}
 .mcp-muted {
     color: var(--text-2);
     font-size: 12.5px;
@@ -7018,6 +7023,7 @@ html[dir='rtl'] .topbar-lang {
     padding: 8px 10px;
     font-size: 12px;
     margin: 0 0 12px;
+    overflow-wrap: anywhere;
 }
 .mcp-ok {
     color: var(--text-1);
@@ -7027,7 +7033,14 @@ html[dir='rtl'] .topbar-lang {
     padding: 8px 10px;
     font-size: 12px;
     margin: 8px 0 0;
-    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+/* The sample-command row shown after a successful connect. */
+.mcp-sample {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
 }
 .mcp-section {
     border-top: 1px solid var(--border);

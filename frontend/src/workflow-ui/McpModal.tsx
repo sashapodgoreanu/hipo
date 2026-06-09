@@ -13,6 +13,9 @@ import {
 
 type Busy = null | 'claude_code' | 'claude_desktop' | 'cursor';
 
+// A simple read-only prompt the user can paste to confirm the connection.
+const SAMPLE_PROMPT = 'Use duckle to list the available components';
+
 /**
  * Compact popup that connects Duckle to an MCP-capable AI (Claude Code,
  * Claude Desktop, Cursor, etc.). It bundles the duckle-mcp server with the
@@ -24,7 +27,7 @@ export function McpModal({ onClose }: { onClose: () => void }) {
     const [error, setError] = useState<string | null>(null);
     const [copied, setCopied] = useState<string | null>(null);
     const [busy, setBusy] = useState<Busy>(null);
-    const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+    const [msg, setMsg] = useState<{ ok: boolean; text?: string; label?: string } | null>(null);
 
     useEffect(() => {
         let alive = true;
@@ -45,8 +48,8 @@ export function McpModal({ onClose }: { onClose: () => void }) {
         setBusy('claude_code');
         setMsg(null);
         try {
-            const out = await connectClaudeCode();
-            setMsg({ ok: true, text: out || 'Connected. Restart Claude Code if it is open.' });
+            await connectClaudeCode();
+            setMsg({ ok: true, label: 'Claude Code' });
         } catch (e) {
             setMsg({ ok: false, text: String(e) });
         } finally {
@@ -58,8 +61,8 @@ export function McpModal({ onClose }: { onClose: () => void }) {
         setBusy(client);
         setMsg(null);
         try {
-            const path = await mcpInjectConfig(client);
-            setMsg({ ok: true, text: `Added to ${label} (${path}). Restart ${label} to load it.` });
+            await mcpInjectConfig(client);
+            setMsg({ ok: true, label });
         } catch (e) {
             setMsg({ ok: false, text: String(e) });
         } finally {
@@ -110,7 +113,19 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                                 </p>
                             )}
 
-                            {msg && <p className={msg.ok ? 'mcp-ok' : 'mcp-warn'}>{msg.text}</p>}
+                            {msg && (msg.ok ? (
+                                <div className="mcp-ok">
+                                    Added to {msg.label}. Quit and reopen {msg.label}, then ask Claude:
+                                    <div className="mcp-sample">
+                                        <code className="mcp-code">{SAMPLE_PROMPT}</code>
+                                        <button type="button" className="btn mcp-copy" onClick={() => void copy('sample', SAMPLE_PROMPT)}>
+                                            {copied === 'sample' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy</>}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="mcp-warn">{msg.text}</p>
+                            ))}
 
                             {/* Claude Code */}
                             <div className="mcp-section">
