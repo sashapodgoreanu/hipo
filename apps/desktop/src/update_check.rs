@@ -67,12 +67,12 @@ impl UpdateInfo {
 /// .github/workflows/release.yml.
 fn os_asset() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => Some("Duckle-windows-x64.zip"),
-        ("windows", "aarch64") => Some("Duckle-windows-arm64.zip"),
-        ("macos", "x86_64") => Some("Duckle-macos-x64.zip"),
-        ("macos", "aarch64") => Some("Duckle-macos-arm64.zip"),
-        ("linux", "x86_64") => Some("Duckle-linux-x64.zip"),
-        ("linux", "aarch64") => Some("Duckle-linux-arm64.zip"),
+        ("windows", "x86_64") => Some("Duckle-windows-x64.exe"),
+        ("windows", "aarch64") => Some("Duckle-windows-arm64.exe"),
+        ("macos", "x86_64") => Some("Duckle-macos-x64"),
+        ("macos", "aarch64") => Some("Duckle-macos-arm64"),
+        ("linux", "x86_64") => Some("Duckle-linux-x64"),
+        ("linux", "aarch64") => Some("Duckle-linux-arm64"),
         _ => None,
     }
 }
