@@ -541,3 +541,15 @@ export async function mcpConnectionInfo(): Promise<McpConnInfo> {
 export async function connectClaudeCode(): Promise<string> {
     return await invoke<string>('connect_claude_code');
 }
+
+export type McpClient = 'claude_desktop' | 'cursor';
+
+/**
+ * Inject the duckle MCP server into a desktop client's config file (Claude
+ * Desktop or Cursor), merging into any existing mcpServers. Resolves with the
+ * written config path; rejects (with a hint) when the write needs permissions
+ * or the existing file is not valid JSON.
+ */
+export async function mcpInjectConfig(client: McpClient): Promise<string> {
+    return await invoke<string>('mcp_inject_config', { client });
+}

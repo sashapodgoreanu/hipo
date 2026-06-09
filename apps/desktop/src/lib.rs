@@ -135,7 +135,8 @@ pub fn run() {
             check_for_update,
             build_pipeline_bundle,
             mcp_connection_info,
-            connect_claude_code
+            connect_claude_code,
+            mcp_inject_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running duckle");
@@ -924,4 +925,91 @@ async fn connect_claude_code(app: tauri::AppHandle) -> Result<String, String> {
             e
         )),
     }
+}
+
+/// The MCP servers config file for a desktop client.
+fn mcp_client_config_path(app: &tauri::AppHandle, client: &str) -> Result<PathBuf, String> {
+    match client {
+        // %APPDATA%/Claude/... (Windows), ~/Library/Application Support/Claude/...
+        // (macOS), ~/.config/Claude/... (Linux) - config_dir() maps to all three.
+        "claude_desktop" => {
+            let cfg = app.path().config_dir().map_err(|e| format!("config dir: {}", e))?;
+            Ok(cfg.join("Claude").join("claude_desktop_config.json"))
+        }
+        // Cursor reads a global ~/.cursor/mcp.json.
+        "cursor" => {
+            let home = app.path().home_dir().map_err(|e| format!("home dir: {}", e))?;
+            Ok(home.join(".cursor").join("mcp.json"))
+        }
+        other => Err(format!("unknown MCP client: {}", other)),
+    }
+}
+
+/// Inject (merge) a "duckle" entry into a desktop MCP client's config file,
+/// preserving any existing servers. Returns the written config path. These are
+/// per-user config files (no elevation needed); on a permission/parse failure
+/// the error tells the user to retry elevated or copy the config manually.
+#[tauri::command]
+fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {}", e))?;
+    let (mcp_path, runner_path) = stage_mcp(&app_data)?;
+    let duckdb = DUCKDB_BIN.get().cloned().unwrap_or_default();
+    let target = mcp_client_config_path(&app, &client)?;
+
+    // Read the existing config (preserve other servers) or start fresh.
+    let mut root: JsonValue = if target.exists() {
+        let text = std::fs::read_to_string(&target)
+            .map_err(|e| format!("read {}: {}", target.display(), e))?;
+        if text.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&text).map_err(|e| {
+                format!(
+                    "{} is not valid JSON ({}); add the duckle entry manually instead",
+                    target.display(),
+                    e
+                )
+            })?
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    {
+        let obj = root
+            .as_object_mut()
+            .ok_or_else(|| format!("{} root is not a JSON object", target.display()))?;
+        let servers = obj
+            .entry("mcpServers")
+            .or_insert_with(|| serde_json::json!({}));
+        let servers = servers
+            .as_object_mut()
+            .ok_or_else(|| "mcpServers is not a JSON object".to_string())?;
+        servers.insert(
+            "duckle".to_string(),
+            serde_json::json!({
+                "command": mcp_path.to_string_lossy(),
+                "env": {
+                    "DUCKLE_DUCKDB_BIN": duckdb.to_string_lossy(),
+                    "DUCKLE_RUNNER_BIN": runner_path.to_string_lossy()
+                }
+            }),
+        );
+    }
+
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    std::fs::write(&target, pretty).map_err(|e| {
+        format!(
+            "could not write {} ({}). If this needs elevated permissions, run Duckle as administrator and retry, or copy the config manually.",
+            target.display(),
+            e
+        )
+    })?;
+    Ok(target.to_string_lossy().to_string())
 }

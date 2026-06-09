@@ -7107,3 +7107,38 @@ html[dir='rtl'] .topbar-lang {
 @keyframes mcp-spin {
     to { transform: rotate(360deg); }
 }
+/* Claude-style mark for the MCP button + popup: orange with a soft glow. */
+.claude-icon {
+    color: #d97757;
+}
+.claude-icon-glow {
+    animation: claude-glow 2.4s ease-in-out infinite;
+}
+@keyframes claude-glow {
+    0%, 100% { filter: drop-shadow(0 0 1px rgba(217, 119, 87, 0.45)); }
+    50% { filter: drop-shadow(0 0 5px rgba(217, 119, 87, 0.95)); }
+}
+/* Row of connect/copy buttons in the MCP popup. */
+.mcp-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+/* Collapsible command / config blocks (like Resolved paths). */
+.mcp-disclose {
+    margin-top: 10px;
+    font-size: 11.5px;
+}
+.mcp-disclose summary {
+    cursor: pointer;
+    color: var(--text-3);
+    user-select: none;
+}
+.mcp-disclose summary:hover {
+    color: var(--text-2);
+}
+.mcp-disclose > .mcp-code {
+    display: block;
+    margin-top: 8px;
+}

@@ -1,21 +1,30 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, Check, Clipboard, Loader2, X } from 'lucide-react';
+import { Check, Clipboard, Loader2, X } from 'lucide-react';
+import { ClaudeIcon } from './ClaudeIcon';
 import { copyText } from '../tauri-io';
-import { mcpConnectionInfo, connectClaudeCode, type McpConnInfo } from '../tauri-bridge';
+import {
+    mcpConnectionInfo,
+    connectClaudeCode,
+    mcpInjectConfig,
+    type McpConnInfo,
+    type McpClient,
+} from '../tauri-bridge';
+
+type Busy = null | 'claude_code' | 'claude_desktop' | 'cursor';
 
 /**
  * Compact popup that connects Duckle to an MCP-capable AI (Claude Code,
- * Claude Desktop, Cursor, etc.). It surfaces the bundled duckle-mcp server
- * with the real resolved paths filled in: a one-click "Connect to Claude Code"
- * button, plus copyable command + config for any other client.
+ * Claude Desktop, Cursor, etc.). It bundles the duckle-mcp server with the
+ * real resolved paths filled in: one-click connect buttons per client, with
+ * the raw command + config tucked into collapsible sections.
  */
 export function McpModal({ onClose }: { onClose: () => void }) {
     const [info, setInfo] = useState<McpConnInfo | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [copied, setCopied] = useState<string | null>(null);
-    const [connecting, setConnecting] = useState(false);
-    const [connectMsg, setConnectMsg] = useState<{ ok: boolean; text: string } | null>(null);
+    const [busy, setBusy] = useState<Busy>(null);
+    const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
     useEffect(() => {
         let alive = true;
@@ -32,16 +41,29 @@ export function McpModal({ onClose }: { onClose: () => void }) {
         }
     };
 
-    const connect = async () => {
-        setConnecting(true);
-        setConnectMsg(null);
+    const connectClaude = async () => {
+        setBusy('claude_code');
+        setMsg(null);
         try {
             const out = await connectClaudeCode();
-            setConnectMsg({ ok: true, text: out || 'Connected. Restart Claude Code if it is open.' });
+            setMsg({ ok: true, text: out || 'Connected. Restart Claude Code if it is open.' });
         } catch (e) {
-            setConnectMsg({ ok: false, text: String(e) });
+            setMsg({ ok: false, text: String(e) });
         } finally {
-            setConnecting(false);
+            setBusy(null);
+        }
+    };
+
+    const inject = async (client: McpClient, label: string) => {
+        setBusy(client);
+        setMsg(null);
+        try {
+            const path = await mcpInjectConfig(client);
+            setMsg({ ok: true, text: `Added to ${label} (${path}). Restart ${label} to load it.` });
+        } catch (e) {
+            setMsg({ ok: false, text: String(e) });
+        } finally {
+            setBusy(null);
         }
     };
 
@@ -54,8 +76,8 @@ export function McpModal({ onClose }: { onClose: () => void }) {
             <div className="modal mcp-modal" role="dialog" aria-modal="true" aria-label="Connect to AI">
                 <div className="modal-header">
                     <div className="modal-title">
-                        <Bot size={16} style={{ verticalAlign: '-3px', marginRight: 6 }} />
-                        Connect Duckle to your AI
+                        <ClaudeIcon size={16} className="claude-icon claude-icon-glow" />
+                        <span style={{ marginLeft: 8 }}>Connect Duckle to your AI</span>
                     </div>
                     <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
                         <X size={16} />
@@ -88,39 +110,65 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                                 </p>
                             )}
 
-                            {/* Claude Code: one-click */}
+                            {msg && <p className={msg.ok ? 'mcp-ok' : 'mcp-warn'}>{msg.text}</p>}
+
+                            {/* Claude Code */}
                             <div className="mcp-section">
                                 <div className="mcp-section-title">Claude Code</div>
-                                <button
-                                    type="button"
-                                    className="btn btn-primary"
-                                    onClick={() => void connect()}
-                                    disabled={!info.bundled || connecting}
-                                >
-                                    {connecting ? <><Loader2 size={13} className="spin" /> Connecting…</> : 'Connect to Claude Code'}
-                                </button>
-                                {connectMsg && (
-                                    <p className={connectMsg.ok ? 'mcp-ok' : 'mcp-warn'}>{connectMsg.text}</p>
-                                )}
-                                <div className="mcp-code-row">
-                                    <code className="mcp-code">{info.claudeCommand}</code>
+                                <div className="mcp-actions">
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => void connectClaude()}
+                                        disabled={!info.bundled || busy !== null}
+                                    >
+                                        {busy === 'claude_code'
+                                            ? <><Loader2 size={13} className="spin" /> Connecting…</>
+                                            : 'Connect to Claude Code'}
+                                    </button>
                                     <button type="button" className="btn mcp-copy" onClick={() => void copy('cmd', info.claudeCommand)}>
-                                        {copied === 'cmd' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy</>}
+                                        {copied === 'cmd' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy command</>}
                                     </button>
                                 </div>
-                                <p className="mcp-hint">Or paste that command in a terminal.</p>
+                                <details className="mcp-disclose">
+                                    <summary>Show command</summary>
+                                    <code className="mcp-code">{info.claudeCommand}</code>
+                                </details>
                             </div>
 
-                            {/* Other clients: config JSON */}
+                            {/* Claude Desktop / Cursor / other */}
                             <div className="mcp-section">
                                 <div className="mcp-section-title">Claude Desktop, Cursor, or any MCP client</div>
-                                <p className="mcp-hint">Add this to the client's MCP servers config:</p>
-                                <div className="mcp-code-row">
-                                    <pre className="mcp-code mcp-pre">{info.configJson}</pre>
+                                <div className="mcp-actions">
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => void inject('claude_desktop', 'Claude Desktop')}
+                                        disabled={!info.bundled || busy !== null}
+                                    >
+                                        {busy === 'claude_desktop'
+                                            ? <><Loader2 size={13} className="spin" /> Adding…</>
+                                            : 'Add to Claude Desktop'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => void inject('cursor', 'Cursor')}
+                                        disabled={!info.bundled || busy !== null}
+                                    >
+                                        {busy === 'cursor'
+                                            ? <><Loader2 size={13} className="spin" /> Adding…</>
+                                            : 'Add to Cursor'}
+                                    </button>
                                     <button type="button" className="btn mcp-copy" onClick={() => void copy('json', info.configJson)}>
-                                        {copied === 'json' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy</>}
+                                        {copied === 'json' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy config</>}
                                     </button>
                                 </div>
+                                <p className="mcp-hint">Adds a "duckle" entry to the client's config. For any other client, copy the config.</p>
+                                <details className="mcp-disclose">
+                                    <summary>Show config</summary>
+                                    <pre className="mcp-code mcp-pre">{info.configJson}</pre>
+                                </details>
                             </div>
 
                             <details className="mcp-paths">
