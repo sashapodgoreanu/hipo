@@ -1,10 +1,11 @@
 name: Release
 
 # Tag a version (e.g. `git tag v0.0.5 && git push --tags`) to build the
-# Duckle binary for every OS and attach it directly to a draft GitHub
-# release. We do NOT ship installers (no NSIS / MSI / DMG / DEB / RPM /
-# AppImage). The asset on the release is the raw executable that the
-# user can run.
+# Duckle binary for every OS and attach it to a draft GitHub release. We do
+# NOT ship installers (no NSIS / MSI / DMG / DEB / RPM / AppImage). Each asset
+# is a per-OS .zip containing the raw executable (named Duckle / Duckle.exe);
+# the user unzips and runs it. Zipping halves the ~70 MB download (the app
+# embeds duckle-runner + duckle-mcp).
 on:
   push:
     tags: ['v*']
@@ -42,14 +43,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `asset` is the per-OS zip base name (.zip is appended). `inner` is the
+        # runnable file packed inside it (named cleanly so it is double-click
+        # ready after extraction).
         include:
           # Linux
           - os: ubuntu-24.04
             binary: duckle
             asset: Duckle-linux-x64
+            inner: Duckle
           - os: ubuntu-24.04-arm
             binary: duckle
             asset: Duckle-linux-arm64
+            inner: Duckle
           # macOS - both built on the macos-14 (Apple Silicon) runner.
           # The Intel binary is cross-compiled to x86_64-apple-darwin
           # rather than run on a macos-13 runner: GitHub's Intel-mac
@@ -58,17 +64,21 @@ jobs:
           - os: macos-14
             binary: duckle
             asset: Duckle-macos-x64
+            inner: Duckle
             target: x86_64-apple-darwin
           - os: macos-14
             binary: duckle
             asset: Duckle-macos-arm64
+            inner: Duckle
           # Windows
           - os: windows-latest
             binary: duckle.exe
-            asset: Duckle-windows-x64.exe
+            asset: Duckle-windows-x64
+            inner: Duckle.exe
           - os: windows-11-arm
             binary: duckle.exe
-            asset: Duckle-windows-arm64.exe
+            asset: Duckle-windows-arm64
+            inner: Duckle.exe
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -140,22 +150,34 @@ jobs:
               --manifest-path apps/desktop/Cargo.toml --features custom-protocol
           fi
 
-      - name: Stage release assets
+      - name: Package release asset (per-platform zip)
         shell: bash
         run: |
           set -e
-          mkdir -p _release
           if [ -n "${{ matrix.target }}" ]; then
             src="target/${{ matrix.target }}/release/${{ matrix.binary }}"
           else
             src="target/release/${{ matrix.binary }}"
           fi
-          # The standalone desktop binary, named exactly as before so the
-          # in-app update check (apps/desktop/src/update_check.rs) and the
-          # README download table keep matching it. Single file, double-click.
-          # The duckle-runner is embedded into this binary at compile time
-          # (no separate with-runner asset needed).
-          cp "$src" "_release/${{ matrix.asset }}"
+          # Ship each platform as its own .zip. The desktop binary embeds
+          # duckle-runner + duckle-mcp at compile time, which pushes it to
+          # ~70 MB; compressing roughly halves the download. The file inside
+          # the zip is named cleanly (Duckle / Duckle.exe) so it is
+          # double-click ready after extraction. Asset names must stay in sync
+          # with os_asset() in apps/desktop/src/update_check.rs and the README
+          # download table.
+          mkdir -p _stage _release
+          cp "$src" "_stage/${{ matrix.inner }}"
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            chmod +x "_stage/${{ matrix.inner }}"
+          fi
+          ( cd _stage
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.inner }}' -DestinationPath '../_release/${{ matrix.asset }}.zip' -Force"
+            else
+              zip -9 -X "../_release/${{ matrix.asset }}.zip" "${{ matrix.inner }}"
+            fi )
+          ls -la _release
 
       - name: Upload to release
         shell: bash
@@ -165,5 +187,5 @@ jobs:
           REL_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
         run: |
           set -e
-          asset="${{ matrix.asset }}"
+          asset="${{ matrix.asset }}.zip"
           gh release upload "$REL_TAG" "_release/$asset" --clobber

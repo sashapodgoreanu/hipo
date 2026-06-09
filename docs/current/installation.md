@@ -6,13 +6,13 @@ Duckle is a lightweight desktop app that runs entirely on your local machine. Be
 
 ## 1. Running the Desktop Application
 
-Download the application package for your operating system:
+Download the `.zip` for your operating system, unzip it, and run the binary inside (`Duckle` / `Duckle.exe`):
 
-* **Windows**: Run the `Duckle-windows-x64.exe` setup helper. 
+* **Windows**: Unzip `Duckle-windows-x64.zip` and double-click `Duckle.exe`.
   * *Unsigned App Warning*: Windows SmartScreen may block launch. Click **"More info"** and then select **"Run anyway"**.
-* **macOS**: Extract and open `Duckle-macos-arm64` (for Apple Silicon) or the Intel version.
+* **macOS**: Unzip `Duckle-macos-arm64.zip` (for Apple Silicon) or the Intel version, then open `Duckle`.
   * *Gatekeeper Bypass*: Right-click the app icon in Finder and select **"Open"** to bypass security alerts.
-* **Linux**: Ensure WebKitGTK (`libwebkit2gtk-4.1-0`) is installed on your package manager, then run `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`.
+* **Linux**: Ensure WebKitGTK (`libwebkit2gtk-4.1-0`) is installed on your package manager, then unzip `Duckle-linux-x64.zip` and run `chmod +x Duckle && ./Duckle`.
 
 ---
 
