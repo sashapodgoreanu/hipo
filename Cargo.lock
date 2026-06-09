@@ -2194,6 +2194,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "duckle-mcp"
+version = "0.0.1"
+dependencies = [
+ "duckle-duckdb-engine",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "duckle-metadata"
 version = "0.0.1"
 dependencies = [
