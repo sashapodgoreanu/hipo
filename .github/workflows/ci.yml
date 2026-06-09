@@ -29,6 +29,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # The full workspace (engine + duckle-runner + duckle-mcp + apps/desktop
+      # with two embedded binaries) plus test artifacts can exceed the ~14 GB
+      # free on a GitHub Linux runner ("No space left on device"). Drop large
+      # preinstalled toolchains we never use to reclaim ~20 GB.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/share/boost \
+            /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune --all --force || true
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -114,6 +127,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/share/boost \
+            /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune --all --force || true
+          df -h /
       - uses: actions/setup-node@v4
         with:
           node-version: 20

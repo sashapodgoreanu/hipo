@@ -74,6 +74,17 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # Reclaim ~20 GB on Linux runners so the full workspace + embedded
+      # binaries build does not hit "No space left on device".
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/share/boost \
+            /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune --all --force || true
+          df -h /
       - uses: actions/setup-node@v4
         with:
           node-version: 20
