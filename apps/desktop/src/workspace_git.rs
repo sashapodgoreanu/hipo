@@ -216,8 +216,7 @@ pub fn clone(parent: &Path, url: &str, folder_name: &str) -> GitResult<PathBuf> 
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     let dest = parent.join(folder_name);
-    let out = Command::new("git")
-        .current_dir(parent)
+    let out = git_cmd(parent)
         .args(["clone", url, folder_name])
         .output()
         .map_err(|e| format!("spawn git clone: {}", e))?;

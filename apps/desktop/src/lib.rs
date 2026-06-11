@@ -20,6 +20,7 @@ use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 mod ci_status;
+mod dbt_engine;
 mod engine_manager;
 mod llama_chat;
 mod update_check;
@@ -71,6 +72,27 @@ pub fn run() {
                 let bin = engine_manager::duckdb_path(&dir);
                 std::env::set_var("DUCKLE_DUCKDB_BIN", &bin);
                 let _ = DUCKDB_BIN.set(bin);
+
+                // dbt for the xf.dbt node. Publishing an already-provisioned
+                // dbt is cheap (no network), so do it inline. If Fusion (the
+                // preferred fast engine) is not yet present, kick off a one-time,
+                // best-effort background fetch: dbt Fusion from dbt's public CDN,
+                // falling back to free Apache dbt-core via uv when Fusion can't
+                // be fetched. This also upgrades earlier dbt-core-only installs.
+                // ensure() is idempotent: a no-op once Fusion is in place.
+                dbt_engine::publish_if_present(&dir);
+                if !dbt_engine::fusion_present(&dir) {
+                    let dir = dir.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            match dbt_engine::ensure(&dir) {
+                                Ok(p) => tracing::info!("dbt provisioned at {}", p.display()),
+                                Err(e) => tracing::warn!("dbt provisioning failed: {e}"),
+                            }
+                        })
+                        .await;
+                    });
+                }
             }
             // Boot the scheduler. The `.setup` hook runs on the main
             // thread, OUTSIDE any tokio runtime, so calling spawn_ticker
@@ -109,6 +131,9 @@ pub fn run() {
             run_pipeline,
             run_pipeline_partial,
             run_history,
+            watermark_list,
+            watermark_set,
+            watermark_clear,
             cancel_pipeline,
             compile_pipeline,
             schedule_set_workspace,
@@ -118,6 +143,8 @@ pub fn run() {
             schedule_run_now,
             engine_status,
             engine_install,
+            dbt_status,
+            dbt_install,
             chat_send,
             chat_extract_pipeline,
             workspace_git_status,
@@ -308,6 +335,69 @@ fn run_history(workspace_path: String, pipeline_id: String) -> Result<Vec<RunRec
     Ok(records)
 }
 
+// ---- Backfill: xf.incremental / src.ducklake.changes saved state --------
+
+/// List the saved watermarks/snapshots for a pipeline (one per
+/// xf.incremental / src.ducklake.changes node that has run). `pipeline_name`
+/// is the run-log / state folder name (the pipeline's display name).
+#[tauri::command]
+fn watermark_list(
+    workspace_path: String,
+    pipeline_name: String,
+) -> Result<Vec<duckle_duckdb_engine::watermark::WatermarkEntry>, String> {
+    Ok(duckle_duckdb_engine::watermark::list(
+        std::path::Path::new(&workspace_path),
+        &pipeline_name,
+    ))
+}
+
+/// Set a node's saved state for backfill. `kind` selects the shape:
+/// "snapshot" writes a DuckLake CDC snapshot id (value parsed as u64);
+/// anything else writes an incremental watermark { value, type }.
+#[tauri::command]
+fn watermark_set(
+    workspace_path: String,
+    pipeline_name: String,
+    node_id: String,
+    kind: String,
+    value: String,
+    value_type: Option<String>,
+) -> Result<(), String> {
+    let ws = std::path::Path::new(&workspace_path);
+    if kind == "snapshot" {
+        let id: u64 = value
+            .trim()
+            .parse()
+            .map_err(|_| format!("snapshot id must be a number, got '{}'", value))?;
+        duckle_duckdb_engine::watermark::set_snapshot(ws, &pipeline_name, &node_id, id)
+            .map_err(|e| e.to_string())
+    } else {
+        duckle_duckdb_engine::watermark::set_incremental(
+            ws,
+            &pipeline_name,
+            &node_id,
+            &value,
+            value_type.as_deref(),
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
+/// Delete a node's saved state so the next run does a full reload.
+#[tauri::command]
+fn watermark_clear(
+    workspace_path: String,
+    pipeline_name: String,
+    node_id: String,
+) -> Result<(), String> {
+    duckle_duckdb_engine::watermark::clear(
+        std::path::Path::new(&workspace_path),
+        &pipeline_name,
+        &node_id,
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Signal the engine to stop at the next stage boundary. The current
 /// stage (if mid-flight) still finishes; subsequent stages are
 /// skipped.
@@ -415,6 +505,27 @@ async fn engine_install(
         tracing::warn!("Engine install failed: {}", e);
     }
     result
+}
+
+/// Whether a free dbt engine (Apache dbt-core + dbt-duckdb, provisioned via uv)
+/// is already installed in app-data. The xf.dbt node needs it; first launch
+/// fetches it automatically in the background.
+#[tauri::command]
+fn dbt_status(app: tauri::AppHandle) -> Result<bool, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(dbt_engine::is_installed(&dir))
+}
+
+/// Provision (or re-provision) the free dbt engine on demand and return its
+/// path. Idempotent: returns instantly if already installed. Use this to retry
+/// after a failed first-launch background fetch.
+#[tauri::command]
+async fn dbt_install(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || dbt_engine::ensure(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 // ---- AI chat assistant -------------------------------------------------
@@ -651,6 +762,11 @@ async fn build_pipeline_bundle(
     let output = tokio::task::spawn_blocking(move || {
         let spawn_once = || {
             let mut cmd = std::process::Command::new(&stub_path);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
             cmd.arg("build")
                 .arg("--workspace").arg(&workspace_path)
                 .arg("--pipeline-id").arg(&pipeline_id)
@@ -748,21 +864,47 @@ fn write_if_changed(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
     }
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(_)
-            if std::fs::metadata(path)
-                .map(|m| m.len() as usize == bytes.len())
-                .unwrap_or(false) =>
-        {
-            let _ = std::fs::remove_file(&tmp);
-            Ok(())
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            Err(format!("stage {}: {}", path.display(), e))
+    // Put the new file in place. A plain rename over the destination fails on
+    // Windows with "Access denied" when the destination .exe is locked - e.g. a
+    // running duckle-mcp/duckle-runner that an MCP client still has open. Windows
+    // DOES allow renaming a locked file out of the way, so on failure we move the
+    // old one aside and retry; the displaced copy is removed best-effort (it goes
+    // away on a later run once nothing holds it open).
+    if std::fs::rename(&tmp, path).is_ok() {
+        return Ok(());
+    }
+    let aside = path.with_extension(format!("old{}", std::process::id()));
+    let _ = std::fs::remove_file(&aside);
+    if path.exists() && std::fs::rename(path, &aside).is_ok() {
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&aside);
+                return Ok(());
+            }
+            Err(e) => {
+                // Restore the original so we never leave the slot empty.
+                let _ = std::fs::rename(&aside, path);
+                let _ = std::fs::remove_file(&tmp);
+                if std::fs::metadata(path)
+                    .map(|m| m.len() as usize == bytes.len())
+                    .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+                return Err(format!("stage {}: {}", path.display(), e));
+            }
         }
     }
+    // Last resort: an existing file of the right size is good enough (another
+    // instance staged it concurrently).
+    let _ = std::fs::remove_file(&tmp);
+    if std::fs::metadata(path)
+        .map(|m| m.len() as usize == bytes.len())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    Err(format!("stage {}: locked (close other Duckle instances)", path.display()))
 }
 
 /// Stage the embedded MCP server into a stable app-data dir, with the embedded
@@ -793,6 +935,7 @@ fn claude_available() -> bool {
     {
         use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .raw_arg("/C claude --version")
             .output()
             .map(|o| o.status.success())
@@ -883,7 +1026,10 @@ async fn connect_claude_code(app: tauri::AppHandle) -> Result<String, String> {
                 "/C claude mcp add duckle --env \"DUCKLE_DUCKDB_BIN={}\" --env \"DUCKLE_RUNNER_BIN={}\" -- \"{}\"",
                 duckdb_s, runner_s, mcp_s
             );
-            std::process::Command::new("cmd").raw_arg(line).output()
+            std::process::Command::new("cmd")
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .raw_arg(line)
+                .output()
         }
         #[cfg(not(windows))]
         {
