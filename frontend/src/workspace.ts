@@ -86,6 +86,39 @@ async function fs(): Promise<FsLib> {
     return await import('@tauri-apps/plugin-fs');
 }
 
+// Encrypt / decrypt a connection payload's sensitive fields (password, tokens,
+// keys) via the desktop crypto commands, which use a per-workspace key under
+// `.duckle/keys/`. On any error we fall back to the original payload so a save
+// never loses data and a load never blocks. `${...}` placeholders and
+// non-secret fields are left untouched by the command.
+async function encryptConnectionPayload(workspace: string, payload: unknown): Promise<unknown> {
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const enc = await invoke<string>('connection_encrypt_payload', {
+            workspace,
+            payloadJson: JSON.stringify(payload),
+        });
+        return JSON.parse(enc);
+    } catch (err) {
+        console.error('encrypt connection failed', err);
+        return payload;
+    }
+}
+
+async function decryptConnectionPayload(workspace: string, payload: unknown): Promise<unknown> {
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const dec = await invoke<string>('connection_decrypt_payload', {
+            workspace,
+            payloadJson: JSON.stringify(payload),
+        });
+        return JSON.parse(dec);
+    } catch (err) {
+        console.error('decrypt connection failed', err);
+        return payload;
+    }
+}
+
 async function ensureDir(path: string): Promise<void> {
     const { exists, mkdir } = await fs();
     if (!(await exists(path))) {
@@ -161,7 +194,8 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         const file = joinPath(path, dir, `${item.id}.json`);
         const payload = await readJsonIfExists(file);
         if (payload !== null) {
-            (item as { payload: unknown }).payload = payload;
+            (item as { payload: unknown }).payload =
+                itype === 'connection' ? await decryptConnectionPayload(path, payload) : payload;
         }
     }
 
@@ -278,7 +312,9 @@ export async function saveItemPayload(
     try {
         const folder = joinPath(path, dir);
         await ensureDir(folder);
-        await writeJson(joinPath(folder, `${itemId}.json`), payload);
+        const toWrite =
+            itemType === 'connection' ? await encryptConnectionPayload(path, payload) : payload;
+        await writeJson(joinPath(folder, `${itemId}.json`), toWrite);
     } catch (err) {
         console.error('saveItemPayload failed', err);
     }

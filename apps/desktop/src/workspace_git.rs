@@ -355,19 +355,21 @@ fn pat_path(workspace: &Path) -> PathBuf {
     workspace.join(".duckle").join("secrets").join("git.json")
 }
 
-/// Persist a PAT for later push retries. Plaintext + an auto-written
-/// `.duckle/.gitignore` so it never enters the user's repo. Trade-off
-/// documented in the README.
+/// Persist a PAT for later push retries. The token is encrypted with the
+/// per-workspace key (the same key the connection secrets use), and a
+/// `.duckle/.gitignore` excludes the secrets + keys dirs so neither enters
+/// the user's repo.
 pub fn save_pat(workspace: &Path, token: &str) -> GitResult<()> {
     let path = pat_path(workspace);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
-    let body = serde_json::to_string_pretty(&StoredPat {
-        pat: token.to_string(),
-    })
-    .map_err(|e| e.to_string())?;
+    let stored = match crate::secrets::workspace_key(workspace, true) {
+        Ok(key) => crate::secrets::encrypt_value(&key, token).unwrap_or_else(|_| token.to_string()),
+        Err(_) => token.to_string(),
+    };
+    let body = serde_json::to_string_pretty(&StoredPat { pat: stored }).map_err(|e| e.to_string())?;
     std::fs::write(&path, body).map_err(|e| format!("write {}: {}", path.display(), e))?;
     write_gitignore_safety(workspace);
     // Tighten file perms on Unix so other local users can't read it.
@@ -383,6 +385,14 @@ pub fn load_pat(workspace: &Path) -> GitResult<String> {
     let path = pat_path(workspace);
     let body = std::fs::read_to_string(&path).map_err(|e| format!("read PAT: {}", e))?;
     let parsed: StoredPat = serde_json::from_str(&body).map_err(|e| format!("parse PAT: {}", e))?;
+    // Decrypt if it was stored encrypted; a legacy plaintext token loads as-is.
+    if crate::secrets::is_encrypted(&parsed.pat) {
+        if let Ok(key) = crate::secrets::workspace_key(workspace, false) {
+            if let Ok(plain) = crate::secrets::decrypt_value(&key, &parsed.pat) {
+                return Ok(plain);
+            }
+        }
+    }
     Ok(parsed.pat)
 }
 
@@ -394,22 +404,28 @@ pub fn clear_pat(workspace: &Path) -> GitResult<()> {
     Ok(())
 }
 
-/// Ensure `<workspace>/.duckle/.gitignore` excludes the secrets/ dir.
-/// Idempotent - we read what's already there and only add the line
-/// if missing.
+/// Ensure `<workspace>/.duckle/.gitignore` excludes the `secrets/` dir (cached
+/// PAT) and the `keys/` dir (the connection-secret encryption key). The
+/// encrypted `connections/` files are safe to commit; the key is not.
+/// Idempotent - only adds a line if it is missing.
 fn write_gitignore_safety(workspace: &Path) {
     let dir = workspace.join(".duckle");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(".gitignore");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let need = "secrets/\n";
-    if !existing.lines().any(|l| l.trim() == "secrets/") {
-        let updated = if existing.is_empty() {
-            need.to_string()
-        } else {
-            format!("{}\n{}", existing.trim_end(), need)
-        };
-        let _ = std::fs::write(&path, updated);
+    let mut existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut changed = false;
+    for need in ["secrets/", "keys/"] {
+        if !existing.lines().any(|l| l.trim() == need) {
+            if existing.is_empty() {
+                existing = format!("{}\n", need);
+            } else {
+                existing = format!("{}\n{}\n", existing.trim_end(), need);
+            }
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = std::fs::write(&path, existing);
     }
 }
 

@@ -23,6 +23,7 @@ mod ci_status;
 mod dbt_engine;
 mod engine_manager;
 mod llama_chat;
+mod secrets;
 mod update_check;
 mod workspace_git;
 use engine_manager::{EngineStatus, InstallProgress};
@@ -158,6 +159,8 @@ pub fn run() {
             workspace_git_remote_set,
             workspace_git_save_pat,
             workspace_git_clear_pat,
+            secrets::connection_encrypt_payload,
+            secrets::connection_decrypt_payload,
             workspace_ci_status,
             check_for_update,
             build_pipeline_bundle,
