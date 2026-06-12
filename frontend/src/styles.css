@@ -7130,9 +7130,11 @@ html[dir='rtl'] .topbar-lang {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 12px;
+    padding: 12px 14px;
     overflow: auto;
     height: 100%;
+    /* Opaque so the canvas underneath does not show through (see run-view). */
+    background: var(--bg-0);
 }
 .runs-summary {
     display: flex;

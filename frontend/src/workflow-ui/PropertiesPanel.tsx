@@ -293,6 +293,11 @@ export default function PropertiesPanel({
                                 next[k] = v as string | number;
                             }
                         }
+                        // Snowflake components key the account identifier as
+                        // `account`, but the connection stores it in `host`.
+                        if (payload.kind === 'snowflake' && payload.host) {
+                            next.account = payload.host;
+                        }
                         onUpdate(selected.id, { properties: next });
                     },
                     onPickRoutine: (payload: RoutinePayload) => {

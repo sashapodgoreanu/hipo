@@ -507,6 +507,13 @@
                 "label": "Flatten nested objects",
                 "kind": "bool",
                 "defaultValue": false
+              },
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data   or   response.records",
+                "description": "Dotted key path to the array of records inside the JSON, for API-style responses where the rows live under a key (e.g. {\"data\":[...]} -> 'data', or {\"response\":{\"records\":[...]}} -> 'response.records'). Each record is unnested and nested fields are flattened into columns. Leave blank for a plain top-level array or JSON Lines."
               }
             ]
           }
@@ -646,6 +653,13 @@
                 "label": "Flatten nested objects",
                 "kind": "bool",
                 "defaultValue": false
+              },
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data   or   response.records",
+                "description": "Dotted key path to the array of records inside the JSON, for API-style responses where the rows live under a key (e.g. {\"data\":[...]} -> 'data', or {\"response\":{\"records\":[...]}} -> 'response.records'). Each record is unnested and nested fields are flattened into columns. Leave blank for a plain top-level array or JSON Lines."
               }
             ]
           }
@@ -2012,6 +2026,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "postgres"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -2041,12 +2064,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -2159,6 +2176,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "mysql"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -2188,12 +2214,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -2306,6 +2326,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "mariadb"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -2335,12 +2364,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -2672,6 +2695,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -2701,12 +2730,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -2819,6 +2842,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -2848,12 +2877,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -2966,6 +2989,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -2995,12 +3024,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -3203,6 +3226,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "postgres"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -3232,12 +3264,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -3350,6 +3376,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -3379,12 +3411,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -3497,6 +3523,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -3526,12 +3558,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -3874,6 +3900,15 @@
             "label": "Redshift connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "redshift"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -3903,12 +3938,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -4120,6 +4149,15 @@
                 "kind": "text"
               },
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "snowflake"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "username",
                 "label": "Username",
                 "kind": "text"
@@ -4129,12 +4167,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -9743,6 +9775,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -9772,12 +9810,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -23704,6 +23736,13 @@
                 "label": "Flatten nested objects",
                 "kind": "bool",
                 "defaultValue": false
+              },
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data   or   response.records",
+                "description": "Dotted key path to the array of records inside the JSON, for API-style responses where the rows live under a key (e.g. {\"data\":[...]} -> 'data', or {\"response\":{\"records\":[...]}} -> 'response.records'). Each record is unnested and nested fields are flattened into columns. Leave blank for a plain top-level array or JSON Lines."
               }
             ]
           }
@@ -23876,6 +23915,13 @@
                 "label": "Flatten nested objects",
                 "kind": "bool",
                 "defaultValue": false
+              },
+              {
+                "key": "recordsPath",
+                "label": "Records path",
+                "kind": "text",
+                "placeholder": "data   or   response.records",
+                "description": "Dotted key path to the array of records inside the JSON, for API-style responses where the rows live under a key (e.g. {\"data\":[...]} -> 'data', or {\"response\":{\"records\":[...]}} -> 'response.records'). Each record is unnested and nested fields are flattened into columns. Leave blank for a plain top-level array or JSON Lines."
               }
             ]
           }
@@ -25380,6 +25426,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "postgres"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -25409,12 +25464,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -25532,6 +25581,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "postgres"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -25561,12 +25619,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -25684,6 +25736,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "mysql"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -25713,12 +25774,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -25836,6 +25891,15 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "mariadb"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -25865,12 +25929,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -26634,6 +26692,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -26663,12 +26727,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -27291,6 +27349,15 @@
             "label": "Redshift connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "redshift"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -27320,12 +27387,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -27608,6 +27669,15 @@
                 "kind": "text"
               },
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "snowflake"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "username",
                 "label": "Username",
                 "kind": "text"
@@ -27617,12 +27687,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },
@@ -30187,6 +30251,12 @@
             "label": "Connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
                 "key": "host",
                 "label": "Host",
                 "kind": "text",
@@ -30216,12 +30286,6 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder."
               }
             ]
           },

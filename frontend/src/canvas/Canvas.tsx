@@ -16,6 +16,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
     Check,
+    ClipboardCopy,
     ClipboardPaste,
     Copy,
     Hash,
@@ -37,6 +38,7 @@ import ConnectionTypePicker from './ConnectionTypePicker';
 import { QuickAddSearch } from './QuickAddSearch';
 import { CONNECTION_TYPES, type ConnectionType } from './connection-types';
 import type { DuckleNodeData } from '../pipeline-types';
+import { readClipboard } from '../clipboard';
 import type { ComponentDef } from '../workflow-ui/palette-data';
 import { useContextMenu, type MenuItem } from '../workflow-ui/ContextMenu';
 import { getManifest } from '../workflow-ui/fields/component-manifests';
@@ -67,6 +69,7 @@ export type DropPosition = { x: number; y: number };
 export type NodeAction =
     | 'rename'
     | 'duplicate'
+    | 'copy'
     | 'toggle-disable'
     | 'autodetect'
     | 'run-from-here'
@@ -378,6 +381,14 @@ function CanvasInner({
                 },
                 {
                     kind: 'item',
+                    key: 'copy',
+                    label: 'Copy',
+                    icon: <ClipboardCopy size={ICON_SIZE} />,
+                    shortcut: 'Ctrl+C',
+                    onClick: () => onNodeAction('copy', node.id),
+                },
+                {
+                    kind: 'item',
                     key: 'toggle-disable',
                     label: isDisabled ? 'Enable' : 'Disable',
                     icon: <Power size={ICON_SIZE} />,
@@ -517,7 +528,7 @@ function CanvasInner({
                     icon: <ClipboardPaste size={ICON_SIZE} />,
                     shortcut: 'Ctrl+V',
                     onClick: () => onPaneAction('paste'),
-                    disabled: true,
+                    disabled: readClipboard() === null,
                 },
                 { kind: 'separator', key: 's2' },
                 {

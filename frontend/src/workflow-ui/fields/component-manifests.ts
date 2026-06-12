@@ -462,6 +462,14 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         kind: 'bool',
                         defaultValue: false,
                     },
+                    {
+                        key: 'recordsPath',
+                        label: 'Records path',
+                        kind: 'text',
+                        placeholder: 'data   or   response.records',
+                        description:
+                            "Dotted key path to the array of records inside the JSON, for API-style responses where the rows live under a key (e.g. {\"data\":[...]} -> 'data', or {\"response\":{\"records\":[...]}} -> 'response.records'). Each record is unnested and nested fields are flattened into columns. Leave blank for a plain top-level array or JSON Lines.",
+                    },
                 ],
             },
         ],

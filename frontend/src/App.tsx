@@ -44,6 +44,7 @@ import CiStatusBadge from './workflow-ui/CiStatusBadge';
 import WindowControls from './workflow-ui/WindowControls';
 import { engineStatus } from './tauri-bridge';
 import { copyText, saveTextFile } from './tauri-io';
+import { writeClipboard, readClipboard, instantiateClipboard } from './clipboard';
 import { RunStatusContext } from './canvas/run-status-context';
 import { validatePipeline } from './validation';
 import { resolveForRun } from './run-resolve';
@@ -1184,6 +1185,15 @@ export default function App() {
                     break;
                 }
 
+                case 'copy': {
+                    // Copy the whole selection when this node is part of it,
+                    // otherwise just this node. Paste lands in any pipeline.
+                    const selected = nodes.filter(n => n.selected);
+                    const toCopy = selected.some(n => n.id === nodeId) ? selected : [node];
+                    writeClipboard(toCopy, edges);
+                    break;
+                }
+
                 case 'toggle-disable':
                     setNodes(ns =>
                         ns.map(n =>
@@ -1237,8 +1247,57 @@ export default function App() {
                     break;
             }
         },
-        [nodes, selectedId, setNodes, setEdges, markDirty, handleRunFromHere],
+        [nodes, edges, selectedId, setNodes, setEdges, markDirty, handleRunFromHere],
     );
+
+    // Copy the selected component(s) - falling back to the single active
+    // selection - plus their internal wiring to the cross-pipeline clipboard.
+    const handleCopy = useCallback(() => {
+        const selected = nodes.filter(n => n.selected);
+        const toCopy = selected.length > 0 ? selected : nodes.filter(n => n.id === selectedId);
+        writeClipboard(toCopy, edges);
+    }, [nodes, edges, selectedId]);
+
+    // Paste clipboard components into the active pipeline with fresh ids and a
+    // small offset, selecting them so the paste is obvious.
+    const handlePaste = useCallback(() => {
+        const clip = readClipboard();
+        if (!clip) return;
+        const { nodes: newNodes, edges: newEdges } = instantiateClipboard(
+            clip,
+            () => freshId('n'),
+            () => freshId('e'),
+        );
+        setNodes(ns => [...ns.map(n => (n.selected ? { ...n, selected: false } : n)), ...newNodes]);
+        if (newEdges.length > 0) setEdges(es => [...es, ...newEdges]);
+        setSelectedId(newNodes[0]?.id ?? null);
+        markDirty();
+    }, [setNodes, setEdges, markDirty]);
+
+    // Ctrl/Cmd+C / Ctrl/Cmd+V: copy and paste the selected canvas component(s).
+    // Skips when the focus is in a text field (so editing properties still
+    // copies text) and when the user has a real text selection.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey)) return;
+            const k = e.key.toLowerCase();
+            if (k !== 'c' && k !== 'v') return;
+            const t = e.target as HTMLElement | null;
+            const tag = t?.tagName;
+            if (t?.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+                return;
+            }
+            if (k === 'c') {
+                if ((window.getSelection()?.toString() ?? '') !== '') return;
+                handleCopy();
+            } else {
+                e.preventDefault();
+                handlePaste();
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [handleCopy, handlePaste]);
 
     const handlePaneAction = useCallback(
         (action: PaneAction) => {
@@ -1256,13 +1315,14 @@ export default function App() {
                     redo();
                     break;
                 case 'paste':
+                    handlePaste();
                     break;
                 case 'build':
                     handleBuildPipeline(activeJobId);
                     break;
             }
         },
-        [handleAutoLayout, setNodes, undo, redo, handleBuildPipeline, activeJobId],
+        [handleAutoLayout, setNodes, undo, redo, handlePaste, handleBuildPipeline, activeJobId],
     );
 
     // Repository handlers ---------------------------------------------------

@@ -137,15 +137,41 @@ const compressionField = (): Field => ({
     ],
 });
 
-const credentialFields = (): Field[] => [
+// Map a database component to the saved-connection kind its picker should
+// offer. Wire-compatible engines reuse a base kind (Cockroach speaks the
+// Postgres protocol; OpenSearch speaks the Elasticsearch API). Components not
+// listed get an unfiltered picker (any saved connection).
+const CONNECTION_KIND_FOR: Record<string, string> = {
+    'src.postgres': 'postgres', 'snk.postgres': 'postgres',
+    'src.cockroach': 'postgres', 'snk.cockroach': 'postgres',
+    'src.redshift': 'redshift', 'snk.redshift': 'redshift',
+    'src.mysql': 'mysql', 'snk.mysql': 'mysql',
+    'src.mariadb': 'mariadb', 'snk.mariadb': 'mariadb',
+    'src.sqlserver': 'sqlserver', 'snk.sqlserver': 'sqlserver',
+    'src.oracle': 'oracle', 'snk.oracle': 'oracle',
+    'src.clickhouse': 'clickhouse', 'snk.clickhouse': 'clickhouse',
+    'src.mongodb': 'mongodb', 'snk.mongodb': 'mongodb',
+    'src.redis': 'redis', 'snk.redis': 'redis',
+    'src.elastic': 'elastic', 'snk.elastic': 'elastic',
+    'src.opensearch': 'elastic', 'snk.opensearch': 'elastic',
+    'src.kafka': 'kafka', 'snk.kafka': 'kafka',
+};
+
+// "Pick a saved connection" dropdown. Placed at the TOP of a credential block
+// so it reads as the primary way to fill the fields below (issue #30).
+// `acceptKind` filters the list to compatible saved connections.
+const connectionRefField = (acceptKind?: string): Field => ({
+    key: 'connectionRef',
+    label: 'Saved connection',
+    kind: 'connection-ref',
+    accepts: acceptKind ? [acceptKind] : undefined,
+    description: 'Pick a connection from the Connections folder to auto-fill the fields below.',
+});
+
+const credentialFields = (acceptKind?: string): Field[] => [
+    connectionRefField(acceptKind),
     { key: 'username', label: 'Username', kind: 'text' },
     { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
-    {
-        key: 'connectionRef',
-        label: 'Or use saved connection',
-        kind: 'connection-ref',
-        description: 'Pick a connection from the Connections folder.',
-    },
 ];
 
 const DB_PORTS: Record<string, number> = {
@@ -184,6 +210,7 @@ const DB_PORTS: Record<string, number> = {
 };
 
 const dbConnectionFields = (componentId: string): Field[] => [
+    connectionRefField(CONNECTION_KIND_FOR[componentId]),
     { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'localhost' },
     {
         key: 'port',
@@ -192,7 +219,8 @@ const dbConnectionFields = (componentId: string): Field[] => [
         defaultValue: DB_PORTS[componentId] ?? 0,
     },
     { key: 'database', label: 'Database', kind: 'text', required: true, placeholder: 'mydb' },
-    ...credentialFields(),
+    { key: 'username', label: 'Username', kind: 'text' },
+    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
 ];
 
 const dbReadFields = (): Field[] => [
@@ -1316,7 +1344,7 @@ function synthWarehouseSource(comp: ComponentDef): ComponentManifest {
                 { key: 'role', label: 'Role', kind: 'text' },
                 { key: 'database', label: 'Database', kind: 'text', required: true },
                 { key: 'schema', label: 'Schema', kind: 'text' },
-                ...credentialFields(),
+                ...credentialFields('snowflake'),
             ],
         },
         { label: 'Query', fields: dbReadFields() },
@@ -1541,7 +1569,7 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                     { key: 'role', label: 'Role', kind: 'text' },
                     { key: 'database', label: 'Database', kind: 'text', required: true },
                     { key: 'schema', label: 'Schema', kind: 'text' },
-                    ...credentialFields(),
+                    ...credentialFields('snowflake'),
                 ],
             },
             { label: 'Destination', fields: dbWriteFields() },
