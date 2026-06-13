@@ -410,6 +410,14 @@ fn t_create_connection(args: &Value) -> Result<Value, String> {
         .get("connection")
         .filter(|v| v.is_object())
         .ok_or("missing 'connection' object")?;
+    // Do not persist literal secrets: the MCP server cannot encrypt at rest
+    // (that key lives in the desktop app), so secret fields must use a
+    // ${ENV:KEY} placeholder resolved from the environment at run time.
+    if let Some(k) = first_plaintext_secret(conn) {
+        return Err(format!(
+            "connection field '{k}' contains a literal secret; MCP-created connections must use a ${{ENV:KEY}} placeholder for secret fields (the value is supplied from the environment at run time)"
+        ));
+    }
     let dir = std::path::Path::new(ws).join("connections");
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
     let id = gen_id("c");
@@ -619,15 +627,79 @@ fn resolve_runner() -> Option<PathBuf> {
     }))
 }
 
+/// Keys whose values are credentials (case-insensitive). Mirrors the desktop
+/// secrets.rs SENSITIVE_KEYS + the engine's is_secret_prop_key set.
+fn is_secret_key(lower_key: &str) -> bool {
+    const KEYS: &[&str] = &[
+        "password", "secretkey", "accesskey", "accountkey", "accountname",
+        "sessiontoken", "pat", "token", "apikey", "passphrase", "secret",
+    ];
+    KEYS.contains(&lower_key)
+}
+
+/// Redact the `user:pass@` userinfo from a connection URL (amqp/mongo/postgres
+/// style) so credentials embedded in a url/uri field aren't surfaced.
+fn redact_url_userinfo(s: &str) -> Option<String> {
+    let scheme_end = s.find("://")?;
+    let after = &s[scheme_end + 3..];
+    let at = after.find('@')?;
+    let slash = after.find('/').unwrap_or(after.len());
+    if at >= slash {
+        return None;
+    }
+    Some(format!("{}://***@{}", &s[..scheme_end], &after[at + 1..]))
+}
+
+/// Recursively mask secret values anywhere in a connection object - secret-keyed
+/// string fields (including nested `extra` maps) become "***", and url/uri-style
+/// fields have any embedded credentials stripped.
 fn mask_secrets(v: &mut Value) {
-    if let Some(obj) = v.as_object_mut() {
-        for key in ["password", "secretKey", "accountKey", "accountName", "token", "apiKey"] {
-            if let Some(val) = obj.get_mut(key) {
-                if val.is_string() {
+    match v {
+        Value::Object(obj) => {
+            for (k, val) in obj.iter_mut() {
+                let lk = k.to_ascii_lowercase();
+                if is_secret_key(&lk) && val.is_string() {
                     *val = json!("***");
+                    continue;
                 }
+                if matches!(lk.as_str(), "url" | "uri" | "endpoint" | "connectionstring" | "dsn") {
+                    if let Some(s) = val.as_str() {
+                        if let Some(red) = redact_url_userinfo(s) {
+                            *val = json!(red);
+                            continue;
+                        }
+                    }
+                }
+                mask_secrets(val);
             }
         }
+        Value::Array(arr) => arr.iter_mut().for_each(mask_secrets),
+        _ => {}
+    }
+}
+
+/// Find the first secret-keyed field holding a literal (non-`${...}`) value, so
+/// create_connection can reject writing plaintext credentials to disk.
+fn first_plaintext_secret(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(obj) => {
+            for (k, val) in obj {
+                if is_secret_key(&k.to_ascii_lowercase()) {
+                    if let Some(s) = val.as_str() {
+                        let t = s.trim();
+                        if !t.is_empty() && !t.starts_with("${") {
+                            return Some(k.clone());
+                        }
+                    }
+                }
+                if let Some(found) = first_plaintext_secret(val) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        Value::Array(arr) => arr.iter().find_map(first_plaintext_secret),
+        _ => None,
     }
 }
 

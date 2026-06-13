@@ -2083,7 +2083,8 @@ fn sf_request(
     is_jwt: bool,
     body: Option<&str>,
 ) -> Result<JsonValue, EngineError> {
-    let mut req = ureq::request(method, url)
+    let mut req = crate::tls::http_agent()
+        .request(method, url)
         .set("Authorization", auth_header)
         .set("Accept", "application/json");
     if body.is_some() {
@@ -2147,7 +2148,8 @@ fn dbr_request(
     auth_header: &str,
     body: Option<&str>,
 ) -> Result<JsonValue, EngineError> {
-    let mut req = ureq::request(method, url)
+    let mut req = crate::tls::http_agent()
+        .request(method, url)
         .set("Authorization", auth_header)
         .set("Accept", "application/json");
     if body.is_some() {

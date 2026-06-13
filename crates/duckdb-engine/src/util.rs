@@ -62,7 +62,14 @@ pub(crate) fn collect_secrets(doc: &PipelineDoc) -> Vec<Secret> {
             for (key, val) in props {
                 if is_secret_prop_key(key) {
                     if let Some(s) = val.as_str() {
-                        if s.len() >= 4 {
+                        // Any non-empty value under a secret key is a
+                        // credential and must be redacted regardless of length
+                        // (a short password is still a password). Only skip an
+                        // empty/whitespace value - redacting "" would splice
+                        // the placeholder across the whole SQL - and `${...}`
+                        // env placeholders, which are already safe to share.
+                        let t = s.trim();
+                        if !t.is_empty() && !t.starts_with("${") {
                             out.push(Secret {
                                 value: s.to_string(),
                                 placeholder: secret_placeholder(key),
@@ -88,6 +95,15 @@ pub(crate) fn redact_secret_values(sql: &str, secrets: &[Secret]) -> String {
     for secret in secrets {
         if out.contains(secret.value.as_str()) {
             out = out.replace(secret.value.as_str(), &secret.placeholder);
+        }
+        // Credentials are also embedded as SQL string literals with single
+        // quotes doubled (sql_escape / "''"); redact that form too so a value
+        // containing a quote does not leak past the raw-value replace above.
+        if secret.value.contains('\'') {
+            let escaped = secret.value.replace('\'', "''");
+            if out.contains(&escaped) {
+                out = out.replace(&escaped, &secret.placeholder);
+            }
         }
     }
     out

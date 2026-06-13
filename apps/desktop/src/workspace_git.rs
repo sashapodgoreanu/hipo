@@ -293,13 +293,13 @@ fn push_with_pat(workspace: &Path, token: &str) -> GitResult<String> {
         .args(["push", &authed, branch])
         .output()
         .map_err(|e| format!("spawn git push (PAT): {}", e))?;
+    // git can echo the push URL (with the embedded credential) into its
+    // progress/error output; never surface the raw token to the user.
+    let safe = String::from_utf8_lossy(&out.stderr).replace(token, "***");
     if !out.status.success() {
-        return Err(format!(
-            "push (with PAT) failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(format!("push (with PAT) failed: {}", safe.trim()));
     }
-    Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+    Ok(safe)
 }
 
 pub fn pull(workspace: &Path) -> GitResult<String> {
@@ -365,10 +365,11 @@ pub fn save_pat(workspace: &Path, token: &str) -> GitResult<()> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
-    let stored = match crate::secrets::workspace_key(workspace, true) {
-        Ok(key) => crate::secrets::encrypt_value(&key, token).unwrap_or_else(|_| token.to_string()),
-        Err(_) => token.to_string(),
-    };
+    // Encrypt before writing; do NOT silently fall back to plaintext on
+    // failure - surface the error so the caller knows the token was not
+    // stored rather than persisting a credential in the clear.
+    let key = crate::secrets::workspace_key(workspace, true)?;
+    let stored = crate::secrets::encrypt_value(&key, token)?;
     let body = serde_json::to_string_pretty(&StoredPat { pat: stored }).map_err(|e| e.to_string())?;
     std::fs::write(&path, body).map_err(|e| format!("write {}: {}", path.display(), e))?;
     write_gitignore_safety(workspace);
