@@ -1436,7 +1436,11 @@ impl DuckdbEngine {
             .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(", ");
-        let qualified = format!("{}.{}", spec.keyspace, spec.table);
+        let qualified = format!(
+            "\"{}\".\"{}\"",
+            spec.keyspace.replace('"', "\"\""),
+            spec.table.replace('"', "\"\"")
+        );
         let cancel = self.cancel.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2144,8 +2148,17 @@ impl DuckdbEngine {
                 .map_err(|e| EngineError::Query(format!("xml: write row: {}", e)))?;
             if let Some(obj) = row.as_object() {
                 for (k, v) in obj {
+                    // A DuckDB column name need not be a legal XML element name
+                    // (e.g. "count(*)", a leading digit). Sanitize it and carry
+                    // the original verbatim as a `name` attribute so the output
+                    // is well-formed and round-trippable.
+                    let elem = xml_safe_element_name(k);
+                    let mut start = BytesStart::new(elem.as_str());
+                    if elem != *k {
+                        start.push_attribute(("name", k.as_str()));
+                    }
                     writer
-                        .write_event(Event::Start(BytesStart::new(k.as_str())))
+                        .write_event(Event::Start(start))
                         .map_err(|e| EngineError::Query(format!("xml: write col {}: {}", k, e)))?;
                     match v {
                         JsonValue::String(s) => {
@@ -2181,7 +2194,7 @@ impl DuckdbEngine {
                         }
                     }
                     writer
-                        .write_event(Event::End(BytesEnd::new(k.as_str())))
+                        .write_event(Event::End(BytesEnd::new(elem.as_str())))
                         .map_err(|e| EngineError::Query(format!("xml: close col: {}", e)))?;
                 }
             }
@@ -2315,6 +2328,14 @@ impl DuckdbEngine {
                 .create_channel()
                 .await
                 .map_err(|e| format!("channel: {}", e))?;
+            // Enable publisher confirms so the awaited confirmation reflects a
+            // real broker ack/nack; without confirm_select the publish "confirm"
+            // is a no-op and a dropped/rejected message would be reported as
+            // published.
+            channel
+                .confirm_select(lapin::options::ConfirmSelectOptions::default())
+                .await
+                .map_err(|e| format!("enable publisher confirms: {}", e))?;
             let props = BasicProperties::default().with_delivery_mode(2); // persistent
             let mut total = 0_usize;
             for chunk in rows.chunks(spec.batch_size) {
@@ -2323,7 +2344,7 @@ impl DuckdbEngine {
                 }
                 for row in chunk {
                     let payload = serde_json::to_vec(row).unwrap_or_default();
-                    channel
+                    let confirm = channel
                         .basic_publish(
                             &spec.exchange,
                             &spec.routing_key,
@@ -2335,6 +2356,9 @@ impl DuckdbEngine {
                         .map_err(|e| format!("publish: {}", e))?
                         .await
                         .map_err(|e| format!("publish confirm: {}", e))?;
+                    if confirm.is_nack() {
+                        return Err("broker nacked a published message".into());
+                    }
                 }
                 total += chunk.len();
             }
@@ -3944,7 +3968,16 @@ impl DuckdbEngine {
                 Ok(JsonValue::Object(o)) => rows.push(JsonValue::Object(o)),
                 Ok(JsonValue::Array(arr)) => {
                     for v in arr {
-                        rows.push(v);
+                        // Every materialized line must be an object; wrap a
+                        // bare scalar/array element so it round-trips as a row
+                        // instead of a malformed bare value.
+                        if v.is_object() {
+                            rows.push(v);
+                        } else {
+                            let mut m = serde_json::Map::new();
+                            m.insert("value".into(), v);
+                            rows.push(JsonValue::Object(m));
+                        }
                     }
                 }
                 _ => {
@@ -5457,8 +5490,8 @@ impl DuckdbEngine {
             ));
         }
         let qualified = match &spec.database {
-            Some(d) => format!("`{}`.`{}`", d, spec.table),
-            None => format!("`{}`", spec.table),
+            Some(d) => format!("{}.{}", db_quote_ident(d), db_quote_ident(&spec.table)),
+            None => db_quote_ident(&spec.table),
         };
         let base = format!(
             "{}/?query={}",
@@ -5743,10 +5776,15 @@ impl DuckdbEngine {
         // BSON Document -> JsonValue. Some BSON types (ObjectId, Date)
         // serialize as objects with {$oid: ...} / {$date: ...} - good
         // enough for downstream DuckDB to ingest as strings/json.
+        // Fail loud on a BSON->JSON conversion error rather than silently
+        // dropping the document (which would under-count the read).
         let json_docs: Vec<JsonValue> = docs
             .iter()
-            .filter_map(|d| serde_json::to_value(d).ok())
-            .collect();
+            .map(|d| {
+                serde_json::to_value(d)
+                    .map_err(|e| EngineError::Query(format!("mongodb: BSON to JSON: {}", e)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let count = json_docs.len();
         materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &json_docs)?;
         Ok(format!(
@@ -6705,9 +6743,16 @@ impl DuckdbEngine {
                 format!("https://{}{}", spec.workspace, link)
             };
             let chunk = dbr_request(&chunk_url, "GET", &auth, None)?;
-            if let Some(d) = chunk.get("data_array").and_then(|v| v.as_array()) {
-                all_data.extend(d.iter().cloned());
-                chunks += 1;
+            match chunk.get("data_array").and_then(|v| v.as_array()) {
+                Some(d) => {
+                    all_data.extend(d.iter().cloned());
+                    chunks += 1;
+                }
+                None => {
+                    return Err(EngineError::Query(
+                        "databricks chunk follower: response has no data_array".into(),
+                    ))
+                }
             }
             next_link = chunk
                 .get("next_chunk_internal_link")
@@ -7315,6 +7360,28 @@ fn resolve_subpipeline_ref(reference: &str) -> String {
         }
     }
     reference.to_string()
+}
+
+/// Coerce a column name into a legal XML element name: the first char must be a
+/// letter or `_`, the rest letters/digits/`-`/`.`/`_`. Illegal chars become `_`
+/// and a non-letter first char is prefixed with `_`. The original name is kept
+/// as a `name` attribute by the caller so the value still round-trips.
+fn xml_safe_element_name(name: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in name.chars().enumerate() {
+        let ok = ch.is_ascii_alphabetic()
+            || ch == '_'
+            || (i > 0 && (ch.is_ascii_digit() || ch == '-' || ch == '.'));
+        out.push(if ok { ch } else { '_' });
+    }
+    if out.is_empty() {
+        out.push('_');
+    }
+    let first = out.chars().next().unwrap();
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        out.insert(0, '_');
+    }
+    out
 }
 
 /// Escape a raw value for embedding inside single quotes in a JsonNative
