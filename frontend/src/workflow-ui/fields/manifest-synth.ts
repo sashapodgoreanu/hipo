@@ -1655,8 +1655,6 @@ function synthStorageSource(comp: ComponentDef): ComponentManifest {
                         { label: 'CSV', value: 'csv' },
                         { label: 'JSON', value: 'json' },
                         { label: 'JSONL', value: 'jsonl' },
-                        { label: 'Avro', value: 'avro' },
-                        { label: 'ORC', value: 'orc' },
                     ],
                 },
             ],
@@ -1702,8 +1700,6 @@ function synthStorageSink(comp: ComponentDef): ComponentManifest {
                             { label: 'CSV', value: 'csv' },
                             { label: 'JSON', value: 'json' },
                             { label: 'JSONL', value: 'jsonl' },
-                            { label: 'Avro', value: 'avro' },
-                            { label: 'ORC', value: 'orc' },
                         ],
                     },
                     writeModeField(),
@@ -2546,10 +2542,6 @@ function synthRowTransform(comp: ComponentDef): ComponentManifest {
                 label: id === 'xf.sample' ? 'Sample' : 'Limit',
                 fields: [
                     { key: 'count', label: id === 'xf.sample' ? 'Sample size' : 'Row count', kind: 'integer', defaultValue: 100 },
-                    ...(id === 'xf.sample' ? [{
-                        key: 'method', label: 'Method', kind: 'select' as const, defaultValue: 'random',
-                        options: [{label:'Random',value:'random'},{label:'Reservoir',value:'reservoir'},{label:'Bernoulli',value:'bernoulli'}],
-                    }] : []),
                 ],
             },
         ], 'upstream');

@@ -4584,14 +4584,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               }
@@ -4783,14 +4775,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               }
@@ -4982,14 +4966,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               }
@@ -5181,14 +5157,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               }
@@ -5380,14 +5348,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               }
@@ -5579,14 +5539,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               }
@@ -7037,20 +6989,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -7265,20 +7209,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -7493,20 +7429,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -7721,20 +7649,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -7949,20 +7869,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -8177,20 +8089,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -9379,20 +9283,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -11013,6 +10909,7 @@
                 "label": "Expression",
                 "kind": "expression",
                 "rows": 3,
+                "required": true,
                 "placeholder": "amount * 1.08"
               }
             ]
@@ -11261,6 +11158,7 @@
                 "label": "Expression",
                 "kind": "expression",
                 "rows": 3,
+                "required": true,
                 "placeholder": "COALESCE(col_a, col_b, 'default')"
               }
             ]
@@ -11672,26 +11570,6 @@
                 "label": "Sample size",
                 "kind": "integer",
                 "defaultValue": 100
-              },
-              {
-                "key": "method",
-                "label": "Method",
-                "kind": "select",
-                "defaultValue": "random",
-                "options": [
-                  {
-                    "label": "Random",
-                    "value": "random"
-                  },
-                  {
-                    "label": "Reservoir",
-                    "value": "reservoir"
-                  },
-                  {
-                    "label": "Bernoulli",
-                    "value": "bernoulli"
-                  }
-                ]
               }
             ]
           }
@@ -14718,6 +14596,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -14733,12 +14617,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -14867,6 +14745,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -14882,12 +14766,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -15016,6 +14894,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -15031,12 +14915,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -15165,6 +15043,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -15180,12 +15064,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -15314,6 +15192,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -15329,12 +15213,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -15463,6 +15341,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -15478,12 +15362,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -15612,6 +15490,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -15627,12 +15511,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -15761,6 +15639,12 @@
                 "label": "Offset (lead/lag)",
                 "kind": "integer",
                 "defaultValue": 1
+              },
+              {
+                "key": "ntileBuckets",
+                "label": "Buckets (ntile)",
+                "kind": "integer",
+                "defaultValue": 4
               }
             ]
           },
@@ -15776,12 +15660,6 @@
                 "key": "orderBy",
                 "label": "Order by",
                 "kind": "columns"
-              },
-              {
-                "key": "frame",
-                "label": "Frame",
-                "kind": "text",
-                "placeholder": "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
               }
             ]
           },
@@ -27872,14 +27750,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               },
@@ -28051,14 +27921,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               },
@@ -28230,14 +28092,6 @@
                   {
                     "label": "JSONL",
                     "value": "jsonl"
-                  },
-                  {
-                    "label": "Avro",
-                    "value": "avro"
-                  },
-                  {
-                    "label": "ORC",
-                    "value": "orc"
                   }
                 ]
               },
@@ -34480,20 +34334,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -34708,20 +34554,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -34936,20 +34774,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -35164,20 +34994,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -35392,20 +35214,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -35620,20 +35434,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -35848,20 +35654,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -36076,20 +35874,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -36304,20 +36094,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -36532,20 +36314,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -36760,20 +36534,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -36988,20 +36754,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -37216,20 +36974,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -37444,20 +37194,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -37672,20 +37414,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -37900,20 +37634,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -38128,20 +37854,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -38356,20 +38074,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -38584,20 +38294,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -38812,20 +38514,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -39040,20 +38734,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -39268,20 +38954,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -39496,20 +39174,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -39724,20 +39394,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -39952,20 +39614,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -40180,20 +39834,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -40408,20 +40054,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },
@@ -40636,20 +40274,12 @@
                     "value": "none"
                   },
                   {
-                    "label": "Basic",
-                    "value": "basic"
-                  },
-                  {
                     "label": "Bearer token",
                     "value": "bearer"
                   },
                   {
                     "label": "API key (header)",
                     "value": "apikey"
-                  },
-                  {
-                    "label": "OAuth2",
-                    "value": "oauth2"
                   }
                 ]
               },

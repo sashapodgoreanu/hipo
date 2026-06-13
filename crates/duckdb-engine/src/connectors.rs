@@ -5124,8 +5124,14 @@ impl DuckdbEngine {
                 .partition_client(&spec.topic, spec.partition_id, UnknownTopicHandling::Retry)
                 .await
                 .map_err(|e| format!("partition client: {}", e))?;
-            // Negative start_offset = read from earliest available.
-            let mut next_offset = if spec.start_offset < 0 {
+            // start_offset sentinels: -2 = latest tip (only messages produced
+            // after this read starts), any other negative = earliest available,
+            // >= 0 = that literal offset.
+            let mut next_offset = if spec.start_offset == -2 {
+                pc.get_offset(rskafka::client::partition::OffsetAt::Latest)
+                    .await
+                    .map_err(|e| format!("latest offset: {}", e))?
+            } else if spec.start_offset < 0 {
                 pc.get_offset(rskafka::client::partition::OffsetAt::Earliest)
                     .await
                     .map_err(|e| format!("earliest offset: {}", e))?

@@ -28,7 +28,9 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
         // the inspect prelude (see source_prelude), so the SELECT is identical
         // to the run path.
         "ducklake" => return build_relational_source("src.ducklake", props).ok(),
-        "s3" | "gcs" | "azureblob" | "http" | "https" => build_cloud_source(format, props, None),
+        "s3" | "gcs" | "azureblob" | "http" | "https" => {
+            return build_cloud_source(format, props, None).ok()
+        }
         _ => return None,
     })
 }
@@ -81,7 +83,7 @@ pub(crate) fn build_view_sql(
             // just s3://bucket/key.
             let s = component_id.strip_prefix("src.").unwrap_or(component_id);
             let scheme = if matches!(s, "minio" | "r2" | "b2") { "s3" } else { s };
-            Ok(build_cloud_source(scheme, props, declared))
+            build_cloud_source(scheme, props, declared).map_err(|e| e.to_string())
         }
         "src.postgres" | "src.cockroach" | "src.mysql" | "src.mariadb"
         | "src.motherduck" | "src.ducklake" | "src.pgvector"
@@ -533,12 +535,24 @@ pub(crate) fn build_aggregate(
         let column = agg.get("column").and_then(JsonValue::as_str).unwrap_or("*");
         // The UI's AggregationsField stores { column, func, output };
         // accept the function/alias spellings too for robustness.
-        let func = agg
+        let func = match agg
             .get("function")
             .or_else(|| agg.get("func"))
             .and_then(JsonValue::as_str)
-            .unwrap_or("count")
-            .to_uppercase();
+        {
+            Some(f) => f.to_uppercase(),
+            // count(*) is the sensible default for a bare row count, but
+            // silently turning {column: "amount"} into COUNT(amount) yields a
+            // wrong number (a row count where a sum/avg was meant). Require an
+            // explicit function for a named column instead of defaulting.
+            None if column == "*" => "COUNT".to_string(),
+            None => {
+                return Err(format!(
+                    "Aggregation on column '{}' needs a function (sum, avg, min, max, count, count_distinct, ...)",
+                    column
+                ))
+            }
+        };
         let alias = agg
             .get("alias")
             .or_else(|| agg.get("output"))
@@ -680,22 +694,26 @@ pub(crate) fn build_arr_collect(inputs: &NodeInputs, props: &JsonValue) -> Resul
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "items".into());
     let group = columns_list(props, "groupBy");
+    // Order the collected elements by the value so the array is deterministic;
+    // without it list() consumes rows in an unspecified order under
+    // preserve_insertion_order=false and the array varies run-to-run.
+    let v = quote_ident(&value);
     if group.is_empty() {
         Ok(format!(
-            "SELECT list({}) AS {} FROM {}",
-            quote_ident(&value),
+            "SELECT list({v} ORDER BY {v}) AS {} FROM {}",
             quote_ident(&out),
-            quote_ident(upstream)
+            quote_ident(upstream),
+            v = v,
         ))
     } else {
         let g = group.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         Ok(format!(
-            "SELECT {}, list({}) AS {} FROM {} GROUP BY {}",
+            "SELECT {}, list({v} ORDER BY {v}) AS {} FROM {} GROUP BY {}",
             g,
-            quote_ident(&value),
             quote_ident(&out),
             quote_ident(upstream),
-            g
+            g,
+            v = v,
         ))
     }
 }
@@ -1249,6 +1267,13 @@ pub(crate) fn build_window_aggregate(inputs: &NodeInputs, props: &JsonValue) -> 
             "ORDER BY {}",
             order.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ")
         ));
+        // An ORDER BY in a window with no explicit frame defaults to a running
+        // aggregate (RANGE UNBOUNDED PRECEDING .. CURRENT ROW), silently turning
+        // a per-partition total into a cumulative one. xf.aggwin's contract is a
+        // whole-partition aggregate kept on every row (xf.cumulative is the
+        // running-total node), so pin the full-partition frame - matching the
+        // guard build_window applies for FIRST_VALUE/LAST_VALUE.
+        over.push_str(" ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING");
     }
     let out = string_prop(props, "outputName")
         .filter(|s| !s.is_empty())
@@ -1367,11 +1392,22 @@ pub(crate) fn build_denormalize(inputs: &NodeInputs, props: &JsonValue) -> Resul
         .map(|c| quote_ident(c))
         .collect::<Vec<_>>()
         .join(", ");
+    // A single ORDER BY shared by every string_agg makes the concatenation
+    // deterministic (the rows feeding the aggregate are otherwise in an
+    // unspecified order under preserve_insertion_order=false) AND keeps the
+    // i-th element of each column aligned with the same source row. Ordering
+    // each column by itself would break that cross-column alignment, so the
+    // key is the full aggregate-column tuple, identical for all of them.
+    let order_key = agg_cols
+        .iter()
+        .map(|c| quote_ident(c))
+        .collect::<Vec<_>>()
+        .join(", ");
     let aggs = agg_cols
         .iter()
         .map(|c| {
             let q = quote_ident(c);
-            format!("string_agg(CAST({q} AS VARCHAR), '{sep_sql}') AS {q}")
+            format!("string_agg(CAST({q} AS VARCHAR), '{sep_sql}' ORDER BY {order_key}) AS {q}")
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -2013,7 +2049,18 @@ pub(crate) fn columns_list(props: &JsonValue, key: &str) -> Vec<String> {
     props
         .get(key)
         .and_then(JsonValue::as_array)
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                // Drop empty / whitespace-only entries: a blank column name is
+                // never valid and would otherwise pass length-based guards (e.g.
+                // upsert conflictColumns=[""]) and emit a zero-length quoted
+                // identifier. Non-empty names are kept verbatim (a column may
+                // legitimately contain surrounding spaces).
+                .filter_map(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(String::from)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -2817,6 +2864,13 @@ fn csv_read_args_base(props: &JsonValue) -> Vec<String> {
         }
     }
     if let Some(enc) = string_prop(props, "encoding").filter(|s| !s.is_empty()) {
+        // DuckDB's CSV reader rejects the spelling "windows-1252" (it expects
+        // "CP1252") and aborts the read. The UI/docs offer "Windows-1252", so
+        // remap it to the accepted spelling; everything else passes through.
+        let enc = match enc.to_ascii_lowercase().as_str() {
+            "windows-1252" | "windows1252" | "cp1252" => "CP1252".to_string(),
+            _ => enc,
+        };
         args.push(format!("encoding='{}'", sql_escape(&enc)));
     }
     args
@@ -3661,10 +3715,20 @@ pub(crate) fn build_db_sink(
             up = up,
         ));
     }
-    Ok(format!(
-        "DROP TABLE IF EXISTS duckle_dst.{}; CREATE TABLE duckle_dst.{} AS (SELECT * FROM {})",
-        t, t, up
-    ))
+    if mode == "overwrite" {
+        return Ok(format!(
+            "DROP TABLE IF EXISTS duckle_dst.{}; CREATE TABLE duckle_dst.{} AS (SELECT * FROM {})",
+            t, t, up
+        ));
+    }
+    // Fail loud on an unrecognized mode instead of falling through to the
+    // destructive DROP+CREATE above. A near-miss of a real mode (e.g. "appnd",
+    // "Append", "append ") would otherwise silently wipe the target table.
+    // Mirrors build_relational_sink's contract.
+    Err(EngineError::Config(format!(
+        "{}: write mode '{}' isn't supported (use overwrite, append, truncate, or upsert)",
+        component_id, mode
+    )))
 }
 
 /// Avro source. The `avro` DuckDB community extension exposes
@@ -4580,7 +4644,17 @@ pub(crate) fn build_json_array_agg(inputs: &NodeInputs, props: &JsonValue) -> Re
     let output = string_prop(props, "outputColumn")
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("{}_array", column));
-    let agg = format!("json_group_array({}) AS {}", quote_ident(&column), quote_ident(&output));
+    // Order the array elements by the column so the result is deterministic
+    // (rows feed the aggregate in an unspecified order under
+    // preserve_insertion_order=false, so the array varies run-to-run).
+    // json_group_array is a macro and rejects ORDER BY, so build the array via
+    // list() (a true aggregate that accepts ORDER BY) + to_json, which yields
+    // the same JSON array.
+    let agg = format!(
+        "to_json(list({c} ORDER BY {c})) AS {}",
+        quote_ident(&output),
+        c = quote_ident(&column)
+    );
     if group_by.is_empty() {
         Ok(format!("SELECT {} FROM {}", agg, quote_ident(upstream)))
     } else {
@@ -5152,7 +5226,7 @@ pub(crate) fn build_cloud_source(
     scheme: &str,
     props: &JsonValue,
     declared: Option<&[duckle_metadata::Column]>,
-) -> String {
+) -> Result<String, EngineError> {
     let path = string_prop(props, "path")
         .or_else(|| string_prop(props, "url"))
         .filter(|s| !s.is_empty())
@@ -5199,15 +5273,26 @@ pub(crate) fn build_cloud_source(
     if let Some(obj) = local.as_object_mut() {
         obj.insert("path".into(), JsonValue::String(path.clone()));
     }
-    match chosen.as_str() {
+    Ok(match chosen.as_str() {
         "parquet" => build_parquet_source(&local),
         // Delegate JSON too, so a cloud JSON source gets recordsPath unnesting
         // and the 100 MB maximum_object_size that the local builder applies
         // (a bare read_json_auto here ignored both - audit).
         "json" => build_json_source(&local),
         "tsv" => build_tsv_source(&local, declared),
+        // The cloud reader has no Avro/ORC path (DuckDB ships no read_orc, and
+        // read_avro is only wired for the local src.avro builder). Selecting
+        // either used to fall through to the CSV default below and parse the
+        // binary container with read_csv_auto -> garbage columns / a cryptic
+        // parse error. Fail loud with an actionable message instead (audit).
+        "avro" | "orc" => {
+            return Err(EngineError::Unsupported(format!(
+                "Cloud source format '{}' is not supported (use Parquet, JSON, CSV, or TSV; for Avro use a local src.avro source)",
+                chosen
+            )))
+        }
         _ => build_csv_source(&local, declared),
-    }
+    })
 }
 
 // ---- Sinks --------------------------------------------------------------
@@ -5228,7 +5313,7 @@ pub(crate) fn build_sink_sql(
         }
         "snk.parquet" => Ok(build_parquet_sink(props, from_view)),
         "snk.json" | "snk.jsonl" => Ok(build_json_sink(props, from_view)),
-        "snk.s3" | "snk.gcs" | "snk.azureblob" => Ok(build_cloud_sink(props, from_view)),
+        "snk.s3" | "snk.gcs" | "snk.azureblob" => build_cloud_sink(props, from_view),
         "snk.sqlite" | "snk.duckdb" => build_db_sink(component_id, props, from_view),
         "snk.postgres" | "snk.cockroach" | "snk.mysql" | "snk.mariadb"
         | "snk.motherduck" | "snk.ducklake" | "snk.pgvector"
@@ -5247,7 +5332,7 @@ pub(crate) fn build_sink_sql(
 /// DuckDB's httpfs handles the upload; credentials come from the
 /// SECRET wired up in execute_pipeline_with_events. Format is inferred
 /// from the URL extension unless overridden.
-pub(crate) fn build_cloud_sink(props: &JsonValue, from_view: &str) -> String {
+pub(crate) fn build_cloud_sink(props: &JsonValue, from_view: &str) -> Result<String, EngineError> {
     let path = string_prop(props, "path")
         .or_else(|| string_prop(props, "url"))
         .unwrap_or_default();
@@ -5279,7 +5364,7 @@ pub(crate) fn build_cloud_sink(props: &JsonValue, from_view: &str) -> String {
         obj.insert("path".into(), JsonValue::String(path.clone()));
         obj.remove("partitionBy");
     }
-    match chosen.as_str() {
+    Ok(match chosen.as_str() {
         "csv" => build_csv_sink(&local, from_view),
         "json" | "jsonl" | "ndjson" => {
             if let Some(obj) = local.as_object_mut() {
@@ -5287,8 +5372,18 @@ pub(crate) fn build_cloud_sink(props: &JsonValue, from_view: &str) -> String {
             }
             build_json_sink(&local, from_view)
         }
+        // No Avro/ORC writer exists (DuckDB's COPY has neither). Selecting
+        // either used to fall through to the Parquet default below, silently
+        // writing Parquet bytes to a path the user named .avro/.orc. Fail loud
+        // instead of emitting a file whose contents contradict its format (audit).
+        "avro" | "orc" => {
+            return Err(EngineError::Unsupported(format!(
+                "Cloud sink format '{}' is not supported (use Parquet, JSON, JSONL, or CSV)",
+                chosen
+            )))
+        }
         _ => build_parquet_sink(&local, from_view),
-    }
+    })
 }
 
 /// Guard against the partitioned-write foot-gun. A Hive-partitioned COPY writes

@@ -1579,7 +1579,8 @@
             "s3",
             &serde_json::json!({"format": "parquet", "path": "s3://b/k.parquet", "columns": "id, amount"}),
             None,
-        );
+        )
+        .unwrap();
         assert!(
             sql.contains("SELECT \"id\", \"amount\" FROM read_parquet('s3://b/k.parquet')"),
             "cloud parquet must project declared columns, got: {}",
@@ -1602,7 +1603,8 @@
             "s3",
             &serde_json::json!({"format": "csv", "path": "s3://b/k.csv", "hasHeader": true}),
             Some(&cols),
-        );
+        )
+        .unwrap();
         assert!(
             sql.contains("types = {") && sql.contains("'amt': 'VARCHAR'"),
             "cloud csv must thread declared schema via types=, got: {}",
@@ -1719,7 +1721,8 @@
                 "delimiter": "|", "nullValue": "NA", "partitionBy": "id"
             }),
             "v",
-        );
+        )
+        .unwrap();
         assert!(
             sql.contains("FORMAT CSV") && sql.contains("DELIM '|'") && sql.contains("NULLSTR 'NA'"),
             "cloud csv sink must honor options, got: {}",
@@ -1731,6 +1734,173 @@
             sql
         );
         assert!(sql.contains("'s3://b/out.csv'"), "must write to the cloud path, got: {}", sql);
+    }
+
+    #[test]
+    fn cloud_source_rejects_avro_and_orc_formats() {
+        // audit pass-3: the cloud reader has no Avro/ORC path; selecting either
+        // used to fall through to read_csv_auto on the binary container. It must
+        // now fail loud instead.
+        for fmt in ["avro", "orc"] {
+            let err = build_cloud_source(
+                "s3",
+                &serde_json::json!({"format": fmt, "path": format!("s3://b/k.{}", fmt)}),
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().to_lowercase().contains("not supported"),
+                "cloud {} source should fail loud, got: {:?}",
+                fmt,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_sink_rejects_avro_and_orc_formats() {
+        // audit pass-3: no Avro/ORC writer exists; selecting either used to
+        // silently write Parquet to the user's .avro/.orc path. Fail loud now.
+        for fmt in ["avro", "orc"] {
+            let err = build_cloud_sink(
+                &serde_json::json!({"format": fmt, "path": format!("s3://b/out.{}", fmt)}),
+                "v",
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().to_lowercase().contains("not supported"),
+                "cloud {} sink should fail loud, got: {:?}",
+                fmt,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn csv_windows_1252_encoding_is_remapped_to_cp1252() {
+        // audit pass-3: DuckDB's CSV reader rejects the spelling "windows-1252"
+        // (it wants CP1252); the UI/docs offer "Windows-1252", so the engine
+        // must remap it rather than aborting the read.
+        let sql = build_csv_source(
+            &serde_json::json!({"path": "f.csv", "hasHeader": true, "encoding": "windows-1252"}),
+            None,
+        );
+        assert!(sql.contains("encoding='CP1252'"), "windows-1252 must remap to CP1252, got: {}", sql);
+        // latin-1 (a DuckDB-accepted spelling) passes through unchanged.
+        let latin = build_csv_source(
+            &serde_json::json!({"path": "f.csv", "hasHeader": true, "encoding": "latin-1"}),
+            None,
+        );
+        assert!(latin.contains("encoding='latin-1'"), "latin-1 must pass through, got: {}", latin);
+    }
+
+    #[test]
+    fn db_sink_unknown_mode_fails_loud_not_destructive_overwrite() {
+        // audit pass-3: snk.sqlite/snk.duckdb used to DROP+CREATE for ANY
+        // unrecognized mode, so a typo like "appnd" silently wiped the table.
+        let err = build_sink_sql(
+            "snk.sqlite",
+            &serde_json::json!({"tableName": "t", "mode": "appnd"}),
+            "v",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("write mode") && err.to_string().contains("appnd"),
+            "an unknown mode must fail loud, got: {:?}",
+            err
+        );
+        // The explicit "overwrite" default is still the destructive recreate.
+        let ok = build_sink_sql(
+            "snk.sqlite",
+            &serde_json::json!({"tableName": "t", "mode": "overwrite"}),
+            "v",
+        )
+        .unwrap();
+        assert!(ok.contains("DROP TABLE IF EXISTS"), "overwrite stays a recreate, got: {}", ok);
+    }
+
+    #[test]
+    fn db_sink_upsert_rejects_empty_conflict_columns() {
+        // audit pass-3: conflictColumns=[""] used to pass the length-based
+        // guard and emit a zero-length quoted identifier. The empty entry is
+        // now dropped, so the "needs a conflict column" guard fires.
+        let err = build_sink_sql(
+            "snk.sqlite",
+            &serde_json::json!({"tableName": "t", "mode": "upsert", "conflictColumns": ["", "  "]}),
+            "v",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("conflict column"),
+            "blank conflict columns must be rejected, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn aggregate_missing_function_on_named_column_fails_loud() {
+        // audit pass-3: {column: "amount"} with no function used to silently
+        // become COUNT(amount); it must require an explicit function now.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let err = build_aggregate(
+            &ni,
+            &serde_json::json!({"groupBy": ["g"], "aggregations": [{"column": "amount", "output": "total"}]}),
+            GroupMode::Plain,
+        )
+        .unwrap_err();
+        assert!(err.contains("needs a function"), "named column without function must fail, got: {}", err);
+        // A bare row count (column "*", no function) is still allowed as COUNT.
+        let ok = build_aggregate(
+            &ni,
+            &serde_json::json!({"groupBy": ["g"], "aggregations": [{"column": "*", "output": "n"}]}),
+            GroupMode::Plain,
+        )
+        .unwrap();
+        assert!(ok.contains("COUNT(*)"), "count(*) default for '*' stays, got: {}", ok);
+    }
+
+    #[test]
+    fn aggwin_with_order_by_pins_full_partition_frame() {
+        // audit pass-3: an ORDER BY in the window without an explicit frame
+        // silently becomes a running aggregate. xf.aggwin keeps a whole-
+        // partition total on every row, so the full frame must be pinned.
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let sql = build_window_aggregate(
+            &ni,
+            &serde_json::json!({"function": "sum", "column": "amt", "partitionBy": ["region"], "orderBy": ["dt"]}),
+        )
+        .unwrap();
+        assert!(
+            sql.contains("ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"),
+            "aggwin with orderBy must pin the full-partition frame, got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn kafka_offset_latest_maps_to_the_latest_sentinel() {
+        // audit pass-3: the UI emits offset=latest/earliest; the engine reads
+        // it onto its start_offset sentinel (-2 = latest, -1 = earliest).
+        let p = pipeline_from_json(
+            r#"{"nodes":[
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"Kafka","componentId":"src.kafka","properties":{"brokers":"b:9092","topic":"t","offset":"latest"}}},
+                {"id":"o","position":{"x":1,"y":0},"data":{"label":"CSV","componentId":"snk.csv","properties":{"path":"/tmp/out.csv"}}}
+            ],"edges":[
+                {"id":"e","source":"k","target":"o","data":{"connectionType":"main"}}
+            ]}"#,
+        );
+        let compiled = compile(&p).expect("kafka plan compiles");
+        let spec = compiled
+            .stages
+            .iter()
+            .find_map(|s| match s.runtime.as_ref() {
+                Some(RuntimeSpec::KafkaSource(k)) => Some(k),
+                _ => None,
+            })
+            .expect("kafka source spec");
+        assert_eq!(spec.start_offset, -2, "offset=latest must map to the -2 sentinel");
     }
 
     #[test]

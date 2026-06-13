@@ -927,7 +927,15 @@ fn build_stage(
         sqlserver_sink = Some(SqlServerSinkSpec {
             from_view: from_view.to_string(),
             host,
-            port: props.get("port").and_then(|v| v.as_u64()).unwrap_or(1433) as u16,
+            // Range-check before the u16 cast like the other port parsers; a
+            // value >= 65536 would otherwise wrap (e.g. 70000 -> 4464) and dial
+            // the wrong port. Out-of-range falls back to the 1433 default.
+            port: props
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0 && *n < 65536)
+                .map(|n| n as u16)
+                .unwrap_or(1433),
             user,
             password,
             database,
@@ -1819,7 +1827,20 @@ fn build_stage(
             bootstrap_servers: bootstrap,
             topic,
             partition_id: props.get("partitionId").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-            start_offset: props.get("startOffset").and_then(|v| v.as_i64()).unwrap_or(-1),
+            // The UI exposes `offset` = latest/earliest, not a numeric
+            // startOffset. Map it onto the sentinel run_kafka_source reads:
+            // -2 = latest tip (only new messages), -1 = earliest, >=0 = that
+            // literal offset. A hand-authored numeric startOffset still wins;
+            // default earliest when neither is supplied. Previously the engine
+            // only read startOffset, so the UI's Initial offset was a no-op and
+            // "Latest" silently behaved as "Earliest".
+            start_offset: props
+                .get("startOffset")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_else(|| match string_prop(&props, "offset").as_deref() {
+                    Some("latest") => -2,
+                    _ => -1,
+                }),
             max_records: props.get("maxRecords").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000),
         });
         (String::new(), StageKind::View, None)
@@ -2317,7 +2338,14 @@ fn build_stage(
         sqlserver_source = Some(SqlServerSourceSpec {
             node_id: node.id.clone(),
             host,
-            port: props.get("port").and_then(|v| v.as_u64()).unwrap_or(1433) as u16,
+            // Range-check before the u16 cast (see the sink path); an out-of-range
+            // port would otherwise wrap and dial the wrong service.
+            port: props
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0 && *n < 65536)
+                .map(|n| n as u16)
+                .unwrap_or(1433),
             user,
             password: string_prop(&props, "password").unwrap_or_default(),
             database,
