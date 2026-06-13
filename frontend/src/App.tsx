@@ -308,6 +308,7 @@ export default function App() {
                 const prev = prevRepoRef.current ?? [];
                 const prevById = new Map(prev.map(i => [i.id, i]));
                 const currById = new Map(repo.map(i => [i.id, i]));
+                let allSaved = true;
                 for (const item of repo) {
                     if (
                         item.type === 'folder' ||
@@ -318,7 +319,8 @@ export default function App() {
                     const before = prevById.get(item.id);
                     if (!before || before.payload !== item.payload) {
                         if (item.payload !== undefined) {
-                            await saveItemPayload(ws, item.type, item.id, item.payload);
+                            const ok = await saveItemPayload(ws, item.type, item.id, item.payload);
+                            if (!ok) allSaved = false;
                         }
                     }
                 }
@@ -334,7 +336,11 @@ export default function App() {
                         await deleteItemPayload(ws, before.type, before.id);
                     }
                 }
-                prevRepoRef.current = repo;
+                // Only advance the baseline if every payload persisted; a
+                // failed item stays "changed" so the next debounce retries it.
+                if (allSaved) {
+                    prevRepoRef.current = repo;
+                }
             })();
         }, 300);
         return () => clearTimeout(t);
@@ -346,19 +352,28 @@ export default function App() {
         const t = setTimeout(() => {
             void (async () => {
                 const prev = prevPipelineDataRef.current ?? {};
+                let allSaved = true;
                 for (const [id, state] of Object.entries(pipelineData)) {
                     if (prev[id] !== state) {
-                        await savePipelineFile(ws, id, state);
-                        // Clear the per-tab dirty flag now that it's persisted
-                        // (guard so we don't trigger a render when nothing's dirty).
-                        setJobs(js =>
-                            js.some(j => j.id === id && j.dirty)
-                                ? js.map(j => (j.id === id ? { ...j, dirty: false } : j))
-                                : js,
-                        );
+                        const ok = await savePipelineFile(ws, id, state);
+                        if (ok) {
+                            // Clear the per-tab dirty flag only once it's really
+                            // persisted (guard against a needless re-render).
+                            setJobs(js =>
+                                js.some(j => j.id === id && j.dirty)
+                                    ? js.map(j => (j.id === id ? { ...j, dirty: false } : j))
+                                    : js,
+                            );
+                        } else {
+                            allSaved = false;
+                        }
                     }
                 }
-                prevPipelineDataRef.current = pipelineData;
+                // Keep the baseline (and thus the dirty tabs) when a save failed
+                // so the next debounce retries instead of dropping the edit.
+                if (allSaved) {
+                    prevPipelineDataRef.current = pipelineData;
+                }
             })();
         }, 400);
         return () => clearTimeout(t);

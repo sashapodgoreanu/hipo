@@ -299,14 +299,16 @@ export async function savePipelineFile(
     path: string,
     pipelineId: string,
     pipeline: unknown,
-): Promise<void> {
-    if (!isTauri()) return;
+): Promise<boolean> {
+    if (!isTauri()) return true;
     try {
         const dir = joinPath(path, PIPELINES_DIR);
         await ensureDir(dir);
         await writeJson(joinPath(dir, `${pipelineId}.json`), pipeline);
+        return true;
     } catch (err) {
         console.error('savePipelineFile failed', err);
+        return false;
     }
 }
 
@@ -315,18 +317,20 @@ export async function saveItemPayload(
     itemType: string,
     itemId: string,
     payload: unknown,
-): Promise<void> {
-    if (!isTauri()) return;
+): Promise<boolean> {
+    if (!isTauri()) return true;
     const dir = PAYLOAD_DIR_BY_TYPE[itemType];
-    if (!dir) return;
+    if (!dir) return true;
     try {
         const folder = joinPath(path, dir);
         await ensureDir(folder);
         const toWrite =
             itemType === 'connection' ? await encryptConnectionPayload(path, payload) : payload;
         await writeJson(joinPath(folder, `${itemId}.json`), toWrite);
+        return true;
     } catch (err) {
         console.error('saveItemPayload failed', err);
+        return false;
     }
 }
 
