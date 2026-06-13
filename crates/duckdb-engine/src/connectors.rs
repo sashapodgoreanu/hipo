@@ -7335,12 +7335,17 @@ fn jsonnative_quote_inner(s: &str) -> String {
 /// delete into an upsert).
 fn bson_flag_matches(b: Option<&mongodb::bson::Bson>, target: &str) -> bool {
     use mongodb::bson::Bson;
+    // Compare numeric flag columns numerically so both "1" and "1.0" match a
+    // Double(1.0) - Rust's f64 Display strips the trailing zero, so a plain
+    // to_string() compare would miss "1.0". This matches the SQL sinks'
+    // implicit `flag = 'value'` cast (where '1' and '1.0' both equal 1.0).
+    let num_eq = |v: f64| target.parse::<f64>().map(|t| t == v).unwrap_or(false);
     match b {
         Some(Bson::String(s)) => s == target,
         Some(Bson::Boolean(v)) => v.to_string() == target,
-        Some(Bson::Int32(v)) => v.to_string() == target,
-        Some(Bson::Int64(v)) => v.to_string() == target,
-        Some(Bson::Double(v)) => v.to_string() == target,
+        Some(Bson::Int32(v)) => num_eq(*v as f64),
+        Some(Bson::Int64(v)) => num_eq(*v as f64),
+        Some(Bson::Double(v)) => num_eq(*v),
         _ => false,
     }
 }
@@ -7395,6 +7400,10 @@ mod connector_helper_tests {
         assert!(bson_flag_matches(Some(&Bson::Int32(1)), "1"));
         assert!(bson_flag_matches(Some(&Bson::Int64(1)), "1"));
         assert!(bson_flag_matches(Some(&Bson::Double(1.0)), "1"));
+        // A DOUBLE flag reads as "1.0" in the JSON preview; both forms match.
+        assert!(bson_flag_matches(Some(&Bson::Double(1.0)), "1.0"));
+        assert!(bson_flag_matches(Some(&Bson::Int64(1)), "1.0"));
+        assert!(bson_flag_matches(Some(&Bson::Double(1.5)), "1.5"));
         // Non-matches and absent column.
         assert!(!bson_flag_matches(Some(&Bson::Boolean(false)), "true"));
         assert!(!bson_flag_matches(Some(&Bson::String("keep".into())), "delete"));
