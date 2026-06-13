@@ -32,9 +32,12 @@ pub struct RunRecord {
 
 impl RunRecord {
     pub fn from_result(result: &RunResult, trigger: &str) -> Self {
+        // Only sinks "write" rows; summing view stages too massively
+        // overcounts (every intermediate stage reports its row count).
         let rows: u64 = result
             .nodes
             .values()
+            .filter(|n| n.kind.as_deref() == Some("sink"))
             .filter_map(|n| n.rows)
             .sum();
         RunRecord {

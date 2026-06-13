@@ -924,7 +924,10 @@ impl DuckdbEngine {
                         }
                     }
                 };
-                if result.is_ok() {
+                // Stop retrying on success OR cancellation - a cancel must
+                // exit immediately, not burn through the remaining attempts
+                // (the contract is "retry on engine errors, not cancellation").
+                if result.is_ok() || matches!(result, Err(EngineError::Cancelled)) {
                     break;
                 }
             }

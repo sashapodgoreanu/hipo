@@ -704,12 +704,14 @@ pub(crate) fn read_http_request(
     let path = parts.next().unwrap_or("").to_string();
     let mut headers: Vec<(String, String)> = Vec::new();
     let mut content_length = 0usize;
+    let mut saw_content_length = false;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim().to_string();
             let v = v.trim().to_string();
             if k.eq_ignore_ascii_case("content-length") {
                 content_length = v.parse().unwrap_or(0);
+                saw_content_length = true;
             }
             headers.push((k, v));
         }
@@ -717,14 +719,19 @@ pub(crate) fn read_http_request(
     // Body: any bytes we've already read past the header split + more
     // until we have content_length bytes total.
     let mut body: Vec<u8> = buf[split_at + 4..].to_vec();
-    while body.len() < content_length {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => body.extend_from_slice(&chunk[..n]),
-            Err(_) => break,
+    // Only read-to-length + truncate when Content-Length was declared. Without
+    // it, keep whatever body bytes were already buffered rather than truncating
+    // to nothing (which silently dropped the payload).
+    if saw_content_length {
+        while body.len() < content_length {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => body.extend_from_slice(&chunk[..n]),
+                Err(_) => break,
+            }
         }
+        body.truncate(content_length);
     }
-    body.truncate(content_length);
     Ok((method, path, headers, body))
 }
 
