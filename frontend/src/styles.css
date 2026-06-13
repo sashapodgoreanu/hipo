@@ -5172,6 +5172,9 @@ html[dir='rtl'] .topbar-lang {
 }
 
 .bottom-output-error-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
     background: rgba(255, 77, 109, 0.08);
     border: 1px solid rgba(255, 77, 109, 0.25);
     border-radius: 8px;
@@ -5179,6 +5182,33 @@ html[dir='rtl'] .topbar-lang {
     color: var(--danger);
     font-size: 12px;
     line-height: 1.5;
+}
+
+.bottom-output-error-banner-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.bottom-output-error-banner-close {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin: -2px -4px 0 0;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--danger);
+    cursor: pointer;
+    opacity: 0.75;
+}
+
+.bottom-output-error-banner-close:hover {
+    background: rgba(255, 77, 109, 0.16);
+    opacity: 1;
 }
 
 .bottom-output-previews {

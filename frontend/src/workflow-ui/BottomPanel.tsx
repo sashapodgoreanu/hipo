@@ -7,6 +7,7 @@ import {
     ChevronUp,
     PlayCircle,
     Terminal,
+    X,
 } from 'lucide-react';
 import type { RunResult } from '../tauri-bridge';
 import type { ValidationResult } from '../validation';
@@ -250,6 +251,12 @@ function OutputTab({
     terminalNodeIds: string[];
 }) {
     const { t } = useTranslation();
+    // Let the user dismiss the run-error banner. Reset on every new run
+    // (runResult is a fresh object each run) so a later failure shows again.
+    const [errorDismissed, setErrorDismissed] = useState(false);
+    useEffect(() => {
+        setErrorDismissed(false);
+    }, [runResult]);
     if (isRunning) {
         return (
             <div className="bottom-empty">
@@ -323,9 +330,20 @@ function OutputTab({
                     </div>
                 ))}
             </div>
-            {runResult.error ? (
+            {runResult.error && !errorDismissed ? (
                 <div className="bottom-output-error-banner">
-                    {friendlyError(runResult.error)}
+                    <span className="bottom-output-error-banner-text">
+                        {friendlyError(runResult.error)}
+                    </span>
+                    <button
+                        type="button"
+                        className="bottom-output-error-banner-close"
+                        onClick={() => setErrorDismissed(true)}
+                        title={t('bottom.dismissError')}
+                        aria-label={t('bottom.dismissError')}
+                    >
+                        <X size={14} />
+                    </button>
                 </div>
             ) : null}
             {terminalPreviews.length > 0 ? (
