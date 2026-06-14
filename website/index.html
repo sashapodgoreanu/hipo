@@ -43,17 +43,41 @@
       </div>
       <div class="nav-item">
         <a class="top" href="use-cases.html">Use cases <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></a>
-        <div class="mega">
-          <div class="mlbl">By use case</div>
-          <a href="use-cases.html#join"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h6m6 0h6M9 6l-6 6 6 6m6-12 6 6-6 6"/></svg></span><span><b>Cross-system joins</b><span>Join files, DBs and warehouses in one pass.</span></span></a>
-          <a href="use-cases.html#snowflake"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 7l10 5 10-5M2 17l10 5 10-5"/></svg></span><span><b>Warehouse cost savings</b><span>Crunch locally, write only the rollup.</span></span></a>
-          <a href="use-cases.html#cdc"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><span><b>Change data capture</b><span>Upsert + delete propagation, incremental.</span></span></a>
-          <a href="use-cases.html#ai"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4 4 4 0 0 1 0 8 4 4 0 0 1-8 0 4 4 0 0 1 0-8 4 4 0 0 1 4-4z"/></svg></span><span><b>Data prep for AI</b><span>Chunk, redact, embed, dedupe for RAG.</span></span></a>
+        <div class="mega mega3">
+          <div class="mcol">
+            <div class="mlbl">By task</div>
+            <a href="use-cases.html#join"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h6m6 0h6M9 6l-6 6 6 6m6-12 6 6-6 6"/></svg></span><span><b>Cross-system joins</b><span>Join files, DBs and warehouses in one pass.</span></span></a>
+            <a href="use-cases.html#mapper"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg></span><span><b>Visual mapping</b><span>Joins, typed expressions, inline filters.</span></span></a>
+            <a href="use-cases.html#incremental"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></span><span><b>Incremental loads</b><span>Read only rows past the saved watermark.</span></span></a>
+          </div>
+          <div class="mcol">
+            <div class="mlbl">Replication</div>
+            <a href="use-cases.html#cdc"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></span><span><b>Change data capture</b><span>Upsert + delete propagation, exactly-once.</span></span></a>
+            <a href="use-cases.html#snowflake"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 7l10 5 10-5M2 17l10 5 10-5"/></svg></span><span><b>Warehouse cost savings</b><span>Crunch locally, write only the rollup.</span></span></a>
+          </div>
+          <div class="mcol">
+            <div class="mlbl">AI &amp; automation</div>
+            <a href="use-cases.html#ai"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4 4 4 0 0 1 0 8 4 4 0 0 1-8 0 4 4 0 0 1 0-8 4 4 0 0 1 4-4z"/></svg></span><span><b>Data prep for AI</b><span>Chunk, redact, embed, dedupe for RAG.</span></span></a>
+            <a href="use-cases.html#mcp"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg></span><span><b>Build via MCP</b><span>Let Claude or any LLM build pipelines.</span></span></a>
+          </div>
         </div>
       </div>
       <a href="#integrations">Integrations</a>
       <a href="docs/index.html">Docs</a>
-      <a href="docs/learn.html">Learn</a>
+      <div class="nav-item">
+        <a class="top" href="docs/learn.html">Resources <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></a>
+        <div class="mega right">
+          <div class="mlbl">Resources</div>
+          <a href="docs/learn.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span><span><b>Learn hub</b><span>ETL vs ELT, CDC, local-first, RAG.</span></span></a>
+          <a href="docs/index.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg></span><span><b>Documentation</b><span>Quickstart, guides, reference.</span></span></a>
+          <a href="docs/components.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span><b>Component reference</b><span>All 329 sources, transforms, sinks.</span></span></a>
+          <a href="docs/integrations.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg></span><span><b>Integrations directory</b><span>Every connector, by category.</span></span></a>
+          <a href="docs/automation.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg></span><span><b>Automation &amp; MCP</b><span>Scheduler, headless runner, MCP server.</span></span></a>
+          <a href="docs/ai-duckie.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M12 7V4M9 13h.01M15 13h.01"/></svg></span><span><b>Duckie AI guide</b><span>The local assistant and AI transforms.</span></span></a>
+          <a href="https://github.com/SouravRoy-ETL/duckle" target="_blank" rel="noopener"><span class="mi"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span><span><b>GitHub</b><span>Source, issues, discussions.</span></span></a>
+          <a href="https://github.com/SouravRoy-ETL/duckle/releases" target="_blank" rel="noopener"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7M7 10l5 5 5-5M12 15V3"/></svg></span><span><b>Releases</b><span>Changelog and downloads.</span></span></a>
+        </div>
+      </div>
     </nav>
     <div class="nav-right">
       <button class="icon-btn theme-toggle" id="themeToggle" aria-label="Toggle light/dark theme" title="Toggle theme">
@@ -92,14 +116,14 @@
       <div class="hgraph" aria-hidden="true">
         <div class="gridbg"></div>
         <svg class="lines" viewBox="0 0 560 560" preserveAspectRatio="xMidYMid meet">
-          <line x1="106" y1="129" x2="280" y2="280" /><circle cx="106" cy="129" r="3.2" />
-          <line x1="90"  y1="280" x2="280" y2="280" /><circle cx="90"  cy="280" r="3.2" />
-          <line x1="112" y1="431" x2="280" y2="280" /><circle cx="112" cy="431" r="3.2" />
-          <line x1="314" y1="67"  x2="280" y2="280" /><circle cx="314" cy="67"  r="3.2" />
-          <line x1="442" y1="118" x2="280" y2="280" /><circle cx="442" cy="118" r="3.2" />
-          <line x1="476" y1="274" x2="280" y2="280" /><circle cx="476" cy="274" r="3.2" />
-          <line x1="437" y1="431" x2="280" y2="280" /><circle cx="437" cy="431" r="3.2" />
-          <line x1="336" y1="498" x2="280" y2="280" /><circle cx="336" cy="498" r="3.2" />
+          <line x1="100.8" y1="140"   x2="280" y2="280" /><circle cx="100.8" cy="140"   r="3.2" />
+          <line x1="100.8" y1="403.2" x2="280" y2="280" /><circle cx="100.8" cy="403.2" r="3.2" />
+          <line x1="436.8" y1="140"   x2="280" y2="280" /><circle cx="436.8" cy="140"   r="3.2" />
+          <line x1="436.8" y1="403.2" x2="280" y2="280" /><circle cx="436.8" cy="403.2" r="3.2" />
+          <line x1="280"   y1="56"    x2="280" y2="280" /><circle cx="280"   cy="56"    r="3.2" />
+          <line x1="504"   y1="274.4" x2="280" y2="280" /><circle cx="504"   cy="274.4" r="3.2" />
+          <line x1="280"   y1="504"   x2="280" y2="280" /><circle cx="280"   cy="504"   r="3.2" />
+          <line x1="56"    y1="274.4" x2="280" y2="280" /><circle cx="56"    cy="274.4" r="3.2" />
         </svg>
 
         <!-- central Duckle mark -->
@@ -108,8 +132,8 @@
           <img class="logo-dark" src="assets/img/duckle-logo-dark.svg" alt="Duckle" />
         </div>
 
-        <!-- source groups (left) -->
-        <div class="hg-el hg-group hg-float" style="left:19%; top:23%;">
+        <!-- connector groups (corners) -->
+        <div class="hg-el hg-group hg-float" style="left:18%; top:25%;">
           <div class="grow">
             <span class="hg-tile"><img src="https://cdn.simpleicons.org/postgresql" alt="PostgreSQL" loading="lazy" /></span>
             <span class="hg-tile"><img src="https://cdn.simpleicons.org/mysql" alt="MySQL" loading="lazy" /></span>
@@ -117,7 +141,7 @@
           </div>
           <div class="glbl">Databases</div>
         </div>
-        <div class="hg-el hg-group hg-float d2" style="left:16%; top:50%;">
+        <div class="hg-el hg-group hg-float d3" style="left:18%; top:72%;">
           <div class="grow">
             <span class="hg-tile"><img src="https://cdn.simpleicons.org/snowflake" alt="Snowflake" loading="lazy" /></span>
             <span class="hg-tile"><img src="https://cdn.simpleicons.org/googlebigquery" alt="BigQuery" loading="lazy" /></span>
@@ -125,7 +149,7 @@
           </div>
           <div class="glbl">Warehouses</div>
         </div>
-        <div class="hg-el hg-group hg-float d4" style="left:20%; top:77%;">
+        <div class="hg-el hg-group hg-float d2" style="left:78%; top:25%;">
           <div class="grow">
             <span class="hg-tile"><img src="https://cdn.simpleicons.org/stripe" alt="Stripe" loading="lazy" /></span>
             <span class="hg-tile"><img src="https://cdn.simpleicons.org/hubspot" alt="HubSpot" loading="lazy" /></span>
@@ -133,22 +157,27 @@
           </div>
           <div class="glbl">SaaS &amp; apps</div>
         </div>
-
-        <!-- destination / streaming nodes (right) -->
-        <div class="hg-el hg-node sm hg-float d3" style="left:56%; top:12%;">
-          <img src="https://cdn.simpleicons.org/apacheparquet" alt="Parquet" loading="lazy" />
+        <div class="hg-el hg-group hg-float d4" style="left:78%; top:72%;">
+          <div class="grow">
+            <span class="hg-tile"><img src="https://cdn.simpleicons.org/duckdb/1b1f2a" alt="DuckDB" loading="lazy" /></span>
+            <span class="hg-tile"><img src="assets/img/eco/ducklake.svg" alt="DuckLake" loading="lazy" /></span>
+            <span class="hg-tile"><img src="assets/img/eco/quack.svg" alt="Quack" loading="lazy" /></span>
+          </div>
+          <div class="glbl">Built on DuckDB</div>
         </div>
-        <div class="hg-el hg-node hg-float d1" style="left:79%; top:21%;">
+
+        <!-- streaming / connector nodes (edges) -->
+        <div class="hg-el hg-node sm hg-float d1" style="left:50%; top:10%;">
           <img src="https://cdn.simpleicons.org/github" alt="GitHub" loading="lazy" />
         </div>
-        <div class="hg-el hg-node hg-float d3" style="left:85%; top:49%;">
+        <div class="hg-el hg-node hg-float d3" style="left:90%; top:49%;">
           <img src="https://cdn.simpleicons.org/apachekafka" alt="Kafka" loading="lazy" />
         </div>
-        <div class="hg-el hg-node hg-float" style="left:78%; top:77%;">
-          <img src="https://cdn.simpleicons.org/redis" alt="Redis" loading="lazy" />
+        <div class="hg-el hg-node sm hg-float d2" style="left:50%; top:90%;">
+          <img src="https://cdn.simpleicons.org/apacheparquet" alt="Parquet" loading="lazy" />
         </div>
-        <div class="hg-el hg-node sm hg-float d2" style="left:60%; top:89%;">
-          <img src="https://cdn.simpleicons.org/elasticsearch" alt="Elasticsearch" loading="lazy" />
+        <div class="hg-el hg-node hg-float d4" style="left:10%; top:49%;">
+          <img src="https://cdn.simpleicons.org/redis" alt="Redis" loading="lazy" />
         </div>
       </div>
     </div>

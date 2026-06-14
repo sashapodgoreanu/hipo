@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#7d66ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Quack">
+  <path d="M20 11.5a8 8 0 0 1-8.5 8 9 9 0 0 1-3.8-.85L3.5 20l1.4-4.2A8 8 0 0 1 4 11.5 8 8 0 0 1 12 3.5a8 8 0 0 1 8 8z"/>
+  <circle cx="9" cy="11.5" r="1.1" fill="#7d66ff" stroke="none"/>
+  <circle cx="15" cy="11.5" r="1.1" fill="#7d66ff" stroke="none"/>
+</svg>
