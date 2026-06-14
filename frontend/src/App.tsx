@@ -49,6 +49,15 @@ import { RunStatusContext } from './canvas/run-status-context';
 import { validatePipeline } from './validation';
 import { resolveForRun } from './run-resolve';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
+import { AccountChip, ProfileSetupModal } from './workflow-ui/AccountMenu';
+import {
+    type Account,
+    loadAccounts,
+    saveAccounts,
+    loadActiveAccountId,
+    saveActiveAccountId,
+    newAccountId,
+} from './accounts';
 import {
     deleteItemPayload,
     deletePipelineFile,
@@ -248,11 +257,24 @@ export default function App() {
     // In Tauri: needs workspace picked + hydrated before saves start.
     // In browser: workspaceReady is always true; localStorage persists.
     const [workspaceReady, setWorkspaceReady] = useState<boolean>(!isInTauri());
-    // Engine setup comes first; only once engines are ready do we show
-    // the workspace picker.
+    // ---- local multi-account profiles: username + optional avatar, each bound
+    // to its own workspace (= data / pipeline context). Stored only on this
+    // device, never transmitted; no password. ----
+    const [accounts, setAccounts] = useState<Account[]>(loadAccounts);
+    const [activeAccountId, setActiveAccountId] = useState<string | null>(loadActiveAccountId);
+    useEffect(() => {
+        saveAccounts(accounts);
+    }, [accounts]);
+    useEffect(() => {
+        saveActiveAccountId(activeAccountId);
+    }, [activeAccountId]);
+    const activeAccount = accounts.find(a => a.id === activeAccountId) ?? accounts[0] ?? null;
+    // Engine setup comes first; then (first run) account setup; then the
+    // workspace picker.
     const showEngineSetup = isInTauri() && engineGate === 'engine-setup';
+    const showProfileSetup = isInTauri() && engineGate === 'ready' && accounts.length === 0;
     const showWorkspacePicker =
-        isInTauri() && engineGate === 'ready' && !workspacePathState;
+        isInTauri() && engineGate === 'ready' && accounts.length > 0 && !workspacePathState;
     const [newPipelineModal, setNewPipelineModal] = useState<{
         open: boolean;
         defaultParent: string;
@@ -494,6 +516,95 @@ export default function App() {
         setWorkspacePath(picked);
         setWorkspacePathState(picked);
     }, [workspacePathState]);
+
+    // Keep the active account pointed at whatever workspace is open.
+    useEffect(() => {
+        if (!activeAccountId || !workspacePathState) return;
+        setAccounts(prev =>
+            prev.map(a =>
+                a.id === activeAccountId && a.workspacePath !== workspacePathState
+                    ? { ...a, workspacePath: workspacePathState }
+                    : a,
+            ),
+        );
+    }, [workspacePathState, activeAccountId]);
+
+    // Load an account's workspace context, reusing the workspace-switch reset
+    // so the canvas re-hydrates cleanly (quick context switch).
+    const loadAccountContext = useCallback((path: string | null) => {
+        setWorkspaceReady(false);
+        setPipelineData(INITIAL_PIPELINE_DATA);
+        setRepo(INITIAL_REPO);
+        setJobs(INITIAL_JOBS);
+        setActiveJobId('j1');
+        prevPipelineDataRef.current = null;
+        prevRepoRef.current = null;
+        if (path) {
+            setWorkspacePath(path);
+            setWorkspacePathState(path);
+        } else {
+            setWorkspacePathState(null);
+        }
+    }, []);
+
+    const handleCreateFirstAccount = useCallback(
+        (v: { username: string; avatar?: string }) => {
+            const acc: Account = {
+                id: newAccountId(),
+                username: v.username,
+                avatar: v.avatar,
+                workspacePath: workspacePathState ?? undefined,
+            };
+            setAccounts([acc]);
+            setActiveAccountId(acc.id);
+        },
+        [workspacePathState],
+    );
+
+    const handleSwitchAccount = useCallback(
+        (id: string) => {
+            if (id === activeAccountId) return;
+            const acc = accounts.find(a => a.id === id);
+            setActiveAccountId(id);
+            if (isInTauri()) loadAccountContext(acc?.workspacePath ?? null);
+        },
+        [accounts, activeAccountId, loadAccountContext],
+    );
+
+    const handleAddAccount = useCallback(
+        (v: { username: string; avatar?: string }) => {
+            const acc: Account = { id: newAccountId(), username: v.username, avatar: v.avatar };
+            setAccounts(prev => [...prev, acc]);
+            setActiveAccountId(acc.id);
+            if (isInTauri()) loadAccountContext(null); // new account picks its own workspace
+        },
+        [loadAccountContext],
+    );
+
+    const handleEditAccount = useCallback(
+        (id: string, v: { username: string; avatar?: string }) => {
+            setAccounts(prev =>
+                prev.map(a => (a.id === id ? { ...a, username: v.username, avatar: v.avatar } : a)),
+            );
+        },
+        [],
+    );
+
+    const handleRemoveAccount = useCallback(
+        (id: string) => {
+            setAccounts(prev => {
+                if (prev.length <= 1) return prev; // keep at least one account
+                const next = prev.filter(a => a.id !== id);
+                if (id === activeAccountId) {
+                    const fallback = next[0];
+                    setActiveAccountId(fallback.id);
+                    if (isInTauri()) loadAccountContext(fallback.workspacePath ?? null);
+                }
+                return next;
+            });
+        },
+        [activeAccountId, loadAccountContext],
+    );
 
     const workspaceFolderName = useMemo(() => {
         if (!workspacePathState) return null;
@@ -1711,6 +1822,16 @@ export default function App() {
                     <Sparkles size={14} />
                 </button>
                 <LanguageSelector />
+                {accounts.length > 0 && activeAccount ? (
+                    <AccountChip
+                        accounts={accounts}
+                        activeId={activeAccount.id}
+                        onSwitch={handleSwitchAccount}
+                        onAdd={handleAddAccount}
+                        onEdit={handleEditAccount}
+                        onRemove={handleRemoveAccount}
+                    />
+                ) : null}
                 <button
                     type="button"
                     className="topbar-theme-toggle"
@@ -1832,6 +1953,10 @@ export default function App() {
 
             {showEngineSetup ? (
                 <EngineSetupModal onReady={() => setEngineGate('ready')} />
+            ) : null}
+
+            {showProfileSetup ? (
+                <ProfileSetupModal onCreate={handleCreateFirstAccount} />
             ) : null}
 
             {showChatPanel ? (
