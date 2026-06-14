@@ -536,21 +536,31 @@ export default function App() {
 
     // Load an account's workspace context, reusing the workspace-switch reset
     // so the canvas re-hydrates cleanly (quick context switch).
-    const loadAccountContext = useCallback((path: string | null) => {
-        setWorkspaceReady(false);
-        setPipelineData(INITIAL_PIPELINE_DATA);
-        setRepo(INITIAL_REPO);
-        setJobs(INITIAL_JOBS);
-        setActiveJobId('j1');
-        prevPipelineDataRef.current = null;
-        prevRepoRef.current = null;
-        if (path) {
-            setWorkspacePath(path);
-            setWorkspacePathState(path);
-        } else {
-            setWorkspacePathState(null);
-        }
-    }, []);
+    const loadAccountContext = useCallback(
+        (path: string | null) => {
+            // Already on this workspace: the in-memory state is already the
+            // right one. Resetting to INITIAL here would blank the canvas down
+            // to the default orders_etl sample and NOT re-hydrate, because the
+            // loadWorkspace effect keys off workspacePathState (which wouldn't
+            // change). Two accounts pointing at the same folder legitimately
+            // share its data, so keep what's loaded.
+            if (path === workspacePathState) return;
+            setWorkspaceReady(false);
+            setPipelineData(INITIAL_PIPELINE_DATA);
+            setRepo(INITIAL_REPO);
+            setJobs(INITIAL_JOBS);
+            setActiveJobId('j1');
+            prevPipelineDataRef.current = null;
+            prevRepoRef.current = null;
+            if (path) {
+                setWorkspacePath(path);
+                setWorkspacePathState(path);
+            } else {
+                setWorkspacePathState(null);
+            }
+        },
+        [workspacePathState],
+    );
 
     const handleCreateFirstAccount = useCallback(
         (v: { username: string; avatar?: string }) => {
