@@ -7237,6 +7237,19 @@ html[dir='rtl'] .topbar-lang {
     border-bottom: 1px solid rgba(0, 0, 0, 0.2);
     flex: 0 0 auto;
 }
+.update-banner.is-error {
+    background: linear-gradient(90deg, #e23b3b, #c92a2a);
+}
+.update-banner.is-warn {
+    background: linear-gradient(90deg, #f4b400, #e69500);
+    color: #1b1f2a;
+}
+.update-banner.is-warn .update-banner-dismiss {
+    color: rgba(27, 31, 42, 0.7);
+}
+.update-banner.is-warn .update-banner-dismiss:hover {
+    color: #1b1f2a;
+}
 .update-banner-icon {
     font-size: 14px;
 }

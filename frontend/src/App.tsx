@@ -69,6 +69,7 @@ import {
     savePipelineFile,
     saveRepository,
     setWorkspacePath,
+    WorkspaceLoadError,
 } from './workspace';
 import LeftSidebar from './workflow-ui/LeftSidebar';
 import PropertiesPanel from './workflow-ui/PropertiesPanel';
@@ -262,6 +263,12 @@ export default function App() {
     // In Tauri: needs workspace picked + hydrated before saves start.
     // In browser: workspaceReady is always true; localStorage persists.
     const [workspaceReady, setWorkspaceReady] = useState<boolean>(!isInTauri());
+    // A structural workspace file (duckle.json / repository.json) failed to
+    // parse - we stay un-ready so auto-save can't overwrite the good files,
+    // and show a banner naming the file. `corruptFiles` holds per-item files
+    // (a context/connection/pipeline) that were skipped so the rest could load.
+    const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
+    const [corruptFiles, setCorruptFiles] = useState<string[]>([]);
     // ---- local multi-account profiles: username + optional avatar, each bound
     // to its own workspace (= data / pipeline context). Stored only on this
     // device, never transmitted; no password. ----
@@ -293,18 +300,33 @@ export default function App() {
     useEffect(() => {
         if (!isInTauri() || !workspacePathState) return;
         let cancelled = false;
-        loadWorkspace(workspacePathState).then(state => {
-            if (cancelled) return;
-            if (state) {
-                if (state.engine) setEngine(state.engine as EngineId);
-                if (state.pipelineData)
-                    setPipelineData(state.pipelineData as Record<string, PipelineState>);
-                if (state.repo) setRepo(state.repo as RepoItem[]);
-                if (state.jobs) setJobs(state.jobs as Job[]);
-                if (state.activeJobId) setActiveJobId(state.activeJobId);
-            }
-            setWorkspaceReady(true);
-        });
+        setWorkspaceLoadError(null);
+        setCorruptFiles([]);
+        loadWorkspace(workspacePathState)
+            .then(state => {
+                if (cancelled) return;
+                if (state) {
+                    if (state.engine) setEngine(state.engine as EngineId);
+                    if (state.pipelineData)
+                        setPipelineData(state.pipelineData as Record<string, PipelineState>);
+                    if (state.repo) setRepo(state.repo as RepoItem[]);
+                    if (state.jobs) setJobs(state.jobs as Job[]);
+                    if (state.activeJobId) setActiveJobId(state.activeJobId);
+                    if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
+                }
+                setWorkspaceReady(true);
+            })
+            .catch(err => {
+                if (cancelled) return;
+                // Structural file corrupt: do NOT mark ready. Leaving
+                // workspaceReady false keeps the auto-save effects disabled so
+                // the in-memory defaults can never be written over the good
+                // files on disk. Surface the exact file to fix or restore.
+                const file =
+                    err instanceof WorkspaceLoadError ? err.file : (err?.message ?? String(err));
+                setWorkspaceLoadError(file);
+                console.error('Workspace load failed (corrupt file)', err);
+            });
         return () => {
             cancelled = true;
         };
@@ -1863,6 +1885,51 @@ export default function App() {
             </header>
 
             <UpdateBanner />
+
+            {workspaceLoadError ? (
+                <div className="update-banner is-error" role="alert">
+                    <span className="update-banner-icon" aria-hidden="true">
+                        ⚠
+                    </span>
+                    <span className="update-banner-text">
+                        {t('workspace.loadError', {
+                            file: workspaceLoadError,
+                            defaultValue:
+                                'Could not open this workspace: {{file}} contains invalid JSON. Fix or restore that file, then reload. Editing is paused so your other files stay safe.',
+                        })}
+                    </span>
+                    <button
+                        type="button"
+                        className="update-banner-cta"
+                        onClick={() => window.location.reload()}
+                    >
+                        {t('workspace.reload', 'Reload')}
+                    </button>
+                </div>
+            ) : corruptFiles.length ? (
+                <div className="update-banner is-warn" role="alert">
+                    <span className="update-banner-icon" aria-hidden="true">
+                        ⚠
+                    </span>
+                    <span className="update-banner-text">
+                        {t('workspace.partialLoad', {
+                            count: corruptFiles.length,
+                            files: corruptFiles.join(', '),
+                            defaultValue:
+                                '{{count}} item(s) could not be read (invalid JSON): {{files}}. The rest of your workspace loaded normally.',
+                        })}
+                    </span>
+                    <button
+                        type="button"
+                        className="update-banner-dismiss"
+                        aria-label={t('common.close', 'Close')}
+                        title={t('common.close', 'Close')}
+                        onClick={() => setCorruptFiles([])}
+                    >
+                        ×
+                    </button>
+                </div>
+            ) : null}
 
             <main className="workspace">
                 <LeftSidebar

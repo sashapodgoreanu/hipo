@@ -29,7 +29,27 @@ export type WorkspaceState = {
     repo?: unknown[];
     jobs?: unknown[];
     activeJobId?: string;
+    // Paths of per-item files (contexts, connections, pipelines) that failed
+    // to parse. The rest of the workspace still loaded; these are reported so
+    // the UI can warn instead of failing silently.
+    corruptFiles?: string[];
 };
+
+/**
+ * Thrown when a workspace file exists but contains invalid JSON (e.g. it was
+ * hand-edited outside the app). Carries the offending file path so the UI can
+ * tell the user exactly what to fix or restore, rather than silently showing
+ * an empty workspace.
+ */
+export class WorkspaceLoadError extends Error {
+    constructor(
+        public readonly file: string,
+        public readonly reason: string,
+    ) {
+        super(`Invalid JSON in ${file}: ${reason}`);
+        this.name = 'WorkspaceLoadError';
+    }
+}
 
 export function isInTauri(): boolean {
     return isTauri();
@@ -135,7 +155,14 @@ async function readJsonIfExists<T = unknown>(path: string): Promise<T | null> {
     const { exists, readTextFile } = await fs();
     if (!(await exists(path))) return null;
     const content = await readTextFile(path);
-    return JSON.parse(content) as T;
+    try {
+        return JSON.parse(content) as T;
+    } catch (err) {
+        // A present-but-unparseable file is a corruption, not an absence. Make
+        // it distinguishable so callers can skip-and-report (per item) or
+        // surface a hard error (critical files), never treat it as "empty".
+        throw new WorkspaceLoadError(path, err instanceof Error ? err.message : String(err));
+    }
 }
 
 async function readDirEntries(path: string): Promise<string[]> {
@@ -168,6 +195,11 @@ export async function loadWorkspace(path: string): Promise<WorkspaceState | null
         if (v1) return v1;
         return null;
     } catch (err) {
+        // A structural file (duckle.json / repository.json) is corrupt: surface
+        // it so the caller can show a hard error and, crucially, NOT fall back
+        // to a default in-memory state that the auto-save would then write over
+        // the still-good files on disk.
+        if (err instanceof WorkspaceLoadError) throw err;
         console.error('Failed to load workspace', err);
         return null;
     }
@@ -186,16 +218,28 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         joinPath(path, REPOSITORY_FILE),
     )) ?? [];
 
+    // Per-item files (contexts, connections, pipelines) are loaded
+    // independently: a single corrupt one is skipped and reported, never
+    // allowed to abort the whole workspace load. (`duckle.json` and
+    // `repository.json` above are structural - if those are corrupt the
+    // WorkspaceLoadError propagates so the caller can show a hard error.)
+    const corruptFiles: string[] = [];
+
     // Hydrate payloads for each repo item that lives in its own file.
     for (const item of repo) {
         const itype = typeof item.type === 'string' ? item.type : '';
         const dir = PAYLOAD_DIR_BY_TYPE[itype];
         if (!dir || itype === 'pipeline' || itype === 'folder' || itype === 'project') continue;
         const file = joinPath(path, dir, `${item.id}.json`);
-        const payload = await readJsonIfExists(file);
-        if (payload !== null) {
-            (item as { payload: unknown }).payload =
-                itype === 'connection' ? await decryptConnectionPayload(path, payload) : payload;
+        try {
+            const payload = await readJsonIfExists(file);
+            if (payload !== null) {
+                (item as { payload: unknown }).payload =
+                    itype === 'connection' ? await decryptConnectionPayload(path, payload) : payload;
+            }
+        } catch (err) {
+            if (err instanceof WorkspaceLoadError) corruptFiles.push(err.file);
+            else throw err;
         }
     }
 
@@ -204,8 +248,13 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
     for (const item of repo) {
         if (item.type !== 'pipeline') continue;
         const file = joinPath(path, PIPELINES_DIR, `${item.id}.json`);
-        const pipeline = await readJsonIfExists(file);
-        if (pipeline) pipelineData[item.id as string] = pipeline;
+        try {
+            const pipeline = await readJsonIfExists(file);
+            if (pipeline) pipelineData[item.id as string] = pipeline;
+        } catch (err) {
+            if (err instanceof WorkspaceLoadError) corruptFiles.push(err.file);
+            else throw err;
+        }
     }
 
     return {
@@ -215,6 +264,7 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         activeJobId: meta.activeJobId,
         repo,
         pipelineData,
+        corruptFiles: corruptFiles.length ? corruptFiles : undefined,
     };
 }
 
