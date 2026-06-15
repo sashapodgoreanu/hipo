@@ -60,7 +60,7 @@
     <main class="docs-main">
 <span class="eyebrow">Integrations</span>
 <h1>Integrations directory</h1>
-<p class="lead">104 sources and 59 sinks that work today, each covered by tests. Organized by category; sources read in, sinks write out.</p>
+<p class="lead">104 sources and 59 sinks that work today, each covered by tests. Search the catalogue or filter by category and direction. Sources read in, destinations write out.</p>
 
 <div class="grid cols-3">
   <div class="card">
@@ -80,235 +80,18 @@
   </div>
 </div>
 
-<h2>Sources</h2>
-<p>Source components carry the <code>src.*</code> id prefix and feed rows into a pipeline.</p>
-
-<h3>Files &amp; formats</h3>
-<div class="chips">
-  <span class="chip">CSV</span>
-  <span class="chip">TSV</span>
-  <span class="chip">Parquet</span>
-  <span class="chip">JSON</span>
-  <span class="chip">JSONL</span>
-  <span class="chip">Excel</span>
-  <span class="chip">YAML</span>
-  <span class="chip">TOML</span>
-  <span class="chip">XML</span>
-  <span class="chip">Avro</span>
-  <span class="chip">Fixed-width</span>
+<div class="intg-controls">
+  <label class="intg-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <input id="intgSearch" type="search" placeholder="Search connectors (e.g. Snowflake, Kafka, S3)" autocomplete="off" />
+  </label>
+  <div class="intg-kinds" id="intgKinds"></div>
 </div>
+<div class="intg-filters" id="intgFilters"></div>
+<div class="intg-count" id="intgCount"></div>
+<div class="intg-grid" id="intgGrid"></div>
 
-<h3>Geospatial</h3>
-<div class="chips">
-  <span class="chip">GeoJSON</span>
-  <span class="chip">Shapefile</span>
-  <span class="chip">GeoPackage</span>
-  <span class="chip">KML</span>
-  <span class="chip">GPX</span>
-  <span class="chip">GML</span>
-</div>
-
-<h3>Lakehouse</h3>
-<div class="chips">
-  <span class="chip">Iceberg</span>
-  <span class="chip">Delta Lake</span>
-  <span class="chip">DuckLake</span>
-</div>
-
-<h3>Embedded DB</h3>
-<div class="chips">
-  <span class="chip">SQLite</span>
-  <span class="chip">DuckDB</span>
-</div>
-
-<h3>Relational DB</h3>
-<div class="chips">
-  <span class="chip">PostgreSQL</span>
-  <span class="chip">MySQL</span>
-  <span class="chip">MariaDB</span>
-  <span class="chip">CockroachDB</span>
-  <span class="chip">SQL Server</span>
-  <span class="chip">Oracle</span>
-  <span class="chip">ClickHouse</span>
-</div>
-
-<h3>Warehouses</h3>
-<div class="chips">
-  <span class="chip">Snowflake</span>
-  <span class="chip">BigQuery</span>
-  <span class="chip">Redshift</span>
-  <span class="chip">Databricks</span>
-  <span class="chip">MotherDuck</span>
-  <span class="chip">Azure Synapse</span>
-  <span class="chip">DuckDB Quack</span>
-</div>
-
-<h3>Object storage</h3>
-<div class="chips">
-  <span class="chip">Amazon S3</span>
-  <span class="chip">Google Cloud Storage</span>
-  <span class="chip">Azure Blob</span>
-  <span class="chip">MinIO</span>
-  <span class="chip">Cloudflare R2</span>
-  <span class="chip">Backblaze B2</span>
-  <span class="chip">HTTP</span>
-</div>
-
-<h3>Streaming</h3>
-<div class="chips">
-  <span class="chip">Apache Kafka</span>
-  <span class="chip">Redpanda</span>
-  <span class="chip">NATS JetStream</span>
-  <span class="chip">GCP Pub/Sub</span>
-  <span class="chip">RabbitMQ</span>
-  <span class="chip">AWS Kinesis</span>
-</div>
-
-<h3>NoSQL &amp; search</h3>
-<div class="chips">
-  <span class="chip">MongoDB</span>
-  <span class="chip">Cassandra</span>
-  <span class="chip">ScyllaDB</span>
-  <span class="chip">Elasticsearch</span>
-  <span class="chip">OpenSearch</span>
-  <span class="chip">Redis</span>
-  <span class="chip">CouchDB</span>
-  <span class="chip">DynamoDB</span>
-</div>
-
-<h3>Vector &amp; AI</h3>
-<div class="chips">
-  <span class="chip">pgvector</span>
-  <span class="chip">Qdrant</span>
-  <span class="chip">Weaviate</span>
-  <span class="chip">Milvus</span>
-</div>
-
-<h3>SaaS &amp; APIs</h3>
-<div class="chips">
-  <span class="chip">Salesforce</span>
-  <span class="chip">HubSpot</span>
-  <span class="chip">Pipedrive</span>
-  <span class="chip">Zendesk</span>
-  <span class="chip">Intercom</span>
-  <span class="chip">Stripe</span>
-  <span class="chip">QuickBooks</span>
-  <span class="chip">Xero</span>
-  <span class="chip">Shopify</span>
-  <span class="chip">Notion</span>
-  <span class="chip">Airtable</span>
-  <span class="chip">Asana</span>
-  <span class="chip">Trello</span>
-  <span class="chip">ClickUp</span>
-  <span class="chip">Monday.com</span>
-  <span class="chip">GitHub</span>
-  <span class="chip">GitLab</span>
-  <span class="chip">Linear</span>
-  <span class="chip">Jira</span>
-  <span class="chip">Slack</span>
-  <span class="chip">Discord</span>
-  <span class="chip">Telegram</span>
-  <span class="chip">Twilio</span>
-  <span class="chip">Mailchimp</span>
-  <span class="chip">SendGrid</span>
-  <span class="chip">Segment</span>
-  <span class="chip">REST</span>
-  <span class="chip">GraphQL</span>
-  <span class="chip">OData</span>
-  <span class="chip">SOAP</span>
-</div>
-
-<h3>File transfer &amp; mailbox</h3>
-<div class="chips">
-  <span class="chip">FTP</span>
-  <span class="chip">FTPS</span>
-  <span class="chip">SFTP</span>
-  <span class="chip">IMAP</span>
-</div>
-
-<h3>Other</h3>
-<div class="chips">
-  <span class="chip">Webhook listener</span>
-  <span class="chip">System clipboard</span>
-  <span class="chip">Git repo</span>
-</div>
-
-<h2>Destinations</h2>
-<p>Sink components carry the <code>snk.*</code> id prefix and write pipeline output back out.</p>
-
-<h3>Files</h3>
-<div class="chips">
-  <span class="chip">Parquet</span>
-  <span class="chip">CSV</span>
-  <span class="chip">TSV</span>
-  <span class="chip">JSON</span>
-  <span class="chip">JSONL</span>
-  <span class="chip">Excel</span>
-  <span class="chip">XML</span>
-  <span class="chip">Avro</span>
-  <span class="chip">Spatial</span>
-  <span class="chip">Iceberg</span>
-</div>
-
-<h3>Databases</h3>
-<div class="chips">
-  <span class="chip">PostgreSQL</span>
-  <span class="chip">MySQL</span>
-  <span class="chip">MariaDB</span>
-  <span class="chip">CockroachDB</span>
-  <span class="chip">SQLite</span>
-  <span class="chip">DuckDB</span>
-</div>
-
-<h3>Warehouses</h3>
-<div class="chips">
-  <span class="chip">Snowflake</span>
-  <span class="chip">BigQuery</span>
-  <span class="chip">Redshift</span>
-  <span class="chip">MotherDuck</span>
-  <span class="chip">Databricks</span>
-  <span class="chip">DuckLake</span>
-  <span class="chip">Quack</span>
-</div>
-
-<h3>Object storage</h3>
-<div class="chips">
-  <span class="chip">Amazon S3</span>
-  <span class="chip">Google Cloud Storage</span>
-  <span class="chip">Azure Blob</span>
-</div>
-
-<h3>NoSQL</h3>
-<div class="chips">
-  <span class="chip">MongoDB</span>
-</div>
-
-<h3>Vector DBs</h3>
-<div class="chips">
-  <span class="chip">pgvector</span>
-  <span class="chip">Pinecone</span>
-  <span class="chip">Qdrant</span>
-  <span class="chip">Weaviate</span>
-  <span class="chip">Milvus</span>
-</div>
-
-<h3>Messaging</h3>
-<div class="chips">
-  <span class="chip">Kafka</span>
-  <span class="chip">NATS</span>
-  <span class="chip">Pub/Sub</span>
-  <span class="chip">RabbitMQ</span>
-</div>
-
-<h3>Email &amp; transfer</h3>
-<div class="chips">
-  <span class="chip">SMTP email</span>
-  <span class="chip">FTP</span>
-  <span class="chip">FTPS</span>
-  <span class="chip">SFTP</span>
-</div>
-
-<div class="note"><b>Roadmap.</b> Roadmap connectors (e.g. IBM DB2, Pulsar, Event Hubs, multi-shard Kinesis, Chroma, LanceDB) are reserved in the palette and shipping engine-by-engine. All upserts support optional CDC delete propagation. For the transforms and quality nodes that run between source and sink, see the <a href="components.html">component reference</a>.</div>
+<div class="note"><b>Roadmap.</b> Roadmap connectors (e.g. IBM DB2, Pulsar sink, Event Hubs, multi-shard Kinesis, Chroma, LanceDB) are reserved in the palette and shipping engine-by-engine. All upserts support optional CDC delete propagation. For the transforms and quality nodes that run between source and sink, see the <a href="components.html">component reference</a>.</div>
     </main>
   </div>
 </div>
@@ -320,6 +103,141 @@
     </div>
   </div>
 </footer>
+
+<script>
+// Connector catalogue. n=name, c=category, k=kind (s=source, d=destination,
+// sd=both), l=logo (full URL, or a Simple Icons slug, or '' for a letter tile).
+const INTG = [
+  // Files & formats
+  {n:'CSV',c:'files',k:'sd',l:''},{n:'TSV',c:'files',k:'sd',l:''},
+  {n:'Parquet',c:'files',k:'sd',l:'apacheparquet'},{n:'JSON',c:'files',k:'sd',l:'json'},
+  {n:'JSONL',c:'files',k:'sd',l:'json'},{n:'Excel',c:'files',k:'sd',l:''},
+  {n:'YAML',c:'files',k:'s',l:'yaml'},{n:'TOML',c:'files',k:'s',l:'toml'},
+  {n:'XML',c:'files',k:'sd',l:''},{n:'Avro',c:'files',k:'sd',l:''},
+  {n:'Fixed-width',c:'files',k:'s',l:''},
+  // Geospatial
+  {n:'GeoJSON',c:'geo',k:'s',l:''},{n:'Shapefile',c:'geo',k:'s',l:''},
+  {n:'GeoPackage',c:'geo',k:'s',l:''},{n:'KML',c:'geo',k:'s',l:''},
+  {n:'GPX',c:'geo',k:'s',l:''},{n:'GML',c:'geo',k:'s',l:''},
+  {n:'Spatial',c:'geo',k:'d',l:''},
+  // Lakehouse
+  {n:'Apache Iceberg',c:'lake',k:'sd',l:''},{n:'Delta Lake',c:'lake',k:'s',l:''},
+  {n:'DuckLake',c:'lake',k:'sd',l:'../assets/img/eco/ducklake.svg'},
+  // Databases
+  {n:'PostgreSQL',c:'db',k:'sd',l:'postgresql'},{n:'MySQL',c:'db',k:'sd',l:'mysql'},
+  {n:'MariaDB',c:'db',k:'sd',l:'mariadb'},{n:'CockroachDB',c:'db',k:'sd',l:'cockroachlabs'},
+  {n:'SQL Server',c:'db',k:'s',l:'https://cdn.jsdelivr.net/gh/devicons/devicon/icons/microsoftsqlserver/microsoftsqlserver-original.svg'},
+  {n:'Oracle',c:'db',k:'s',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/oracle.svg'},
+  {n:'ClickHouse',c:'db',k:'s',l:'clickhouse'},{n:'SQLite',c:'db',k:'sd',l:'sqlite'},
+  {n:'DuckDB',c:'db',k:'sd',l:'duckdb'},
+  // Warehouses
+  {n:'Snowflake',c:'wh',k:'sd',l:'snowflake'},{n:'BigQuery',c:'wh',k:'sd',l:'googlebigquery'},
+  {n:'Redshift',c:'wh',k:'sd',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/aws-redshift.svg'},
+  {n:'Databricks',c:'wh',k:'sd',l:'databricks'},{n:'MotherDuck',c:'wh',k:'sd',l:''},
+  {n:'Azure Synapse',c:'wh',k:'s',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/microsoft-azure.svg'},
+  {n:'Quack',c:'wh',k:'sd',l:'../assets/img/eco/quack.svg'},
+  // Object storage
+  {n:'Amazon S3',c:'obj',k:'sd',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/aws-s3.svg'},
+  {n:'Google Cloud Storage',c:'obj',k:'sd',l:'googlecloud'},
+  {n:'Azure Blob',c:'obj',k:'sd',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/microsoft-azure.svg'},
+  {n:'MinIO',c:'obj',k:'s',l:'minio'},{n:'Cloudflare R2',c:'obj',k:'s',l:'cloudflare'},
+  {n:'Backblaze B2',c:'obj',k:'s',l:'backblaze'},{n:'HTTP',c:'obj',k:'s',l:''},
+  // Streaming
+  {n:'Apache Kafka',c:'stream',k:'sd',l:'apachekafka'},{n:'Redpanda',c:'stream',k:'s',l:'redpanda'},
+  {n:'NATS JetStream',c:'stream',k:'sd',l:'natsdotio'},{n:'GCP Pub/Sub',c:'stream',k:'sd',l:'googlecloud'},
+  {n:'RabbitMQ',c:'stream',k:'sd',l:'rabbitmq'},{n:'AWS Kinesis',c:'stream',k:'s',l:''},
+  // NoSQL & search
+  {n:'MongoDB',c:'nosql',k:'sd',l:'mongodb'},{n:'Cassandra',c:'nosql',k:'s',l:'apachecassandra'},
+  {n:'ScyllaDB',c:'nosql',k:'s',l:'scylladb'},{n:'Elasticsearch',c:'nosql',k:'s',l:'elasticsearch'},
+  {n:'OpenSearch',c:'nosql',k:'s',l:'opensearch'},{n:'Redis',c:'nosql',k:'s',l:'redis'},
+  {n:'CouchDB',c:'nosql',k:'s',l:'apachecouchdb'},{n:'DynamoDB',c:'nosql',k:'s',l:''},
+  // Vector
+  {n:'pgvector',c:'vector',k:'sd',l:'postgresql'},{n:'Qdrant',c:'vector',k:'sd',l:'qdrant'},
+  {n:'Weaviate',c:'vector',k:'sd',l:'weaviate'},{n:'Milvus',c:'vector',k:'sd',l:'milvus'},
+  {n:'Pinecone',c:'vector',k:'d',l:'pinecone'},
+  // SaaS & APIs
+  {n:'Salesforce',c:'saas',k:'s',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/salesforce.svg'},
+  {n:'HubSpot',c:'saas',k:'s',l:'hubspot'},{n:'Pipedrive',c:'saas',k:'s',l:'pipedrive'},
+  {n:'Zendesk',c:'saas',k:'s',l:'zendesk'},{n:'Intercom',c:'saas',k:'s',l:'intercom'},
+  {n:'Stripe',c:'saas',k:'s',l:'stripe'},{n:'QuickBooks',c:'saas',k:'s',l:'quickbooks'},
+  {n:'Xero',c:'saas',k:'s',l:'xero'},{n:'Shopify',c:'saas',k:'s',l:'shopify'},
+  {n:'Notion',c:'saas',k:'s',l:'notion'},{n:'Airtable',c:'saas',k:'s',l:'airtable'},
+  {n:'Asana',c:'saas',k:'s',l:'asana'},{n:'Trello',c:'saas',k:'s',l:'trello'},
+  {n:'ClickUp',c:'saas',k:'s',l:'clickup'},{n:'Monday.com',c:'saas',k:'s',l:''},
+  {n:'GitHub',c:'saas',k:'s',l:'github'},{n:'GitLab',c:'saas',k:'s',l:'gitlab'},
+  {n:'Linear',c:'saas',k:'s',l:'linear'},{n:'Jira',c:'saas',k:'s',l:'jira'},
+  {n:'Slack',c:'saas',k:'s',l:'https://cdn.jsdelivr.net/gh/gilbarbara/logos/logos/slack-icon.svg'},
+  {n:'Discord',c:'saas',k:'s',l:'discord'},{n:'Telegram',c:'saas',k:'s',l:'telegram'},
+  {n:'Twilio',c:'saas',k:'s',l:'twilio'},{n:'Mailchimp',c:'saas',k:'s',l:'mailchimp'},
+  {n:'SendGrid',c:'saas',k:'s',l:''},{n:'Segment',c:'saas',k:'s',l:''},
+  {n:'REST',c:'saas',k:'s',l:''},{n:'GraphQL',c:'saas',k:'s',l:'graphql'},
+  {n:'OData',c:'saas',k:'s',l:''},{n:'SOAP',c:'saas',k:'s',l:''},
+  // Transfer & email
+  {n:'FTP',c:'transfer',k:'sd',l:''},{n:'FTPS',c:'transfer',k:'sd',l:''},
+  {n:'SFTP',c:'transfer',k:'sd',l:''},{n:'IMAP',c:'transfer',k:'s',l:''},
+  {n:'SMTP email',c:'transfer',k:'d',l:''},
+  // Other
+  {n:'Webhook listener',c:'other',k:'s',l:''},{n:'System clipboard',c:'other',k:'s',l:''},
+  {n:'Git repo',c:'other',k:'s',l:'git'},
+];
+
+const CATS = [
+  ['all','All'],['db','Databases'],['wh','Warehouses'],['lake','Lakehouse'],
+  ['files','Files & formats'],['geo','Geospatial'],['obj','Object storage'],
+  ['stream','Streaming'],['nosql','NoSQL & search'],['vector','Vector'],
+  ['saas','SaaS & APIs'],['transfer','Transfer & email'],['other','Other'],
+];
+const KINDS = [['all','All'],['s','Sources'],['d','Destinations']];
+
+let curCat = 'all', curKind = 'all', q = '';
+
+function kindLabel(k){ return k === 'sd' ? 'Source · Destination' : k === 's' ? 'Source' : 'Destination'; }
+function logoUrl(l){ return !l ? '' : (l.indexOf('http') === 0 ? l : 'https://cdn.simpleicons.org/' + l); }
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function render(){
+  const ql = q.trim().toLowerCase();
+  const list = INTG.filter(x =>
+    (curCat === 'all' || x.c === curCat) &&
+    (curKind === 'all' || x.k.indexOf(curKind) !== -1) &&
+    (!ql || x.n.toLowerCase().indexOf(ql) !== -1)
+  );
+  const grid = document.getElementById('intgGrid');
+  if (!list.length){
+    grid.innerHTML = '<div class="intg-empty">No connectors match. Try a different search or category.</div>';
+  } else {
+    grid.innerHTML = list.map(x => {
+      const url = logoUrl(x.l), letter = x.n[0].toUpperCase();
+      const logo = url
+        ? '<span class="intg-logo" data-letter="' + letter + '"><img src="' + url + '" alt="" loading="lazy" onerror="this.parentNode.classList.add(\'noimg\');this.remove();" /></span>'
+        : '<span class="intg-logo noimg" data-letter="' + letter + '"></span>';
+      return '<div class="intg-card">' + logo +
+        '<span class="intg-meta"><span class="intg-name">' + esc(x.n) + '</span>' +
+        '<span class="intg-kind">' + kindLabel(x.k) + '</span></span></div>';
+    }).join('');
+  }
+  document.getElementById('intgCount').textContent =
+    list.length + ' of ' + INTG.length + ' connectors';
+}
+
+function buildChips(host, items, getCur, setCur){
+  host.innerHTML = items.map(([v,label]) =>
+    '<button type="button" class="intg-chip" data-v="' + v + '">' + label + '</button>'
+  ).join('');
+  const sync = () => host.querySelectorAll('.intg-chip').forEach(b =>
+    b.classList.toggle('active', b.dataset.v === getCur()));
+  host.addEventListener('click', e => {
+    const b = e.target.closest('.intg-chip'); if (!b) return;
+    setCur(b.dataset.v); sync(); render();
+  });
+  sync();
+}
+
+buildChips(document.getElementById('intgFilters'), CATS, () => curCat, v => curCat = v);
+buildChips(document.getElementById('intgKinds'), KINDS, () => curKind, v => curKind = v);
+document.getElementById('intgSearch').addEventListener('input', e => { q = e.target.value; render(); });
+render();
+</script>
 <script src="../assets/js/site.js"></script>
 </body>
 </html>
