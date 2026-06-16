@@ -52,19 +52,23 @@ const ADVANCED_FIELDS: Field[] = [
         defaultValue: false,
         description: 'Print the post-stage row count to the run output (descriptive; row counts already surface in node badges).',
     },
-    {
-        key: 'materialize',
-        label: 'Materialize',
-        kind: 'select',
-        defaultValue: 'auto',
-        options: [
-            { label: 'Auto (view if one consumer, table if several)', value: 'auto' },
-            { label: 'View (lazy, may re-scan the source)', value: 'view' },
-            { label: 'Table (read once, held in the run database)', value: 'table' },
-        ],
-        description: 'How this step is stored. Auto uses a view for a single consumer and a table when several steps read it. Pick Table to read an expensive source only once when a downstream split (e.g. a validator with its reject port wired) would otherwise scan it twice. Pick View to keep it lazy even with several consumers.',
-    },
 ];
+
+// Universal Materialize control, shown on the Basic tab of every node. The
+// engine reads `materialize` off the node's properties.
+const MATERIALIZE_FIELD: Field = {
+    key: 'materialize',
+    label: 'Materialize',
+    kind: 'select',
+    defaultValue: 'auto',
+    options: [
+        { label: 'Auto (view if one consumer, table if several)', value: 'auto' },
+        { label: 'View (lazy, may re-scan the source)', value: 'view' },
+        { label: 'Memory (read once, table held in RAM)', value: 'memory' },
+        { label: 'Disk (read once, streamed via a temp Parquet file)', value: 'disk' },
+    ],
+    description: 'How this step is stored. Auto uses a view for a single consumer and a table when several steps read it. Memory and Disk both read an expensive source only once (e.g. when a downstream split would otherwise scan it twice): Memory holds the rows as a table (fast, RAM-buffered), Disk streams them through a temp Parquet file (minimal RAM, for huge intermediates). View keeps it lazy even with several consumers.',
+};
 
 const KIND_LABEL: Record<string, string> = {
     source: 'Source',
@@ -375,6 +379,18 @@ export default function PropertiesPanel({
                                     {t('properties.genericComponent')}
                                 </div>
                             )}
+                            <div className="form-section">
+                                <div className="form-section-label">Materialization</div>
+                                <FieldRenderer
+                                    field={MATERIALIZE_FIELD}
+                                    value={
+                                        props[MATERIALIZE_FIELD.key] !== undefined
+                                            ? props[MATERIALIZE_FIELD.key]
+                                            : MATERIALIZE_FIELD.defaultValue
+                                    }
+                                    onChange={v => setProperty(MATERIALIZE_FIELD.key, v)}
+                                />
+                            </div>
                         </div>
                     ) : null}
 

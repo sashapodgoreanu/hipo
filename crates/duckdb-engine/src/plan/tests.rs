@@ -522,15 +522,15 @@
     }
 
     #[test]
-    fn materialize_table_override_forces_table_for_single_consumer() {
-        // materialize=table forces a materialized TABLE even when the node has a
-        // single consumer (which would default to a lazy VIEW).
+    fn materialize_memory_override_forces_table_for_single_consumer() {
+        // materialize=memory forces a materialized run-db TABLE even when the
+        // node has a single consumer (which would default to a lazy VIEW).
         let p = pipeline_from_json(
             r#"{
               "nodes": [
                 {"id":"s1","position":{"x":0,"y":0},"data":{
                   "label":"CSV","componentId":"src.csv",
-                  "properties":{"path":"/tmp/orders.csv","hasHeader":true,"materialize":"table"}}},
+                  "properties":{"path":"/tmp/orders.csv","hasHeader":true,"materialize":"memory"}}},
                 {"id":"k1","position":{"x":0,"y":0},"data":{
                   "label":"Out","componentId":"snk.parquet",
                   "properties":{"path":"/tmp/out.parquet"}}}
@@ -548,7 +548,39 @@
             .expect("source stage");
         assert!(
             src.sql.contains("CREATE OR REPLACE TABLE \"s1\""),
-            "materialize=table must force a TABLE for a single consumer, got: {}",
+            "materialize=memory must force a TABLE for a single consumer, got: {}",
+            src.sql
+        );
+    }
+
+    #[test]
+    fn materialize_disk_streams_via_parquet() {
+        // materialize=disk routes the stage through the COPY-to-parquet path
+        // (read once, minimal RAM) instead of a run-db table insert.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/orders.csv","hasHeader":true,"materialize":"disk"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"Out","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let src = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "s1")
+            .expect("source stage");
+        assert!(
+            matches!(src.runtime.as_ref(), Some(RuntimeSpec::AttachParquetSource(_))),
+            "materialize=disk must route through the parquet path, got sql: {}",
             src.sql
         );
     }

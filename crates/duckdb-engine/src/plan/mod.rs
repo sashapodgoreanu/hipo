@@ -3116,13 +3116,15 @@ fn build_stage(
         // the other external sources (Oracle / SQL Server / ADBC) already
         // behave. (Sinks take a different path and are unaffected.)
         let attach_backed = !attach.is_empty();
-        // Per-stage materialization override (Properties > Advanced > Materialize).
+        // Per-stage materialization override (Properties > Basic > Materialize).
         // "view" forces a lazy VIEW even with several consumers (DUCKLE_FORCE_VIEWS
-        // scoped to one node); "table" (also "memory" / "disk") forces a
-        // materialized TABLE so an expensive source is read once even when a
-        // single downstream split would otherwise re-scan it. The run database is
-        // on-disk, so a TABLE is buffered in RAM and spills under memory pressure.
-        // "auto" (default) keeps the single-consumer => VIEW, multi => TABLE policy.
+        // scoped to one node); "memory" forces a materialized run-db TABLE
+        // (RAM-buffered, fast); "disk" streams through a temp parquet file (see
+        // the disk branch below) for minimal RAM on huge intermediates. Both
+        // "memory" and "disk" make an expensive source read once even when a
+        // single downstream split would otherwise re-scan it. ("table" is kept as
+        // an alias of "memory" for pipelines saved before the split.) "auto"
+        // (default) keeps the single-consumer => VIEW, multi => TABLE policy.
         let materialize = props
             .get("materialize")
             .and_then(|v| v.as_str())
@@ -3161,6 +3163,19 @@ fn build_stage(
             && reject_sql.is_none()
             && ATTACH_PARQUET_SOURCES.contains(&component_id)
         {
+            attach_parquet_source = Some(AttachParquetSourceSpec {
+                node_id: node.id.clone(),
+                attach: attach.to_string(),
+                body: body.to_string(),
+            });
+        }
+        // Materialize = "disk": stream this stage through a temp parquet file
+        // (COPY ... TO parquet, then a read_parquet VIEW) instead of inserting
+        // into the run-db table - minimal RAM, built for huge intermediates.
+        // Reuses the attach-parquet executor path; works for any stage (attach
+        // is empty for plain transforms). The reject-split case keeps the run-db
+        // TABLE (the COPY would cover only the main body), so it is excluded.
+        if materialize == "disk" && attach_parquet_source.is_none() && reject_sql.is_none() {
             attach_parquet_source = Some(AttachParquetSourceSpec {
                 node_id: node.id.clone(),
                 attach: attach.to_string(),
