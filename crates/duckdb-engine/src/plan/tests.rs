@@ -2268,6 +2268,49 @@
     }
 
     #[test]
+    fn motherduck_inline_token_uses_set_not_query_param() {
+        // Regression: an inline MotherDuck token must be applied via
+        // SET motherduck_token, NOT as an `md:db?motherduck_token=...` query
+        // param (which made MotherDuck treat the whole string as the db name).
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"CSV","componentId":"src.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"MD","componentId":"snk.motherduck",
+                  "properties":{"database":"my_db","token":"SECRET_TOK","schemaName":"main","tableName":"orders","mode":"overwrite"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let sink = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "k1")
+            .expect("sink stage");
+        assert!(
+            sink.sql.contains("SET motherduck_token='SECRET_TOK'"),
+            "inline token must be applied via SET: {}",
+            sink.sql
+        );
+        assert!(
+            sink.sql.contains("ATTACH 'md:my_db'"),
+            "must ATTACH md:db cleanly: {}",
+            sink.sql
+        );
+        assert!(
+            !sink.sql.contains("md:my_db?motherduck_token"),
+            "must NOT use the broken query-param form: {}",
+            sink.sql
+        );
+    }
+
+    #[test]
     fn rejects_cycles() {
         let p = pipeline_from_json(
             r#"{

@@ -3530,10 +3530,10 @@ pub(crate) fn ducklake_attach(props: &JsonValue, read_only: bool) -> String {
 }
 
 /// MotherDuck ATTACH. MotherDuck support is built into DuckDB itself
-/// (no extension to install), so this just builds an `md:` URL with
-/// an optional inline `motherduck_token` query parameter. If the token
-/// isn't in the form, MotherDuck falls back to the MOTHERDUCK_TOKEN env
-/// var, which lets a user keep credentials out of saved pipelines.
+/// An inline token is applied via `SET motherduck_token` (after the extension
+/// loads); if the token isn't in the form, MotherDuck falls back to the
+/// MOTHERDUCK_TOKEN env var, which lets a user keep credentials out of saved
+/// pipelines.
 /// BigQuery via the duckdb-bigquery community extension. ATTACHes a
 /// project by ID; auth uses the standard GCP credential discovery
 /// (GOOGLE_APPLICATION_CREDENTIALS env var, gcloud default, etc).
@@ -3569,16 +3569,26 @@ pub(crate) fn md_attach(props: &JsonValue, read_only: bool) -> String {
         None => return String::new(),
     };
     let token = string_prop(props, "token").filter(|s| !s.is_empty());
-    let url = match token {
-        Some(t) => format!("md:{}?motherduck_token={}", db, t),
-        None => format!("md:{}", db),
-    };
     let (alias, mode) = if read_only {
         ("duckle_src", " (READ_ONLY)")
     } else {
         ("duckle_dst", "")
     };
-    format!("ATTACH '{}' AS {}{}; ", sql_escape(&url), alias, mode)
+    // An inline token must be applied via SET motherduck_token AFTER the
+    // extension loads, NOT as an `md:` query parameter: `md:db?motherduck_token=`
+    // makes MotherDuck treat the whole `db?motherduck_token=...` string as the
+    // database name ("no database/share named ..."). With no inline token,
+    // MotherDuck falls back to the MOTHERDUCK_TOKEN environment variable.
+    match token {
+        Some(t) => format!(
+            "INSTALL motherduck; LOAD motherduck; SET motherduck_token='{}'; ATTACH 'md:{}' AS {}{}; ",
+            sql_escape(&t),
+            sql_escape(&db),
+            alias,
+            mode
+        ),
+        None => format!("ATTACH 'md:{}' AS {}{}; ", sql_escape(&db), alias, mode),
+    }
 }
 
 /// Quack remote protocol (DuckDB 2.0+, May 2026). The remote DuckDB
