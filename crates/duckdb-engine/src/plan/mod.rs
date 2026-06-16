@@ -226,6 +226,27 @@ pub fn compile_partial(
     compile(&filtered)
 }
 
+/// Remote / catalog sources that, when exactly one stage consumes them, take
+/// the COPY-to-parquet fast path instead of a run-db table insert (see
+/// build_stage). At module scope so the consumer-count pass can avoid
+/// penalising them: their rows are already materialized once to a local
+/// parquet, so a reject-split downstream re-reads that cheap file, not the
+/// remote, and must not count as two consumers.
+const ATTACH_PARQUET_SOURCES: &[&str] = &[
+    "src.postgres",
+    "src.cockroach",
+    "src.pgvector",
+    "src.redshift",
+    "src.mysql",
+    "src.mariadb",
+    "src.motherduck",
+    "src.bigquery",
+    "src.quack",
+    "src.ducklake",
+    "src.iceberg",
+    "src.delta",
+];
+
 pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> {
     let node_index: HashMap<&str, &PipelineNode> = pipeline
         .nodes
@@ -273,7 +294,19 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
         // Resolve which materialized table this edge actually reads, based
         // on the SOURCE node's output handle (main vs reject).
         let source_ref = output_table_ref(&edge.source, edge.source_handle.as_deref());
-        let weight = if port_key == "main" && reject_wired.contains(edge.target.as_str()) {
+        // Don't double-count an attach-parquet source: its rows are already
+        // materialized once to a local parquet, so a reject-split downstream
+        // re-reads that cheap file (not the remote). Counting it as two would
+        // only knock it off the COPY-to-parquet fast path for no read savings.
+        let upstream_is_attach_parquet = node_index
+            .get(edge.source.as_str())
+            .and_then(|n| n.data.component_id.as_deref())
+            .map(|cid| ATTACH_PARQUET_SOURCES.contains(&cid))
+            .unwrap_or(false);
+        let weight = if port_key == "main"
+            && reject_wired.contains(edge.target.as_str())
+            && !upstream_is_attach_parquet
+        {
             2
         } else {
             1
@@ -3121,20 +3154,8 @@ fn build_stage(
         // excel / spatial) - no scan bottleneck, so the round-trip would only
         // add overhead. 2+ consumers also stay a table (materialize once), and
         // reject-split components never take this branch.
-        const ATTACH_PARQUET_SOURCES: &[&str] = &[
-            "src.postgres",
-            "src.cockroach",
-            "src.pgvector",
-            "src.redshift",
-            "src.mysql",
-            "src.mariadb",
-            "src.motherduck",
-            "src.bigquery",
-            "src.quack",
-            "src.ducklake",
-            "src.iceberg",
-            "src.delta",
-        ];
+        // ATTACH_PARQUET_SOURCES is defined at module scope (the consumer-count
+        // pass also reads it to avoid double-counting these sources).
         if attach_backed
             && main_consumers <= 1
             && reject_sql.is_none()

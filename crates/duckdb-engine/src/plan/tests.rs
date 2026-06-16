@@ -2144,6 +2144,49 @@
     }
 
     #[test]
+    fn attach_parquet_source_keeps_fast_path_when_feeding_reject_wired_filter() {
+        // Regression: a reject-wired filter reads its input twice, but for an
+        // attach-parquet source (quack / postgres / ...) the rows are already
+        // materialized once to a local parquet, so it must NOT be counted as two
+        // consumers - it must keep the COPY-to-parquet fast path, not fall back
+        // to a run-db table insert.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s1","position":{"x":0,"y":0},"data":{
+                  "label":"Quack","componentId":"src.quack",
+                  "properties":{"host":"localhost","tableName":"orders"}}},
+                {"id":"f1","position":{"x":0,"y":0},"data":{
+                  "label":"Filter","componentId":"xf.filter",
+                  "properties":{"predicate":"amount > 0"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{
+                  "label":"Pass","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/pass.parquet"}}},
+                {"id":"k2","position":{"x":0,"y":0},"data":{
+                  "label":"Rejected","componentId":"snk.parquet",
+                  "properties":{"path":"/tmp/rej.parquet"}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"s1","target":"f1","data":{"connectionType":"main"}},
+                {"id":"e2","source":"f1","target":"k1","data":{"connectionType":"main"}},
+                {"id":"e3","source":"f1","sourceHandle":"reject","target":"k2","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let src = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "s1")
+            .expect("source stage");
+        assert!(
+            matches!(src.runtime.as_ref(), Some(RuntimeSpec::AttachParquetSource(_))),
+            "attach-parquet source feeding a reject-wired filter must keep the COPY-to-parquet fast path, got sql: {}",
+            src.sql
+        );
+    }
+
+    #[test]
     fn rejects_cycles() {
         let p = pipeline_from_json(
             r#"{
