@@ -145,6 +145,10 @@ jobs:
         run: |
           set -e
           mkdir -p _release
+          # Platform suffix shared by the desktop + runner asset names
+          # (Duckle-linux-x64 -> linux-x64; Duckle-windows-x64.exe -> windows-x64.exe).
+          asset_full="${{ matrix.asset }}"
+          asset_plat="${asset_full#Duckle-}"
           if [ -n "${{ matrix.target }}" ]; then
             src="target/${{ matrix.target }}/release/${{ matrix.binary }}"
           else
@@ -156,6 +160,21 @@ jobs:
           # The duckle-runner is embedded into this binary at compile time
           # (no separate with-runner asset needed).
           cp "$src" "_release/${{ matrix.asset }}"
+          # Also publish the standalone (clean, no-trailer) duckle-runner stub
+          # for this OS/arch so a cross-OS "Build Pipeline" can fetch the target
+          # platform's runner and produce a self-contained artifact for it.
+          # Named off the desktop asset: Duckle-<plat> -> duckle-runner-<plat>.
+          if [ -n "${{ matrix.target }}" ]; then
+            rbase="target/${{ matrix.target }}/release-runner"
+          else
+            rbase="target/release-runner"
+          fi
+          runner_asset="duckle-runner-${asset_plat}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$rbase/duckle-runner.exe" "_release/$runner_asset"
+          else
+            cp "$rbase/duckle-runner" "_release/$runner_asset"
+          fi
 
       - name: Upload to release
         shell: bash
@@ -167,3 +186,6 @@ jobs:
           set -e
           asset="${{ matrix.asset }}"
           gh release upload "$REL_TAG" "_release/$asset" --clobber
+          # The standalone per-OS/arch runner stub (for cross-OS Build Pipeline).
+          runner_asset="duckle-runner-${asset#Duckle-}"
+          gh release upload "$REL_TAG" "_release/$runner_asset" --clobber
