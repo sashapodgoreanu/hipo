@@ -95,6 +95,15 @@ fn build_context_vars(
     let mut secret_values: Vec<String> = Vec::new();
     let mut matched_requested = false;
 
+    // Built-in placeholders for the workspace root so paths can be written
+    // relative to it and the workspace folder stays portable (#37). Inserted
+    // first so an explicit context variable of the same name still wins.
+    // Separators normalized to `/` for parity with the frontend builtinVars
+    // (DuckDB accepts them on every platform).
+    let ws_root = workspace.to_string_lossy().replace('\\', "/");
+    vars.insert("workspace".to_string(), ws_root.clone());
+    vars.insert("projectroot".to_string(), ws_root);
+
     for item in repo {
         if item.kind != "context" {
             continue;
@@ -369,5 +378,31 @@ mod tests {
         let props = resolved.doc.nodes[0].data.properties.as_ref().unwrap();
         // No vars -> unknown placeholder left verbatim (not an error).
         assert_eq!(props["path"], serde_json::json!("${UNSET}"));
+    }
+
+    #[test]
+    fn resolves_builtin_workspace_placeholder() {
+        // issue #37: ${workspace} (and the ${projectroot} alias) resolve to the
+        // workspace root with no context defined, so paths can be written
+        // relative to it and the workspace folder stays portable.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(
+            &ws.join("pipelines/p1.json"),
+            r#"{"nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"CSV","componentId":"src.csv","properties":{"path":"${workspace}/input_data/orders.csv","alt":"${projectroot}/out.parquet"}}}],"edges":[]}"#,
+        );
+        let resolved = resolve_workspace(ws, "p1", None).unwrap();
+        let props = resolved.doc.nodes[0].data.properties.as_ref().unwrap();
+        let root = ws.to_string_lossy().replace('\\', "/");
+        assert_eq!(
+            props["path"],
+            serde_json::json!(format!("{}/input_data/orders.csv", root)),
+            "${{workspace}} must resolve to the workspace root"
+        );
+        assert_eq!(
+            props["alt"],
+            serde_json::json!(format!("{}/out.parquet", root)),
+            "${{projectroot}} alias must resolve to the workspace root"
+        );
     }
 }

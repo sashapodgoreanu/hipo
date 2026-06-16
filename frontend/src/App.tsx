@@ -1994,6 +1994,7 @@ export default function App() {
                     edges={edges}
                     repoItems={repo}
                     activeContextId={activeContextId}
+                    workspacePath={workspacePathState}
                     onUpdate={handleUpdateNode}
                     onOpenMapper={handleOpenMapper}
                     focusNameRequest={renameRequest}

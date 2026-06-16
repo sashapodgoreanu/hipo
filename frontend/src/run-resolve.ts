@@ -45,6 +45,19 @@ export function buildContextVars(repo: RepoItem[]): Record<string, string> {
     return out;
 }
 
+/**
+ * Built-in placeholders available everywhere without defining a context.
+ * `${workspace}` (and the `${projectroot}` alias) resolve to the active
+ * workspace root, so paths can be written relative to it and the whole
+ * workspace folder stays portable when it is copied or moved (#37). Path
+ * separators are normalized to `/` (DuckDB accepts them on every platform).
+ */
+export function builtinVars(workspacePath?: string | null): Record<string, string> {
+    if (!workspacePath) return {};
+    const root = workspacePath.replace(/\\/g, '/');
+    return { workspace: root, projectroot: root };
+}
+
 function substituteString(value: string, vars: Record<string, string>): string {
     return value.replace(/\$\{([^}]+)\}/g, (match, expr) => {
         const key = String(expr).trim();
@@ -68,7 +81,9 @@ export function resolveForRun(
     repo: RepoItem[],
     workspacePath?: string | null,
 ): Node<DuckleNodeData>[] {
-    const vars = buildContextVars(repo);
+    // Built-in workspace placeholders first, so an explicit context variable of
+    // the same name (unusual) still wins.
+    const vars = { ...builtinVars(workspacePath), ...buildContextVars(repo) };
     const sqlRoutines = new Map<string, string>();
     // Map a workspace pipeline id (or name) to its on-disk file path so a
     // dropdown-stored id resolves to something the engine can read.

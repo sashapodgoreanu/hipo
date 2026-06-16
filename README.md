@@ -352,6 +352,7 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 | **Run logs** | Every run writes component-level NDJSON to `<workspace>/logs/<pipeline name>/runtime.log` (start/finish per stage, row counts, durations, `ctl.log` / `ctl.warn` / `ctl.die` messages). Tail it straight into Splunk or Dynatrace. |
 | **Schedules** | Cron, fixed-interval, and file-watch triggers, driven by an in-process scheduler. |
 | **Context variables** | Per-environment variables; bind any field to one via a Manual / Context dropdown, or reference `${var}` inline. Resolved at run time. |
+| **Workspace-relative paths** | Built-in `${workspace}` (alias `${projectroot}`) resolves to the active workspace root, so source / sink paths can be written relative to it and a workspace folder stays portable when copied or moved. No context needed; works in the canvas, schema autodetect, and headless runs. |
 | **Cloud credentials** | Saved S3 / GCS / Azure connections become DuckDB SECRETs; cloud reads / writes go through `httpfs`. S3-compatible endpoints (MinIO / R2 / B2) supported via `ENDPOINT` + `URL_STYLE`. |
 | **Workspace** | Pipelines, connections, contexts, documents, and routines persist as plain JSON and Markdown files in a folder you choose. |
 

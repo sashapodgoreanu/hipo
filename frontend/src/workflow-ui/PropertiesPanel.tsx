@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
 import { CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows } from '../schema-resolve';
-import { buildContextVars, substituteDeep } from '../run-resolve';
+import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import type {
     ConnectionPayload,
@@ -84,6 +84,7 @@ type Props = {
     edges: Edge[];
     repoItems: RepoItem[];
     activeContextId?: string | null;
+    workspacePath?: string | null;
     onUpdate: (id: string, patch: Partial<DuckleNodeData>) => void;
     onOpenMapper?: (nodeId: string) => void;
     focusNameRequest?: number;
@@ -95,6 +96,7 @@ export default function PropertiesPanel({
     edges,
     repoItems,
     activeContextId,
+    workspacePath,
     onUpdate,
     onOpenMapper,
     focusNameRequest,
@@ -224,7 +226,7 @@ export default function PropertiesPanel({
             // the engine and fails with "No files found that match the pattern
             // ${DUCKLE_PATH}" - the path's contents (including spaces) are
             // irrelevant; it is the unsubstituted placeholder that breaks.
-            const vars = buildContextVars(repoItems);
+            const vars = { ...builtinVars(workspacePath), ...buildContextVars(repoItems) };
             const resolvedProps = substituteDeep(data.properties ?? {}, vars) as Record<string, unknown>;
             const result = await manifest.autodetect(resolvedProps);
             onUpdate(selected.id, {
