@@ -259,16 +259,16 @@ mod tests {
     #[test]
     fn parse_github_slug_handles_both_forms() {
         assert_eq!(
-            parse_github_slug("https://github.com/SouravRoy-ETL/duckle.git").as_deref(),
-            Some("SouravRoy-ETL/duckle")
+            parse_github_slug("https://github.com/ducklelabs/duckle.git").as_deref(),
+            Some("ducklelabs/duckle")
         );
         assert_eq!(
-            parse_github_slug("https://github.com/SouravRoy-ETL/duckle").as_deref(),
-            Some("SouravRoy-ETL/duckle")
+            parse_github_slug("https://github.com/ducklelabs/duckle").as_deref(),
+            Some("ducklelabs/duckle")
         );
         assert_eq!(
-            parse_github_slug("git@github.com:SouravRoy-ETL/duckle.git").as_deref(),
-            Some("SouravRoy-ETL/duckle")
+            parse_github_slug("git@github.com:ducklelabs/duckle.git").as_deref(),
+            Some("ducklelabs/duckle")
         );
         assert!(parse_github_slug("https://gitlab.com/foo/bar").is_none());
     }

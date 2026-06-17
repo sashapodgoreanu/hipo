@@ -15,7 +15,7 @@
 <img alt="react" src="https://img.shields.io/badge/React%2019-20232A?logo=react&logoColor=61DAFB"/>
 <img alt="typescript" src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white"/>
 <img alt="duckdb" src="https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black"/>
-<img alt="stars" src="https://img.shields.io/github/stars/SouravRoy-ETL/duckle?style=social"/>
+<img alt="stars" src="https://img.shields.io/github/stars/ducklelabs/duckle?style=social"/>
 </p>
 
 </div>
@@ -91,7 +91,7 @@
 - [Contributing](#contributing)
 - [Sponsor Duckle](SPONSORS.md)
 - [License](#license)
-- [Releases](https://github.com/SouravRoy-ETL/duckle/releases)
+- [Releases](https://github.com/ducklelabs/duckle/releases)
 - [Roadmap doc](docs/roadmap.md)
 - [Contributing doc](CONTRIBUTING.md)
 
@@ -131,7 +131,7 @@ Three things make Duckle different from the heavyweights and the toy ETL tools:
 - **A new website and docs** at **[duckle.org](https://duckle.org)** - landing page, component and automation docs, a filterable integrations directory, and search-friendly metadata.
 - **Reliability.** A single corrupt workspace file no longer blocks the whole workspace, cold start opens the active account's workspace, the webhook source no longer drops requests on macOS, and attach-backed Parquet sources stay on the fast path under a reject split.
 
-Full notes: see the [v0.4.0 release](https://github.com/SouravRoy-ETL/duckle/releases/tag/v0.4.0).
+Full notes: see the [v0.4.0 release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.0).
 
 ---
 
@@ -416,7 +416,7 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/SouravRoy-ETL/duckle/releases/tag/v0.4.0):
+Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.4.0):
 
 | OS | Asset | How to run |
 |---|---|---|
@@ -865,7 +865,7 @@ Pick the active context from the topbar's **Context** dropdown. Switch contexts 
 **Clone and install**
 
 ```bash
-git clone https://github.com/SouravRoy-ETL/duckle
+git clone https://github.com/ducklelabs/duckle
 cd duckle
 npm --prefix frontend install
 ```
@@ -1070,7 +1070,7 @@ See the [Contributing](#contributing) section and `crates/duckdb-engine/src/plan
 | **AI tests skip with no failure** | `DUCKLE_DUCKDB_BIN` isn't set | `export DUCKLE_DUCKDB_BIN=/path/to/duckdb` before `cargo test` |
 | **TLS "UnknownIssuer" / "invalid peer certificate" behind a corporate proxy** | A TLS-inspecting proxy (Zscaler, Netskope, ...) re-signs traffic with its own CA | Duckle trusts your OS certificate store on top of its bundled roots, so the proxy CA in the Windows / macOS / Linux store is honoured automatically. If the CA isn't in the store, point `DUCKLE_CA_CERT` at a PEM file containing it. Note: DuckDB's own extension fetch (`extensions.duckdb.org`) and cloud reads (S3 / GCS / Azure) run inside the DuckDB engine with its own TLS, so also allow / exempt `extensions.duckdb.org` from inspection. |
 
-If you see something not listed, please [open an issue](https://github.com/SouravRoy-ETL/duckle/issues) with steps to reproduce + the relevant log line.
+If you see something not listed, please [open an issue](https://github.com/ducklelabs/duckle/issues) with steps to reproduce + the relevant log line.
 
 ---
 

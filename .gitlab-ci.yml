@@ -290,7 +290,7 @@ release:linux:
       Auto-generated release from GitLab CI on tag `$CI_COMMIT_TAG`.
 
       See the GitHub Releases page for the Windows + macOS binaries:
-      https://github.com/SouravRoy-ETL/duckle/releases/tag/$CI_COMMIT_TAG
+      https://github.com/ducklelabs/duckle/releases/tag/$CI_COMMIT_TAG
     assets:
       links:
         - name: "Duckle-linux-x64"

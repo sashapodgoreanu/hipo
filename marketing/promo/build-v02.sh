@@ -100,7 +100,7 @@ $FF -f lavfi -i "color=c=#07090f:s=${W}x${H}:r=${FPS}:d=4" \
       [0:v][lg]overlay=(W-w)/2:(H-h)/2-220,
       drawtext=fontfile=${FB}:text='Duckle':fontcolor=${TEXT}:fontsize=92:x=(w-tw)/2:y=h/2+120,
       drawtext=fontfile=${FR}:text='Free  /  Open source  /  Local-first':fontcolor=${MUTED}:fontsize=36:x=(w-tw)/2:y=h/2+240,
-      drawtext=fontfile=${FB}:text='github.com/SouravRoy-ETL/duckle':fontcolor=${ACCENT}:fontsize=44:x=(w-tw)/2:y=h/2+320,
+      drawtext=fontfile=${FB}:text='github.com/ducklelabs/duckle':fontcolor=${ACCENT}:fontsize=44:x=(w-tw)/2:y=h/2+320,
       fade=t=in:st=0:d=0.5,fade=t=out:st=3.5:d=0.5
     " -c:v libx264 -pix_fmt yuv420p -preset medium -crf 18 "$SCENES/08_end.mp4"
 

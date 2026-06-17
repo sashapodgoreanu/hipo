@@ -55,7 +55,7 @@ export function UpdateBanner() {
         latest_tag: 'v0.1.0-hotfix2',
         latest_date: null,
         asset_name: null,
-        release_url: 'https://github.com/SouravRoy-ETL/duckle/releases',
+        release_url: 'https://github.com/ducklelabs/duckle/releases',
         download_url: null,
         error: null,
     };

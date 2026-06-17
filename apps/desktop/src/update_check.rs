@@ -18,7 +18,7 @@ use std::time::Duration;
 
 /// Duckle's own repository - the source of releases to check against (NOT the
 /// user's workspace remote).
-const REPO: &str = "SouravRoy-ETL/duckle";
+const REPO: &str = "ducklelabs/duckle";
 
 /// An asset must be newer than the running build by at least this much to count
 /// as an update. The release job runs ~14 min before its asset is uploaded, so

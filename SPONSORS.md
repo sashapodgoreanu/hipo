@@ -56,7 +56,7 @@ GitHub Sponsors page.
 
 Not everyone can sponsor, and that is completely fine. These help just as much:
 
-- Star the repo: [SouravRoy-ETL/duckle](https://github.com/SouravRoy-ETL/duckle)
+- Star the repo: [ducklelabs/duckle](https://github.com/ducklelabs/duckle)
 - File clear bug reports and feature requests.
 - Share Duckle with a colleague, or write about how you use it.
 - Contribute a fix or a connector (see the contributing notes in the README).
