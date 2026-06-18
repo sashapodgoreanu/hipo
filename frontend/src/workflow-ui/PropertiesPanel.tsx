@@ -347,10 +347,19 @@ export default function PropertiesPanel({
                         }
                         onUpdate(selected.id, { properties: next });
                     },
-                    onPickRoutine: (payload: RoutinePayload) => {
+                    onPickRoutine: (payload: RoutinePayload, routineId: string) => {
                         if (!selected) return;
+                        // One update carrying the ref AND the inlined code, so a
+                        // second update can't clobber routineRef off a stale base
+                        // (issue #78). Inline into the field the component reads:
+                        // code.sql / code.sqltemplate use `sql`, the other code.*
+                        // use `code`.
                         const next = { ...(selected.data.properties ?? {}) };
-                        if (payload.code) next.code = payload.code;
+                        next.routineRef = routineId;
+                        const cid = selected.data.componentId;
+                        const codeKey =
+                            cid === 'code.sql' || cid === 'code.sqltemplate' ? 'sql' : 'code';
+                        if (payload.code) next[codeKey] = payload.code;
                         if (payload.language) next.language = payload.language;
                         onUpdate(selected.id, { properties: next });
                     },

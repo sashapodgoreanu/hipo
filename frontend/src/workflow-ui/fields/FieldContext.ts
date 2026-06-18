@@ -17,7 +17,7 @@ export type FieldContextValue = {
     /** The context whose variables fields can bind to (if any). */
     activeContext?: ActiveContext;
     onPickConnection?: (payload: ConnectionPayload) => void;
-    onPickRoutine?: (payload: RoutinePayload) => void;
+    onPickRoutine?: (payload: RoutinePayload, routineId: string) => void;
 };
 
 export const FieldContext = createContext<FieldContextValue>({

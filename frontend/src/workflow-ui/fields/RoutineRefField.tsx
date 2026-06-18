@@ -36,10 +36,18 @@ export function RoutineRefField({ field, value, onChange }: Props) {
     }
 
     const handleChange = (id: string) => {
-        onChange(id);
-        if (id && onPickRoutine) {
-            const item = routines.find(r => r.id === id);
-            if (item?.payload) onPickRoutine(item.payload as RoutinePayload);
+        const item = id ? routines.find(r => r.id === id) : undefined;
+        const payload = item?.payload as RoutinePayload | undefined;
+        // When a routine is picked, route through onPickRoutine so the ref AND
+        // the inlined code land in a SINGLE properties update. Calling onChange
+        // (sets routineRef) and onPickRoutine separately made each spread a
+        // stale properties base, so the second clobbered the first and the
+        // selection never stuck (issue #78). Fall back to onChange only when
+        // clearing the selection or the routine payload isn't loaded.
+        if (id && payload && onPickRoutine) {
+            onPickRoutine(payload, id);
+        } else {
+            onChange(id);
         }
     };
 
