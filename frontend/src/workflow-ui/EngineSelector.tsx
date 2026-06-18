@@ -19,7 +19,7 @@ const ENGINES: EngineMeta[] = [
         id: 'duckdb',
         label: 'DuckDB',
         description: 'Default. Local analytics, files, SQL pushdown.',
-        dot: '#fff100',
+        dot: '#ff7a45',
     },
     {
         id: 'slothdb',

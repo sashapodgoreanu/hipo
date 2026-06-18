@@ -19,30 +19,30 @@
 
     /* Primary accent - DuckDB lemon yellow, used for primary actions, the
        brand mark and headlines. (Buttons pair it with dark text.) */
-    --accent-cyan: #fff100;
-    --accent-cyan-strong: #ffd400;
+    --accent-cyan: #ff7a45;
+    --accent-cyan-strong: #ed5f22;
 
     /* Primary CTA buttons (Run / Open visual mapper / btn-primary): DuckDB
        lemon-yellow fill with dark text in dark mode. */
-    --btn-primary-bg: #fff100;
-    --btn-primary-bg-strong: #ffd400;
+    --btn-primary-bg: #ff7a45;
+    --btn-primary-bg-strong: #ed5f22;
     --btn-primary-fg: #07090f;
 
     /* Interactive accent - the DuckDB lemon brand, used for selection /
        focus / links so highlights read yellow in dark mode. */
-    --accent: #fff100;
-    --accent-strong: #ffd400;
-    --accent-soft: rgba(255, 241, 0, 0.16);
-    --accent-glow: rgba(255, 241, 0, 0.35);
+    --accent: #ff7a45;
+    --accent-strong: #ed5f22;
+    --accent-soft: rgba(255, 122, 69, 0.16);
+    --accent-glow: rgba(255, 122, 69, 0.35);
 
     /* The brand gradient - used on the wordmark, primary CTAs, and the
        visual mapper button. DuckDB lemon -> hot orange ("duck"). */
-    --gradient-brand: linear-gradient(135deg, #fff100, #ff6900);
+    --gradient-brand: linear-gradient(135deg, #ff7a45, #ff6900);
 
     /* The "D." brand mark (DuckleLogo). Dark theme: yellow glyph on a slate
        disc. Light theme overrides these to an orange glyph on a pale disc. */
     --logo-disc: #1b1f2a;
-    --logo-glyph: #ffd000;
+    --logo-glyph: #ff7a45;
     --logo-ring: rgba(255, 255, 255, 0.08);
 
     /* Component-kind hues - drawn from the DuckDB secondary palette
@@ -62,8 +62,8 @@
         0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.45);
     --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
         0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6);
-    --shadow-glow: 0 0 24px rgba(255, 241, 0, 0.2);
-    --focus-ring: 0 0 0 3px rgba(255, 241, 0, 0.25);
+    --shadow-glow: 0 0 24px rgba(255, 122, 69, 0.2);
+    --focus-ring: 0 0 0 3px rgba(255, 122, 69, 0.25);
 
     --radius-sm: 6px;
     --radius: 8px;
@@ -104,12 +104,12 @@ body,
     background:
         radial-gradient(
             ellipse 800px 400px at 0% 0%,
-            rgba(255, 241, 0, 0.04),
+            rgba(255, 122, 69, 0.04),
             transparent 70%
         ),
         radial-gradient(
             ellipse 1000px 500px at 100% 100%,
-            rgba(255, 241, 0, 0.04),
+            rgba(255, 122, 69, 0.04),
             transparent 70%
         ),
         var(--bg-0);
@@ -203,7 +203,7 @@ textarea:focus-visible {
     height: var(--topbar-h);
     padding: 0 0 0 20px;
     background:
-        linear-gradient(180deg, rgba(255, 241, 0, 0.025), transparent 60%),
+        linear-gradient(180deg, rgba(255, 122, 69, 0.025), transparent 60%),
         var(--bg-1);
     border-bottom: 1px solid var(--border);
     position: relative;
@@ -279,8 +279,8 @@ textarea:focus-visible {
     background: linear-gradient(
         90deg,
         transparent,
-        rgba(255, 241, 0, 0.25),
-        rgba(255, 241, 0, 0.18),
+        rgba(255, 122, 69, 0.25),
+        rgba(255, 122, 69, 0.18),
         transparent
     );
     pointer-events: none;
@@ -300,6 +300,8 @@ textarea:focus-visible {
     width: 24px;
     height: 24px;
     flex: none;
+    /* Soft orange glow around the mark (Claude-style). */
+    filter: drop-shadow(0 0 5px var(--accent-glow)) drop-shadow(0 0 2px var(--accent-soft));
 }
 
 /* The "D." mark colors follow the theme via the --logo-* tokens. */
@@ -2662,8 +2664,8 @@ html[dir='rtl'] .topbar-lang {
     gap: 8px;
     padding: 7px 9px;
     border-radius: 7px;
-    background: rgba(255, 241, 0, 0.1);
-    border: 1px solid rgba(255, 241, 0, 0.35);
+    background: rgba(255, 122, 69, 0.1);
+    border: 1px solid rgba(255, 122, 69, 0.35);
 }
 
 .ctx-bound-token {
@@ -4751,8 +4753,8 @@ html[dir='rtl'] .topbar-lang {
     /* DuckDB lemon is unreadable as text on light surfaces, so the light
        theme uses a deep gold for the primary accent (brand identity stays
        yellow; the in-app logo/gradient still use pure lemon). */
-    --accent-cyan: #b8860b;
-    --accent-cyan-strong: #946f00;
+    --accent-cyan: #c2410c;
+    --accent-cyan-strong: #9a3412;
     /* Primary CTA buttons: hot orange fill with white text in light mode
        (deepened from the brand #ff6900 so white label text stays readable). */
     --btn-primary-bg: #e8590c;
@@ -4765,7 +4767,7 @@ html[dir='rtl'] .topbar-lang {
     --kind-transform: #4a5160;
     --kind-sink: #d96400;
     --kind-control: #3a63c4;
-    --kind-quality: #b8860b;
+    --kind-quality: #c2410c;
     --kind-custom: #c2553f;
 
     --danger: #dc2626;
@@ -4995,9 +4997,9 @@ html[dir='rtl'] .topbar-lang {
     background: var(--gradient-brand);
     color: var(--bg-0);
     box-shadow:
-        0 0 0 1px rgba(255, 241, 0, 0.32) inset,
-        0 8px 32px rgba(255, 241, 0, 0.32),
-        0 0 32px rgba(255, 241, 0, 0.3);
+        0 0 0 1px rgba(255, 122, 69, 0.32) inset,
+        0 8px 32px rgba(255, 122, 69, 0.32),
+        0 0 32px rgba(255, 122, 69, 0.3);
     flex-shrink: 0;
 }
 
@@ -5390,9 +5392,9 @@ html[dir='rtl'] .topbar-lang {
 }
 
 .node-run-badge-running {
-    background: rgba(255, 241, 0, 0.15);
+    background: rgba(255, 122, 69, 0.15);
     color: var(--accent);
-    border: 1px solid rgba(255, 241, 0, 0.4);
+    border: 1px solid rgba(255, 122, 69, 0.4);
 }
 
 .node-run-badge-running svg {
@@ -5420,7 +5422,7 @@ html[dir='rtl'] .topbar-lang {
 .node.is-run-running {
     box-shadow:
         0 0 0 1px var(--accent),
-        0 0 0 4px rgba(255, 241, 0, 0.18),
+        0 0 0 4px rgba(255, 122, 69, 0.18),
         var(--shadow-1);
 }
 
@@ -6937,7 +6939,7 @@ html[dir='rtl'] .topbar-lang {
 }
 .ci-badge-busy {
     color: var(--accent-strong);
-    border-color: rgba(255, 241, 0, 0.4);
+    border-color: rgba(255, 122, 69, 0.4);
 }
 .ci-badge-mute {
     color: var(--text-3);

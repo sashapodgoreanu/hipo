@@ -631,7 +631,7 @@ export const PALETTE: Category[] = [
         id: 'quality',
         label: 'Data Quality',
         icon: '✓',
-        accent: '#fff100',
+        accent: '#ff7a45',
         groups: [
             {
                 id: 'qa.validation',

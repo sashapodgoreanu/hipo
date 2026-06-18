@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 360" preserveAspectRatio="xMidYMid meet" fill="none" role="img" aria-label="Sources flow through transforms into sinks">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#FFF100"/>
+      <stop offset="0" stop-color="#FF7A45"/>
       <stop offset="1" stop-color="#FF6900"/>
     </linearGradient>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -27,7 +27,7 @@
     <path d="M300 212 C 380 212, 380 175, 444 175"/>
     <path d="M300 256 C 380 256, 380 175, 444 175"/>
   </g>
-  <circle r="4" fill="#FFF100"><animate attributeName="cx" values="300;444" dur="1.6s" repeatCount="indefinite"/><animate attributeName="cy" values="168;175" dur="1.6s" repeatCount="indefinite"/></circle>
+  <circle r="4" fill="#FF7A45"><animate attributeName="cx" values="300;444" dur="1.6s" repeatCount="indefinite"/><animate attributeName="cy" values="168;175" dur="1.6s" repeatCount="indefinite"/></circle>
 
   <!-- connectors: transform -> sinks -->
   <g stroke="#2b3852" stroke-width="1.5" fill="none">
