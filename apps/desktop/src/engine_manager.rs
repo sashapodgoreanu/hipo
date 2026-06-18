@@ -284,7 +284,14 @@ pub struct EngineStatus {
     pub description: String,
     pub required: bool,
     pub installed: bool,
+    /// The version currently on disk (None when no binary is present).
     pub version: Option<String>,
+    /// The version this build of Duckle pins / ships. The UI compares it to
+    /// `version` to offer an upgrade rather than a fresh install.
+    pub target_version: String,
+    /// A binary is present but its version differs from `target_version`, i.e.
+    /// an upgrade is available (distinct from a missing engine).
+    pub outdated: bool,
     pub path: Option<String>,
     pub available: bool,
 }
@@ -374,6 +381,9 @@ pub fn status(app_data: &Path) -> Vec<EngineStatus> {
             // version, so bumping a version re-triggers the install flow for
             // existing users (a stamp-less old install reads as outdated).
             let installed = exists && on_disk.as_deref() == Some(s.version);
+            // A binary is present but stamped with a different version (or no
+            // stamp at all): an upgrade is due, not a fresh install.
+            let outdated = exists && on_disk.as_deref() != Some(s.version);
             EngineStatus {
                 id: s.id.to_string(),
                 name: s.name.to_string(),
@@ -383,6 +393,8 @@ pub fn status(app_data: &Path) -> Vec<EngineStatus> {
                 // Report the real on-disk version when a binary is present
                 // (so the UI shows the outdated version, not the pinned one).
                 version: if exists { on_disk } else { None },
+                target_version: s.version.to_string(),
+                outdated,
                 path: exists.then(|| path.to_string_lossy().to_string()),
                 available: asset_for(s).is_some(),
             }
@@ -595,6 +607,18 @@ fn install_spec<F: FnMut(InstallProgress)>(
     // and re-installs instead of keeping a stale binary.
     let _ = std::fs::write(version_stamp_path(app_data, s), s.version);
 
+    // The host binary above was overwritten in place, but a version bump also
+    // leaves the previous version's cached cross-OS DuckDB binaries stale
+    // (engines/duckdb-cross/, used by Build Pipeline). They are NOT version-
+    // keyed and short-circuit on existence, so without this they would never be
+    // re-fetched. Drop the whole cache so the next Build Pipeline downloads the
+    // matching version - and so an old (e.g. 1.5.3) binary is not left behind
+    // in the app storage directory. Best-effort.
+    if s.id == "duckdb" {
+        let cross = app_data.join("engines").join("duckdb-cross");
+        let _ = std::fs::remove_dir_all(&cross);
+    }
+
     // Pre-fetch the extensions Duckle uses so the first connector hit
     // doesn't pause to download an extension. Only meaningful for the
     // DuckDB engine; SlothDB has its own model.
@@ -765,6 +789,26 @@ mod tests {
         assert!(!sloth.installed && !sloth.required);
         let llama = st.iter().find(|e| e.id == "llamacpp").unwrap();
         assert!(!llama.installed && !llama.required);
+    }
+
+    #[test]
+    fn status_flags_outdated_when_stamp_differs() {
+        // An existing user on an older DuckDB: the binary is present but the
+        // version stamp differs from the pinned one. It must read as outdated
+        // (upgrade available) and NOT installed, with both versions exposed so
+        // the UI can prompt an upgrade rather than a fresh install.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = engine_dir(tmp.path(), &DUCKDB);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(binary_file_name(&DUCKDB)), b"old-binary").unwrap();
+        std::fs::write(dir.join(".installed-version"), "0.0.1-old").unwrap();
+
+        let st = status(tmp.path());
+        let duck = st.iter().find(|e| e.id == "duckdb").unwrap();
+        assert!(!duck.installed, "an old version must not read as installed");
+        assert!(duck.outdated, "an old version must read as outdated");
+        assert_eq!(duck.version.as_deref(), Some("0.0.1-old"));
+        assert_eq!(duck.target_version, DUCKDB.version);
     }
 
     #[test]

@@ -138,6 +138,9 @@ function EngineRow({
                     {engine.version ? (
                         <span className="engine-row-ver">v{engine.version}</span>
                     ) : null}
+                    {engine.outdated ? (
+                        <span className="engine-row-tag">v{engine.target_version} available</span>
+                    ) : null}
                 </div>
                 <div className="engine-row-desc">{engine.description}</div>
                 {installing && progress ? (
@@ -160,7 +163,7 @@ function EngineRow({
                         onClick={onInstall}
                         disabled={disabled}
                     >
-                        <Download size={13} /> Install
+                        <Download size={13} /> {engine.outdated ? 'Upgrade' : 'Install'}
                     </button>
                 ) : (
                     <span className="engine-row-unavailable">Not available</span>

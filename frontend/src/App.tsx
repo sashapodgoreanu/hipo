@@ -16,6 +16,7 @@ import { Braces, FolderOpen, GitBranch, Moon, Sparkles, Sun } from 'lucide-react
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
+import { EngineUpgradeBanner } from './EngineUpgradeBanner';
 import EditorTabs from './workflow-ui/EditorTabs';
 import EditorHeader, { type Job } from './workflow-ui/EditorHeader';
 import EngineSelector, { type EngineId } from './workflow-ui/EngineSelector';
@@ -246,7 +247,10 @@ export default function App() {
         void engineStatus().then(list => {
             if (cancelled) return;
             const duck = list.find(e => e.id === 'duckdb');
-            setEngineGate(duck?.installed ? 'ready' : 'engine-setup');
+            // A missing engine blocks (pipelines can't run). An OUTDATED engine
+            // still runs, so don't force the install modal - let the app proceed
+            // and let EngineUpgradeBanner offer a non-blocking upgrade instead.
+            setEngineGate(duck?.installed || duck?.outdated ? 'ready' : 'engine-setup');
         });
         return () => {
             cancelled = true;
@@ -1900,6 +1904,7 @@ export default function App() {
             </header>
 
             <UpdateBanner />
+            <EngineUpgradeBanner />
 
             {workspaceLoadError ? (
                 <div className="update-banner is-error" role="alert">

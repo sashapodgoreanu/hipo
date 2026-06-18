@@ -235,7 +235,12 @@ export type EngineStatus = {
     description: string;
     required: boolean;
     installed: boolean;
+    /** Version currently on disk (undefined when no binary is present). */
     version?: string;
+    /** Version this build of Duckle pins/ships. */
+    target_version: string;
+    /** A binary is present but a different version - an upgrade is available. */
+    outdated: boolean;
     path?: string;
     available: boolean;
 };
