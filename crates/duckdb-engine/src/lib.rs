@@ -382,6 +382,15 @@ impl DuckdbEngine {
         // yet - DuckDB's COPY does not create intermediate directories.
         ensure_local_sink_dirs(doc);
 
+        // Secret values to scrub from any error string before it is surfaced or
+        // persisted. DuckDB's postgres/mysql ATTACH echoes the full connection
+        // string (password included) in connect errors, which would otherwise
+        // land verbatim in the UI, run-history JSON, and NDJSON run logs. The
+        // export path is already redacted (compile_pipeline_sql_opts); this
+        // covers the execution path. (Named distinctly from the SECRET-prelude
+        // `secrets` bound later in this fn.)
+        let redact_secrets = collect_secrets(doc);
+
         let compiled = match target {
             Some(t) => plan::compile_partial(doc, t),
             None => plan::compile(doc),
@@ -501,6 +510,7 @@ impl DuckdbEngine {
                 &db_path,
                 &secret_prefix,
                 &compiled.stages,
+                &redact_secrets,
                 total_start,
                 &mut on_event,
             );
@@ -1059,7 +1069,7 @@ impl DuckdbEngine {
                     break;
                 }
                 Err(err) => {
-                    let msg = err.to_string();
+                    let msg = redact_secret_values(&err.to_string(), &redact_secrets);
                     let category = error_category::categorize_error(&msg);
                     nodes.insert(
                         stage.node_id.clone(),
@@ -1172,6 +1182,7 @@ impl DuckdbEngine {
         db_path: &Path,
         secret_prefix: &str,
         stages: &[plan::Stage],
+        redact_secrets: &[Secret],
         total_start: Instant,
         on_event: &mut dyn FnMut(PipelineEvent),
     ) -> RunResult {
@@ -1527,7 +1538,7 @@ impl DuckdbEngine {
                 let msg = if stderr_str.is_empty() {
                     "duckdb exited with error (no diagnostic on stderr)".to_string()
                 } else {
-                    stderr_str
+                    redact_secret_values(&stderr_str, &redact_secrets)
                 };
                 nodes.insert(
                     stage.node_id.clone(),
@@ -1550,7 +1561,10 @@ impl DuckdbEngine {
                 });
                 overall_error.get_or_insert(format!("{}: {}", stage.label, msg));
             } else {
-                let stderr_str = String::from_utf8_lossy(&cli_stderr).trim().to_string();
+                let stderr_str = redact_secret_values(
+                    &String::from_utf8_lossy(&cli_stderr).trim().to_string(),
+                    &redact_secrets,
+                );
                 overall_error.get_or_insert(format!("duckdb pipeline error: {}", stderr_str));
             }
         }

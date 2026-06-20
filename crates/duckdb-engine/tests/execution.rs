@@ -946,6 +946,50 @@ fn compiled_sql_redacts_secrets() {
 }
 
 #[test]
+fn run_errors_redact_secrets() {
+    // Security regression: DuckDB's postgres ATTACH echoes the full connection
+    // string (password included) in connect errors. That raw stderr used to be
+    // surfaced verbatim in result.error / node errors and persisted to
+    // run-history runs/*.json + NDJSON runtime.log. The executor now scrubs
+    // known secret values from error strings before surfacing/persisting.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let pw = "sup3rs3cr3tpw";
+    let d = doc(
+        json!([
+            node("s", "src.postgres", json!({
+                "host": "db.example.invalid",
+                "port": 5432,
+                "database": "app",
+                "user": "admin",
+                "password": pw,
+                "tableName": "orders"
+            })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "error", "bogus postgres host must fail the run");
+    let err = result.error.clone().unwrap_or_default();
+    assert!(
+        !err.contains(pw),
+        "plaintext password leaked into run error: {}",
+        err
+    );
+    // If the connect string was echoed (the actual leak path), confirm the
+    // value was replaced by the named placeholder rather than just absent.
+    if err.contains("host=") {
+        assert!(
+            err.contains("${DUCKLE_PASSWORD}"),
+            "expected redaction placeholder in connect error: {}",
+            err
+        );
+    }
+}
+
+#[test]
 fn compiled_sql_maps_username_to_attach_user() {
     // The UI writes DB login names as `username`, while DuckDB's
     // Postgres/MySQL connection string expects `user=...`.
