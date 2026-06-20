@@ -667,6 +667,7 @@ export const PALETTE: Category[] = [
                     qa('matchgroup', 'Match Grouping (Cluster IDs)', 'available', 'Turn a list of matched record pairs into one stable cluster id per record. Walks the transitive closure of the matches (a~b and b~c put a, b, c in one cluster) and assigns each id the cluster representative (the smallest reachable id). Pairs with Record Match. Output: id, cluster_id.'),
                     qa('expect', 'Expectations', 'available', 'Run a reusable suite of data-quality expectations (not-null, unique, in-set, in-range, regex, non-negative) and emit a scorecard: one row per rule with total, failed, pass_rate, and passed. The native, no-Python answer to declarative data contracts.'),
                     qa('sample.adv', 'Sample (Reproducible %)', 'available', 'Take a percentage sample of rows. Reservoir (even per-row probability) or Bernoulli (independent per row); set a seed to make the draw reproducible so the same rows are picked every run. All columns are preserved.'),
+                    qa('refintegrity', 'Referential Integrity', 'available', 'Check a foreign key against a reference input (connect it to the lookup port): rows whose key exists in the reference pass through, orphan rows (key missing) route to the reject port. Pure semi-join / anti-join, no row fan-out on duplicate reference keys.'),
                     qa('addressclean', 'Address Cleanse', 'planned'),
                 ],
             },

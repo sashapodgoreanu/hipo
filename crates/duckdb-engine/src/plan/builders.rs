@@ -148,6 +148,7 @@ pub(crate) fn build_view_sql(
         "qa.matchgroup" => build_matchgroup(inputs, props),
         "qa.expect" => build_expect(inputs, props),
         "qa.sample.adv" => build_sample_adv(inputs, props),
+        "qa.refintegrity" => build_refintegrity(inputs, props, false),
         "qa.dedupe" => build_fuzzy_dedupe(inputs, props),
         "qa.match" => build_record_match(inputs, props),
         "xf.reorder" => build_reorder(inputs, props),
@@ -2247,6 +2248,45 @@ fn collect_expect_rules(props: &JsonValue) -> Result<Vec<(String, String, JsonVa
     Ok(out)
 }
 
+/// qa.refintegrity: referential-integrity / orphan check across TWO inputs.
+/// Main rows whose key EXISTS in the reference input (the single `lookup` port)
+/// pass through unchanged; rows whose key is missing (orphans) go to the reject
+/// port. Pure-SQL semi-join (EXISTS) for the pass side, anti-join (NOT EXISTS)
+/// for the reject side - no row fan-out even on duplicate reference keys, and a
+/// NULL main key is treated as an orphan. `reject = true` yields the orphan rows.
+pub(crate) fn build_refintegrity(
+    inputs: &NodeInputs,
+    props: &JsonValue,
+    reject: bool,
+) -> Result<String, String> {
+    let main = inputs.main().ok_or_else(|| missing_input_msg("qa.refintegrity"))?;
+    let reference = inputs.first_lookup().ok_or_else(|| {
+        "Referential Integrity needs a reference input (connect the lookup port to the table that holds the valid keys)".to_string()
+    })?;
+    let left_key = string_prop(props, "leftKey")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Referential Integrity needs a main key column (leftKey)".to_string())?;
+    let right_key = string_prop(props, "rightKey")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Referential Integrity needs a reference key column (rightKey)".to_string())?;
+    let m = quote_ident(main);
+    let r = quote_ident(reference);
+    let exists = format!(
+        "EXISTS (SELECT 1 FROM {r} WHERE {r}.{rk} = {m}.{lk})",
+        r = r,
+        m = m,
+        rk = quote_ident(&right_key),
+        lk = quote_ident(&left_key),
+    );
+    Ok(if reject {
+        format!("SELECT {m}.* FROM {m} WHERE NOT {exists}", m = m, exists = exists)
+    } else {
+        format!("SELECT {m}.* FROM {m} WHERE {exists}", m = m, exists = exists)
+    })
+}
+
 pub(crate) fn build_standardize(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.standardize"))?;
     let cols = columns_list(props, "columns");
@@ -2480,6 +2520,8 @@ pub(crate) fn build_reject_sql(
         "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" | "qa.schemavalidate" => {
             Ok(Some(build_quality(inputs, props, component_id, true)?))
         }
+        // Orphan rows (main key absent from the reference) go to the reject port.
+        "qa.refintegrity" => Ok(Some(build_refintegrity(inputs, props, true)?)),
         _ => Ok(None),
     }
 }

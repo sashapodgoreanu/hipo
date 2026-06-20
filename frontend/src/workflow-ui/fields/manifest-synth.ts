@@ -522,6 +522,21 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         };
     }
 
+    // Referential integrity - main input + a reference (lookup) input; valid
+    // rows pass, orphans (key absent from the reference) route to reject.
+    if (id === 'qa.refintegrity') {
+        return {
+            inputs: [
+                MAIN_IN,
+                { id: 'lookup', label: 'reference', type: 'lookup' },
+            ],
+            outputs: [
+                { id: 'main', label: 'valid', type: 'main' },
+                { id: 'reject', label: 'orphans', type: 'reject' },
+            ],
+        };
+    }
+
     // Quality validators - pass + reject
     if (comp.kind === 'quality') {
         return {
@@ -3949,6 +3964,17 @@ function synthQualityCleanse(comp: ComponentDef): ComponentManifest {
                         ],
                     },
                     { key: 'recencyColumn', label: 'Recency column (for most-recent / oldest)', kind: 'column', description: 'The date/version column used to rank rows when the rule is most-recent or oldest.' },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'qa.refintegrity') {
+        return base(comp, [
+            {
+                label: 'Referential Integrity',
+                fields: [
+                    { key: 'leftKey', label: 'Main key column', kind: 'column', required: true, description: 'The foreign-key column on the main input to validate.' },
+                    { key: 'rightKey', label: 'Reference key column', kind: 'text', required: true, description: 'The key column on the reference input (lookup port) that holds the valid values.' },
                 ],
             },
         ], 'upstream');

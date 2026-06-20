@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 337,
+  "componentCount": 338,
   "components": [
     {
       "id": "src.csv",
@@ -34255,6 +34255,93 @@
             {
               "id": "reject",
               "label": "reject",
+              "type": "reject"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.refintegrity",
+      "label": "Referential Integrity",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "Check a foreign key against a reference input (connect it to the lookup port): rows whose key exists in the reference pass through, orphan rows (key missing) route to the reject port. Pure semi-join / anti-join, no row fan-out on duplicate reference keys.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "lookup",
+            "label": "reference",
+            "type": "lookup"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "valid",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "orphans",
+            "type": "reject"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.refintegrity",
+        "kind": "transform",
+        "label": "Referential Integrity",
+        "description": "Check a foreign key against a reference input (connect it to the lookup port): rows whose key exists in the reference pass through, orphan rows (key missing) route to the reject port. Pure semi-join / anti-join, no row fan-out on duplicate reference keys.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Referential Integrity",
+            "fields": [
+              {
+                "key": "leftKey",
+                "label": "Main key column",
+                "kind": "column",
+                "required": true,
+                "description": "The foreign-key column on the main input to validate."
+              },
+              {
+                "key": "rightKey",
+                "label": "Reference key column",
+                "kind": "text",
+                "required": true,
+                "description": "The key column on the reference input (lookup port) that holds the valid values."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "lookup",
+              "label": "reference",
+              "type": "lookup"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "valid",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "orphans",
               "type": "reject"
             }
           ]

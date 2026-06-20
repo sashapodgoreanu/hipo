@@ -8315,6 +8315,39 @@ fn survivor_builds_golden_record_live() {
     assert_eq!(phone, "222", "id=1 survives the most-recent phone, got {}", phone);
 }
 
+/// qa.refintegrity: orphans (main key absent from the reference) route to the
+/// reject port; valid rows pass. Semi-join (no fan-out on duplicate ref keys).
+#[test]
+fn refintegrity_routes_orphans_to_reject() {
+    let tmp = tempfile::tempdir().unwrap();
+    let orders = write_file(tmp.path(), "orders.csv", "order_id,cust_id\n1,1\n2,2\n3,3\n4,4\n5,5\n");
+    let customers = write_file(tmp.path(), "customers.csv", "id\n1\n2\n3\n3\n");
+    let pass = out_path(tmp.path(), "pass.csv");
+    let rej = out_path(tmp.path(), "reject.csv");
+    let engine = engine_or_skip!();
+    let d = doc(
+        json!([
+            node("o", "src.csv", json!({ "path": orders, "hasHeader": true })),
+            node("r", "src.csv", json!({ "path": customers, "hasHeader": true })),
+            node("ri", "qa.refintegrity", json!({ "leftKey": "cust_id", "rightKey": "id" })),
+            node("kp", "snk.csv", json!({ "path": pass, "hasHeader": true })),
+            node("kr", "snk.csv", json!({ "path": rej, "hasHeader": true })),
+        ]),
+        json!([
+            main_edge("e1", "o", "ri"),
+            lookup_edge("e2", "r", "ri"),
+            port_edge("e3", "ri", "main", "kp"),
+            port_edge("e4", "ri", "reject", "kr"),
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", pass)), 3, "3 valid rows (no fan-out from duplicate ref key)");
+    assert_eq!(count(&format!("read_csv_auto('{}')", rej)), 2, "cust_id 4,5 are orphans");
+    let bad = count(&format!("read_csv_auto('{}') WHERE cust_id NOT IN (1,2,3)", pass));
+    assert_eq!(bad, 0, "no orphan should leak into the pass output");
+}
+
 /// qa.matchgroup: transitive-closure clustering of matched record pairs. a~b
 /// and b~c collapse a, b, c into one cluster (rep = MIN id); a self-matched d
 /// stays its own cluster.

@@ -1198,6 +1198,33 @@
     }
 
     #[test]
+    fn refintegrity_builds_semi_and_anti_join() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["m1".into()]);
+        ni.ports.insert("lookup".into(), vec!["r1".into()]);
+        let props = serde_json::json!({"leftKey": "cust_id", "rightKey": "id"});
+        let pass = build_refintegrity(&ni, &props, false).unwrap();
+        assert_eq!(
+            pass,
+            "SELECT \"m1\".* FROM \"m1\" WHERE EXISTS (SELECT 1 FROM \"r1\" WHERE \"r1\".\"id\" = \"m1\".\"cust_id\")",
+            "got: {}",
+            pass
+        );
+        let rej = build_refintegrity(&ni, &props, true).unwrap();
+        assert_eq!(
+            rej,
+            "SELECT \"m1\".* FROM \"m1\" WHERE NOT EXISTS (SELECT 1 FROM \"r1\" WHERE \"r1\".\"id\" = \"m1\".\"cust_id\")",
+            "got: {}",
+            rej
+        );
+        let mut no_ref = NodeInputs::default();
+        no_ref.ports.insert("main".into(), vec!["m1".into()]);
+        assert!(build_refintegrity(&no_ref, &props, false).is_err());
+        assert!(build_refintegrity(&ni, &serde_json::json!({"rightKey": "id"}), false).is_err());
+        assert!(build_refintegrity(&ni, &serde_json::json!({"leftKey": "cust_id"}), false).is_err());
+    }
+
+    #[test]
     fn csv_declared_schema_overrides_autodetect() {
         // Regression for issue #3: when the user sets a column to
         // VARCHAR in the Schema panel (typical fix for dd/mm/yy dates
