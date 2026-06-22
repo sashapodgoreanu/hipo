@@ -637,6 +637,52 @@
     }
 
     #[test]
+    fn duck_source_auto_single_consumer_is_a_live_view() {
+        // #76 case 2: a single-consumer duck source on the DEFAULT Auto setting
+        // becomes a live lazy VIEW (pushdown), not an eager materialize.
+        let p = pipeline_from_json(
+            r#"{"nodes":[
+                {"id":"s1","position":{"x":0,"y":0},"data":{"label":"Duck","componentId":"src.duckdb","properties":{"database":"/tmp/src.duckdb","tableName":"orders"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{"label":"Out","componentId":"snk.csv","properties":{"path":"/tmp/out.csv"}}}
+              ],"edges":[
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}
+              ]}"#,
+        );
+        let c = compile(&p).unwrap();
+        let s = c.stages.iter().find(|s| s.node_id == "s1").unwrap();
+        assert!(s.sql.contains("CREATE OR REPLACE VIEW"), "auto single-consumer must be a VIEW: {}", s.sql);
+        assert!(!s.sql.contains("DETACH"), "view src keeps its alias attached: {}", s.sql);
+        assert!(s.runtime.is_none(), "upgraded view src must be pure SQL");
+    }
+
+    #[test]
+    fn two_duck_sources_each_stay_views_with_distinct_aliases() {
+        // #76 case 3: two duck sources must each stay a live VIEW with its OWN
+        // alias (duckle_src_<node>), instead of the second collapsing both to
+        // tables on the shared duckle_src alias.
+        let p = pipeline_from_json(
+            r#"{"nodes":[
+                {"id":"s1","position":{"x":0,"y":0},"data":{"label":"A","componentId":"src.duckdb","properties":{"database":"/tmp/a.duckdb","tableName":"t1"}}},
+                {"id":"s2","position":{"x":0,"y":0},"data":{"label":"B","componentId":"src.duckdb","properties":{"database":"/tmp/b.duckdb","tableName":"t2"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{"label":"KA","componentId":"snk.csv","properties":{"path":"/tmp/a.csv"}}},
+                {"id":"k2","position":{"x":0,"y":0},"data":{"label":"KB","componentId":"snk.csv","properties":{"path":"/tmp/b.csv"}}}
+              ],"edges":[
+                {"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}},
+                {"id":"e2","source":"s2","target":"k2","data":{"connectionType":"main"}}
+              ]}"#,
+        );
+        let c = compile(&p).unwrap();
+        let a = c.stages.iter().find(|s| s.node_id == "s1").unwrap();
+        let b = c.stages.iter().find(|s| s.node_id == "s2").unwrap();
+        assert!(a.sql.contains("CREATE OR REPLACE VIEW") && b.sql.contains("CREATE OR REPLACE VIEW"),
+            "both sources must be VIEWs:\nA: {}\nB: {}", a.sql, b.sql);
+        assert!(a.sql.contains("AS duckle_src_s1"), "source A uses its own alias: {}", a.sql);
+        assert!(b.sql.contains("AS duckle_src_s2"), "source B uses its own alias: {}", b.sql);
+        assert!(!a.sql.contains("AS duckle_src_s2") && !b.sql.contains("AS duckle_src_s1"), "aliases must not cross");
+        assert!(!a.sql.contains("DETACH") && !b.sql.contains("DETACH"), "both kept attached for the batched session");
+    }
+
+    #[test]
     fn relational_source_infers_custom_sql_without_mode() {
         // issue #77: a filled SQL box wins even when the Read-mode dropdown is
         // left at its default (no "mode" prop), mirroring src.duckdb. A

@@ -296,12 +296,19 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
         }
     }
     let mut consumer_count: HashMap<String, usize> = HashMap::new();
+    // Source nodes whose rows a reject-wired filter reads twice (pass + reject
+    // arm). Such a source must stay materialized once (#76): it is NOT eligible
+    // for the live-VIEW upgrade, which would re-scan the source per arm.
+    let mut feeds_reject: HashSet<String> = HashSet::new();
     for edge in &data_edges {
         let port = edge
             .target_handle
             .as_deref()
             .unwrap_or("main");
         let port_key = canonical_port(port);
+        if port_key == "main" && reject_wired.contains(edge.target.as_str()) {
+            feeds_reject.insert(edge.source.clone());
+        }
         // Resolve which materialized table this edge actually reads, based
         // on the SOURCE node's output handle (main vs reject).
         let source_ref = output_table_ref(&edge.source, edge.source_handle.as_deref());
@@ -468,7 +475,7 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
                 )));
             }
         }
-        let mut stage = build_stage(node, component_id, node_inputs, &consumer_count)?;
+        let mut stage = build_stage(node, component_id, node_inputs, &consumer_count, &feeds_reject)?;
         if let Some(spec) = parallelize_specs.remove(node_id) {
             stage.runtime = Some(RuntimeSpec::Parallelize(spec));
         }
@@ -488,19 +495,24 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
     // `batchable` check (compile() is the no-target path), so whenever we
     // upgrade, the executor is guaranteed to take the single-session path.
     if stages.iter().any(|s| s.attach_view) {
+        // An Auto attach-view candidate carries its parquet fast-path spec as a
+        // fallback, which makes it non-pure-SQL; treat it as batch-compatible
+        // here since the upgrade below clears that spec (so the executor then
+        // sees a pure-SQL stage and takes the single-session path too).
         let would_batch = stages.len() >= 2
             && stages.iter().all(|s| {
-                s.is_pure_sql()
+                let upgradeable = s.attach_view
+                    && matches!(s.runtime, Some(RuntimeSpec::AttachParquetSource(_)));
+                (s.is_pure_sql() || upgradeable)
                     && s.retry_attempts <= 1
                     && s.wait_ms.is_none()
                     && s.memory_limit_mb.is_none()
                     && s.sink_mode.as_deref() != Some("error")
             });
-        let duckle_src_sources = stages
-            .iter()
-            .filter(|s| s.sql.contains("AS duckle_src"))
-            .count();
-        if would_batch && duckle_src_sources == 1 {
+        // Each attach-backed source now uses a unique alias (duckle_src_<node>),
+        // so multiple duck sources can stay attached as live VIEWs at once - the
+        // old "exactly one duckle_src" guard is no longer needed (#76 case 3).
+        if would_batch {
             for s in stages.iter_mut().filter(|s| s.attach_view) {
                 // TABLE -> VIEW so the consumer inlines it and pushes predicates
                 // into the ducklake / duckdb / postgres scan.
@@ -508,15 +520,20 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
                     s.sql
                         .replace_range(p..p + "CREATE OR REPLACE TABLE ".len(), "CREATE OR REPLACE VIEW ");
                 }
-                // Keep duckle_src ATTACHed for the downstream stage: drop the
-                // trailing "DETACH duckle_src;" the source appended, or the view
-                // would dangle when the consumer reads it.
+                // Keep the alias ATTACHed for the downstream stage: drop the
+                // trailing "DETACH duckle_src_<node>;" the source appended, or the
+                // view would dangle when the consumer reads it.
                 if let Some(d) = s.sql.rfind("DETACH duckle_src") {
                     s.sql.truncate(d);
                     while s.sql.ends_with(' ') || s.sql.ends_with(';') {
                         s.sql.pop();
                     }
                 }
+                // Drop the Auto parquet fast-path spec (#76 case 2): the live
+                // VIEW we just produced gives true pushdown, and clearing the
+                // spec makes the stage pure SQL for the batched executor. Explicit
+                // View has no spec, so this is a no-op there.
+                s.runtime = None;
             }
         }
     }
@@ -573,11 +590,51 @@ fn delete_value_from(props: &JsonValue) -> String {
         .unwrap_or_else(|| "delete".into())
 }
 
+/// Sanitize a node id into a SQL-identifier-safe alias suffix (#76 per-source
+/// aliases). Non-alphanumeric chars become `_`; the `duckle_src_` prefix the
+/// caller prepends guarantees it never starts with a digit.
+fn alias_suffix(node_id: &str) -> String {
+    let s: String = node_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    if s.is_empty() { "src".to_string() } else { s }
+}
+
+/// Replace every token-boundaried occurrence of `from` in `sql` with `to`. A
+/// match counts only when the char after `from` is not an identifier char, so
+/// renaming the alias `duckle_src` (e.g. `AS duckle_src`, `duckle_src.tbl`,
+/// `'duckle_src'`) never corrupts a longer identifier like a user table named
+/// `duckle_src_x`.
+fn rename_token(sql: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < sql.len() {
+        if sql[i..].starts_with(from) {
+            let after_ident = bytes
+                .get(i + from.len())
+                .map(|c| c.is_ascii_alphanumeric() || *c == b'_')
+                .unwrap_or(false);
+            if !after_ident {
+                out.push_str(to);
+                i += from.len();
+                continue;
+            }
+        }
+        let ch = sql[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
 fn build_stage(
     node: &PipelineNode,
     component_id: &str,
     inputs: &NodeInputs,
     consumer_count: &HashMap<String, usize>,
+    feeds_reject: &HashSet<String>,
 ) -> Result<Stage, EngineError> {
     let props = node
         .data
@@ -3236,10 +3293,18 @@ fn build_stage(
         // duckle_src ATTACH (issue #76). Only single-consumer sources qualify:
         // a multi-consumer VIEW would re-scan the source once per consumer, so
         // those stay a materialized TABLE (scan once).
-        attach_view = materialize == "view"
+        // #76: both explicit View and the default Auto make a single-consumer
+        // attach-backed source eligible for the live-VIEW upgrade in compile()
+        // (true predicate pushdown into the source scan). Auto also keeps its
+        // parquet fast-path spec as the fallback for when the pipeline cannot
+        // batch into one session; compile() drops that spec on upgrade.
+        attach_view = matches!(materialize, "view" | "auto")
             && attach_backed
             && main_consumers <= 1
-            && reject_sql.is_none();
+            && reject_sql.is_none()
+            // A source a reject-wired filter reads twice must stay materialized
+            // once (parquet / table); a live VIEW would re-scan it per arm.
+            && !feeds_reject.contains(node.id.as_str());
         // Materialize = "disk": stream this stage through a temp parquet file
         // (COPY ... TO parquet, then a read_parquet VIEW) instead of inserting
         // into the run-db table - minimal RAM, built for huge intermediates.
@@ -3395,10 +3460,27 @@ fn build_stage(
     // own connection and either leave sql empty or have the executor ignore
     // it, so they are unaffected.
     if let Some(alias) = attach_alias {
-        if sql.starts_with(attach.as_str()) {
+        // #76: give each attach-backed SOURCE a unique alias (duckle_src_<node>)
+        // so several duck sources coexist as live VIEWs in one batched session
+        // without colliding on the shared name. Only the batched stage SQL is
+        // renamed; isolated runtime specs (DuckLake CDC, drivers, duckdb-file
+        // materialize) run in their own connection where the shared name is safe,
+        // so they keep `duckle_src`. Sinks (duckle_dst) attach/write/detach
+        // sequentially and are never kept open, so they keep the shared alias.
+        let batched_source = alias == "duckle_src"
+            && matches!(runtime, None | Some(RuntimeSpec::AttachParquetSource(_)));
+        let (effective, prelude) = if batched_source {
+            let uniq = format!("duckle_src_{}", alias_suffix(&node.id));
+            sql = rename_token(&sql, "duckle_src", &uniq);
+            let renamed_prelude = rename_token(&attach, "duckle_src", &uniq);
+            (uniq, renamed_prelude)
+        } else {
+            (alias.to_string(), attach.clone())
+        };
+        if sql.starts_with(&prelude) {
             let trimmed = sql.trim_end();
             let sep = if trimmed.ends_with(';') { " " } else { "; " };
-            sql = format!("{}{}DETACH {};", trimmed, sep, alias);
+            sql = format!("{}{}DETACH {};", trimmed, sep, effective);
         }
     }
     Ok(Stage {

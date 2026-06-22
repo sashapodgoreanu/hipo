@@ -10720,3 +10720,33 @@ fn freshness_gate_and_report() {
     assert_eq!(engine.execute_pipeline(&d3).status, "ok");
     assert_eq!(scalar_string(&format!("SELECT is_fresh FROM read_csv_auto('{}')", out_rep)), "false");
 }
+
+/// #76 case 3 (live): two duckdb-file sources in one pipeline each become a live
+/// VIEW under a unique alias and both run correctly in one batched session - the
+/// scenario where the second source used to revert both to tables.
+#[test]
+fn two_duck_sources_coexist_live() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let a_db = out_path(tmp.path(), "a.duckdb");
+    let b_db = out_path(tmp.path(), "b.duckdb");
+    duckdb_exec(&a_db, "CREATE TABLE t1 AS SELECT * FROM (VALUES (1,'x'),(2,'y'),(3,'z')) v(id,name)");
+    duckdb_exec(&b_db, "CREATE TABLE t2 AS SELECT * FROM (VALUES (10,'p'),(20,'q')) v(id,tag)");
+    let out_a = out_path(tmp.path(), "a.csv");
+    let out_b = out_path(tmp.path(), "b.csv");
+    let d = doc(
+        json!([
+            node("s1", "src.duckdb", json!({ "database": a_db, "tableName": "t1" })),
+            node("s2", "src.duckdb", json!({ "database": b_db, "tableName": "t2" })),
+            node("k1", "snk.csv", json!({ "path": out_a, "hasHeader": true })),
+            node("k2", "snk.csv", json!({ "path": out_b, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s1", "k1"), main_edge("e2", "s2", "k2")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "two duck sources must run: {:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out_a)), 3, "source A all rows");
+    assert_eq!(count(&format!("read_csv_auto('{}')", out_b)), 2, "source B all rows");
+    assert_eq!(scalar_string(&format!("SELECT name FROM read_csv_auto('{}') WHERE id=2", out_a)), "y");
+    assert_eq!(scalar_string(&format!("SELECT tag FROM read_csv_auto('{}') WHERE id=20", out_b)), "q");
+}
