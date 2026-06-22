@@ -300,14 +300,21 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
     // arm). Such a source must stay materialized once (#76): it is NOT eligible
     // for the live-VIEW upgrade, which would re-scan the source per arm.
     let mut feeds_reject: HashSet<String> = HashSet::new();
+    // Each node's main upstream, to resolve a sink's input columns from the
+    // nearest upstream node that declares a schema (#39: a transform between a
+    // source and a merge sink leaves the sink's own schema empty).
+    let mut main_input: HashMap<String, String> = HashMap::new();
     for edge in &data_edges {
         let port = edge
             .target_handle
             .as_deref()
             .unwrap_or("main");
         let port_key = canonical_port(port);
-        if port_key == "main" && reject_wired.contains(edge.target.as_str()) {
-            feeds_reject.insert(edge.source.clone());
+        if port_key == "main" {
+            if reject_wired.contains(edge.target.as_str()) {
+                feeds_reject.insert(edge.source.clone());
+            }
+            main_input.entry(edge.target.clone()).or_insert_with(|| edge.source.clone());
         }
         // Resolve which materialized table this edge actually reads, based
         // on the SOURCE node's output handle (main vs reject).
@@ -475,7 +482,31 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
                 )));
             }
         }
-        let mut stage = build_stage(node, component_id, node_inputs, &consumer_count, &feeds_reject)?;
+        // Nearest upstream node's declared schema, used as the merge sink's
+        // input column list when the sink itself has no schema (#39).
+        let upstream_cols: Vec<String> = {
+            let mut cur = main_input.get(node_id.as_str()).cloned();
+            let mut found: Vec<String> = Vec::new();
+            let mut hops = 0;
+            while let Some(up) = cur {
+                if let Some(cols) = node_index
+                    .get(up.as_str())
+                    .and_then(|n| n.data.schema.as_deref())
+                    .map(|s| s.iter().map(|c| c.name.clone()).collect::<Vec<String>>())
+                    .filter(|v| !v.is_empty())
+                {
+                    found = cols;
+                    break;
+                }
+                cur = main_input.get(&up).cloned();
+                hops += 1;
+                if hops > 512 {
+                    break;
+                }
+            }
+            found
+        };
+        let mut stage = build_stage(node, component_id, node_inputs, &consumer_count, &feeds_reject, &upstream_cols)?;
         if let Some(spec) = parallelize_specs.remove(node_id) {
             stage.runtime = Some(RuntimeSpec::Parallelize(spec));
         }
@@ -635,6 +666,7 @@ fn build_stage(
     inputs: &NodeInputs,
     consumer_count: &HashMap<String, usize>,
     feeds_reject: &HashSet<String>,
+    upstream_cols: &[String],
 ) -> Result<Stage, EngineError> {
     let props = node
         .data
@@ -1546,8 +1578,12 @@ fn build_stage(
                 .data
                 .schema
                 .as_deref()
-                .map(|s| s.iter().map(|c| c.name.clone()).collect())
-                .unwrap_or_default();
+                .map(|s| s.iter().map(|c| c.name.clone()).collect::<Vec<String>>())
+                .filter(|v| !v.is_empty())
+                // #39: fall back to the nearest upstream node's schema so a
+                // transform (e.g. a sample) between source and a merge sink
+                // still gives the merge its input column list.
+                .unwrap_or_else(|| upstream_cols.to_vec());
             (
                 format!("{}{}", attach, build_sink_sql(component_id, &props, from_view, &sink_cols)?),
                 StageKind::Sink,

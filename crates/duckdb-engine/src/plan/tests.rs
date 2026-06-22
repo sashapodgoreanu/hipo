@@ -683,6 +683,28 @@
     }
 
     #[test]
+    fn merge_resolves_columns_through_a_schemaless_transform() {
+        // #39: a transform (e.g. a sample) between the source and a `merge` sink
+        // leaves the sink's own schema empty; the merge must still find its input
+        // columns by walking back to the source's schema, not error out.
+        let p = pipeline_from_json(
+            r#"{"nodes":[
+                {"id":"s1","position":{"x":0,"y":0},"data":{"label":"Src","componentId":"src.csv","properties":{"path":"/tmp/in.csv"},
+                  "schema":[{"name":"id","type":"int64"},{"name":"amount","type":"int64"}]}},
+                {"id":"t1","position":{"x":0,"y":0},"data":{"label":"Sort","componentId":"xf.sort","properties":{"orderBy":"id"}}},
+                {"id":"k1","position":{"x":0,"y":0},"data":{"label":"Merge","componentId":"snk.duckdb","properties":{"database":"/tmp/t.duckdb","tableName":"orders","mode":"merge","conflictColumns":["id"]}}}
+              ],"edges":[
+                {"id":"e1","source":"s1","target":"t1","data":{"connectionType":"main"}},
+                {"id":"e2","source":"t1","target":"k1","data":{"connectionType":"main"}}
+              ]}"#,
+        );
+        let c = compile(&p).expect("merge through a schemaless transform must compile");
+        let sink = c.stages.iter().find(|s| s.node_id == "k1").unwrap();
+        assert!(sink.sql.contains("MERGE INTO"), "sink must build a MERGE: {}", sink.sql);
+        assert!(sink.sql.contains("\"amount\" = src.\"amount\""), "merge must set the non-key source column: {}", sink.sql);
+    }
+
+    #[test]
     fn relational_source_infers_custom_sql_without_mode() {
         // issue #77: a filled SQL box wins even when the Read-mode dropdown is
         // left at its default (no "mode" prop), mirroring src.duckdb. A
