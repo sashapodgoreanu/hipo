@@ -60,3 +60,6 @@ samples/*.parquet
 
 # Local dev guidelines (do not track)
 CLAUDE.md
+
+# web-editor spike build artifact (#75 phase 2)
+frontend/dist-web/

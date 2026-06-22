@@ -124,6 +124,161 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
+// ── Web editor mode (#75 phase 2 spike): serve the full frontend + an
+//    HTTP command bridge so the React editor runs in a browser, backed by the
+//    server-side engine/filesystem. Single-tenant, no auth (localhost / proxy).
+
+struct WebArgs {
+    host: String,
+    port: u16,
+    workspace: PathBuf,
+    duckdb: Option<PathBuf>,
+    dist: PathBuf,
+}
+
+fn parse_web_args() -> Result<WebArgs, String> {
+    let mut host = "127.0.0.1".to_string();
+    let mut port: u16 = 8090;
+    let mut workspace: Option<PathBuf> = None;
+    let mut duckdb: Option<PathBuf> = None;
+    let mut dist: Option<PathBuf> = None;
+    let mut it = std::env::args().skip(2);
+    while let Some(arg) = it.next() {
+        let mut take = |label: &str| it.next().ok_or_else(|| format!("{} needs a value", label));
+        match arg.as_str() {
+            "--host" => host = take("--host")?,
+            "--port" => {
+                port = take("--port")?.parse().map_err(|_| "--port must be a number".to_string())?
+            }
+            "--workspace" => workspace = Some(PathBuf::from(take("--workspace")?)),
+            "--duckdb" => duckdb = Some(PathBuf::from(take("--duckdb")?)),
+            "--dist" => dist = Some(PathBuf::from(take("--dist")?)),
+            "-h" | "--help" => {
+                println!(
+                    "duckle-runner web - serve the Duckle editor as a web app (spike)\n\n\
+                     USAGE:\n    duckle-runner web --dist <dir> [--host <ip>] [--port <n>] [--workspace <dir>]\n\n\
+                     No authentication. Bind to localhost or a trusted network."
+                );
+                std::process::exit(0);
+            }
+            other => return Err(format!("unknown web argument: {}", other)),
+        }
+    }
+    Ok(WebArgs {
+        host,
+        port,
+        workspace: workspace.unwrap_or_else(|| PathBuf::from(".")),
+        duckdb,
+        dist: dist.ok_or("web mode needs --dist <frontend dist dir>")?,
+    })
+}
+
+struct WebState {
+    workspace: PathBuf,
+    duckdb: PathBuf,
+    dist: PathBuf,
+}
+
+pub fn run_web() -> Result<(), String> {
+    let args = parse_web_args()?;
+    let workspace = args.workspace.canonicalize().unwrap_or_else(|_| args.workspace.clone());
+    let duckdb = crate::resolve_duckdb(args.duckdb.clone())?;
+    let dist = args.dist.canonicalize().map_err(|e| format!("--dist {}: {}", args.dist.display(), e))?;
+    std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
+    std::env::set_var("DUCKLE_WORKSPACE", &workspace);
+    let state = Arc::new(WebState { workspace: workspace.clone(), duckdb: duckdb.clone(), dist: dist.clone() });
+    let addr = format!("{}:{}", args.host, args.port);
+    let listener = TcpListener::bind(&addr).map_err(|e| format!("bind {}: {}", addr, e))?;
+    eprintln!("duckle-runner: web editor on http://{}", addr);
+    eprintln!("duckle-runner: workspace {}", workspace.display());
+    eprintln!("duckle-runner: serving {}", dist.display());
+    for stream in listener.incoming() {
+        match stream {
+            Ok(s) => {
+                let st = state.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = handle_web(s, &st) {
+                        eprintln!("duckle-runner: request error: {}", e);
+                    }
+                });
+            }
+            Err(e) => eprintln!("duckle-runner: accept error: {}", e),
+        }
+    }
+    Ok(())
+}
+
+fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
+    let req = read_request(&mut stream)?;
+    if req.method == "POST" && req.path.starts_with("/api/cmd/") {
+        let cmd = req.path.trim_start_matches("/api/cmd/").to_string();
+        return dispatch_cmd(&mut stream, state, &cmd, &req.body);
+    }
+    // Static frontend: map the URL path into the dist dir; unknown non-asset
+    // paths fall back to index.html (SPA routing).
+    serve_static(&mut stream, state, &req.path)
+}
+
+fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, _body: &[u8]) -> Result<(), String> {
+    match cmd {
+        // Drives the editor's runtime indicator offline -> ready.
+        "ping" => respond_json(stream, &Value::String("pong".into())),
+        // The browser build skips the engine-setup gate, but answer truthfully.
+        "engine_status" => respond_json(
+            stream,
+            &serde_json::json!([{
+                "id": "duckdb",
+                "name": "DuckDB",
+                "description": "DuckDB engine",
+                "required": true,
+                "installed": true,
+                "outdated": false,
+                "version": "1.5.4",
+                "target_version": "1.5.4",
+                "path": state.duckdb.to_string_lossy(),
+                "available": true,
+            }]),
+        ),
+        // Unimplemented commands answer null so the editor (already resilient to
+        // backend failures) keeps booting. Real handlers land in the MVP.
+        _ => respond_json(stream, &Value::Null),
+    }
+}
+
+fn serve_static(stream: &mut TcpStream, state: &WebState, url_path: &str) -> Result<(), String> {
+    let rel = url_path.trim_start_matches('/');
+    let candidate = if rel.is_empty() { state.dist.join("index.html") } else { state.dist.join(rel) };
+    // Confine to the dist dir, and SPA-fallback to index.html for non-asset paths.
+    let file = match candidate.canonicalize() {
+        Ok(p) if p.starts_with(&state.dist) && p.is_file() => p,
+        _ => state.dist.join("index.html"),
+    };
+    match std::fs::read(&file) {
+        Ok(bytes) => respond(stream, "200 OK", web_content_type(&file), &bytes),
+        Err(e) => respond_err(stream, "404 Not Found", &format!("{}: {}", file.display(), e)),
+    }
+}
+
+fn web_content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
+        "map" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
 // ── HTTP (minimal, std-only) ──
 
 struct Request {

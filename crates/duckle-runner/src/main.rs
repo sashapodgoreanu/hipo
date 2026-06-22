@@ -583,6 +583,16 @@ fn main() -> ExitCode {
             }
         };
     }
+    // `web` -> serve the full Duckle editor as a web app (#75 phase 2 spike).
+    if std::env::args().nth(1).as_deref() == Some("web") {
+        return match serve::run_web() {
+            Ok(()) => ExitCode::from(0),
+            Err(e) => {
+                eprintln!("duckle-runner: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     match run() {
         Ok(true) => ExitCode::from(0),
         Ok(false) => ExitCode::from(1),
