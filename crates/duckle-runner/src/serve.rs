@@ -351,10 +351,11 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
         // streamed in the MVP. Runs are serialized via run_lock.
         "run_pipeline" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            let doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
+            let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
                 Ok(d) => d,
                 Err(e) => return respond_err(stream, "400 Bad Request", &format!("bad pipeline: {}", e)),
             };
+            duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
             let _guard = state.run_lock.lock().unwrap_or_else(|p| p.into_inner());
             let engine = DuckdbEngine::new(state.duckdb.clone());
@@ -367,10 +368,11 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
         // Compile to per-stage SQL for the Plan tab.
         "compile_pipeline" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            let doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
+            let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
                 Ok(d) => d,
                 Err(e) => return respond_err(stream, "400 Bad Request", &format!("bad pipeline: {}", e)),
             };
+            duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             match duckle_duckdb_engine::compile_pipeline_sql(&doc) {
                 Ok(stages) => match serde_json::to_value(&stages) {
                     Ok(v) => respond_json(stream, &v),
@@ -413,10 +415,11 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
 /// per-node animation the desktop gets from the Tauri Channel.
 fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
     let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
+    let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
         Ok(d) => d,
         Err(e) => return respond_err(stream, "400 Bad Request", &format!("bad pipeline: {}", e)),
     };
+    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
     let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
     // SSE response head (no Content-Length; we stream until the run ends).
     let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";

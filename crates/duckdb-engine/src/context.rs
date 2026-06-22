@@ -129,6 +129,35 @@ pub fn apply_time_builtins(doc: &mut PipelineDoc) {
     }
 }
 
+/// Resolve the portable workspace placeholders (`${workspace}` / `${projectroot}`),
+/// the date/time builtins, and any workspace context-file variables in every node
+/// property, in place. Used by the headless run paths (the CLI runner and the web
+/// server) so a pipeline LOADED FROM A FILE resolves the same `${workspace}`-style
+/// paths that the desktop's by-id load ([`resolve_workspace`]) and foreach children
+/// already do. An unknown `${...}` is left verbatim.
+pub fn apply_workspace_context(doc: &mut PipelineDoc, workspace: &Path) {
+    let vars = crate::connectors::context_vars_for_workspace(workspace);
+    if vars.is_empty() {
+        return;
+    }
+    let re = match regex::Regex::new(r"\$\{([^}]+)\}") {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+    let replace = |s: &str| -> String {
+        re.replace_all(s, |caps: &regex::Captures| match vars.get(caps[1].trim()) {
+            Some(v) => v.clone(),
+            None => caps[0].to_string(),
+        })
+        .into_owned()
+    };
+    for node in &mut doc.nodes {
+        if let Some(props) = node.data.properties.as_mut() {
+            substitute_deep(props, &replace);
+        }
+    }
+}
+
 /// Build the context-var map (bare + `<contextName>.key`) and capture the
 /// raw values of secret:true vars. Port of buildContextVars plus secret
 /// capture. When `context` is Some, only that named context is loaded.

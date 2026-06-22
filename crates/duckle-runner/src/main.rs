@@ -284,6 +284,11 @@ fn run() -> Result<bool, String> {
     // time. A built bundle deliberately ships these unresolved so each run
     // (e.g. a daily cron of the same artifact) writes a fresh-dated path.
     duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    // Resolve ${workspace}/${projectroot} + workspace context vars on the parent
+    // (a file-loaded pipeline doesn't go through the by-id resolver, so these
+    // would otherwise pass through literally; foreach children already resolve
+    // them). Makes ${workspace}-relative pipelines portable in headless runs.
+    context::apply_workspace_context(&mut doc, &workspace);
     let log_dir = args.log_dir.clone().unwrap_or_else(|| workspace.join("logs"));
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", &log_dir);
