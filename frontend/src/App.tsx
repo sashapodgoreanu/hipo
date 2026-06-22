@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { Braces, FolderOpen, GitBranch, Moon, Sparkles, Sun } from 'lucide-react';
+import { Braces, FolderOpen, GitBranch, LayoutDashboard, Moon, Sparkles, Sun } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -75,6 +75,7 @@ import {
     setWorkspacePath,
     WorkspaceLoadError,
 } from './workspace';
+import { openExternal } from './tauri-io';
 import LeftSidebar from './workflow-ui/LeftSidebar';
 import PropertiesPanel from './workflow-ui/PropertiesPanel';
 import BottomPanel from './workflow-ui/BottomPanel';
@@ -1853,6 +1854,26 @@ export default function App() {
                     </div>
                 ) : null}
                 {workspacePathState ? <CiStatusBadge workspacePath={workspacePathState} /> : null}
+                {workspacePathState && isInTauri() ? (
+                    <button
+                        type="button"
+                        className="topbar-theme-toggle"
+                        onClick={async () => {
+                            try {
+                                const url = await invoke<string>('open_web_panel', {
+                                    workspace: workspacePathState,
+                                });
+                                await openExternal(url);
+                            } catch (e) {
+                                alert('Could not open the web panel: ' + String(e));
+                            }
+                        }}
+                        title="Open the web dashboard (run + monitor pipelines in a browser)"
+                        aria-label="Open web dashboard"
+                    >
+                        <LayoutDashboard size={14} />
+                    </button>
+                ) : null}
                 <button
                     type="button"
                     className="topbar-theme-toggle"

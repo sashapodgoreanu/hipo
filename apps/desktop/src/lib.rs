@@ -179,10 +179,18 @@ pub fn run() {
             mcp_connection_info,
             connect_claude_code,
             mcp_inject_config,
+            open_web_panel,
             self_update
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running duckle");
+        .build(tauri::generate_context!())
+        .expect("error while building duckle")
+        .run(|_app, event| {
+            // Stop the web-panel server (if running) when the app exits so it
+            // does not linger as an orphaned headless process.
+            if let tauri::RunEvent::Exit = event {
+                stop_web_panel_silent();
+            }
+        });
 }
 
 /// Liveness probe. Returns the string `"pong"`.
@@ -1108,6 +1116,115 @@ fn stage_mcp(app_data: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
 /// Double-quote a token for a copyable shell command line (paths have spaces).
 fn shell_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\\\""))
+}
+
+// ── Web panel (duckle-runner serve) ──
+
+/// A running web-panel server child, kept so re-opening reuses it and app exit
+/// can stop it.
+struct WebPanel {
+    port: u16,
+    child: std::process::Child,
+}
+
+static WEB_PANEL: std::sync::Mutex<Option<WebPanel>> = std::sync::Mutex::new(None);
+
+/// Stage the embedded host runner into a stable app-data dir so the long-lived
+/// `serve` process runs from a fixed path (not a temp stub).
+fn stage_panel_runner(app_data: &std::path::Path) -> Result<PathBuf, String> {
+    if EMBEDDED_RUNNER.is_empty() {
+        return Err("This build does not bundle duckle-runner".to_string());
+    }
+    let dir = app_data.join("engines").join("panel");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let runner = dir.join(format!("duckle-runner{suffix}"));
+    write_if_changed(&runner, EMBEDDED_RUNNER)?;
+    Ok(runner)
+}
+
+/// Pick a port for the panel: prefer 8080, else an OS-assigned free port.
+fn pick_panel_port() -> u16 {
+    if std::net::TcpListener::bind(("127.0.0.1", 8080u16)).is_ok() {
+        return 8080;
+    }
+    std::net::TcpListener::bind(("127.0.0.1", 0u16))
+        .ok()
+        .and_then(|l| l.local_addr().ok())
+        .map(|a| a.port())
+        .unwrap_or(8080)
+}
+
+/// Start (or reuse) the web management console for the current workspace and
+/// return its URL. Spawns the embedded `duckle-runner serve` against the
+/// workspace on a local port; the frontend then opens the URL in the browser.
+#[tauri::command]
+fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, String> {
+    if workspace.trim().is_empty() {
+        return Err("Open or create a workspace first".to_string());
+    }
+    let mut guard = WEB_PANEL.lock().map_err(|_| "panel lock poisoned".to_string())?;
+    // Reuse a still-running panel.
+    if let Some(p) = guard.as_mut() {
+        if matches!(p.child.try_wait(), Ok(None)) {
+            return Ok(format!("http://127.0.0.1:{}", p.port));
+        }
+        *guard = None; // previous server exited; start a fresh one
+    }
+
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let duckdb = engine_manager::duckdb_path(&app_data);
+    let runner = stage_panel_runner(&app_data)?;
+    let port = pick_panel_port();
+
+    let mut cmd = std::process::Command::new(&runner);
+    cmd.arg("serve")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--workspace")
+        .arg(&workspace)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // Only pass --duckdb when the resolved binary exists; otherwise let the
+    // runner fall back (env / sibling / PATH) instead of erroring on a missing
+    // explicit path.
+    if duckdb.exists() {
+        cmd.arg("--duckdb").arg(&duckdb).env("DUCKLE_DUCKDB_BIN", &duckdb);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let child = cmd.spawn().map_err(|e| format!("start web panel: {}", e))?;
+
+    // Wait until the server accepts connections (up to ~3s).
+    let addr = format!("127.0.0.1:{}", port);
+    let mut up = false;
+    for _ in 0..30 {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            up = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    *guard = Some(WebPanel { port, child });
+    if !up {
+        return Err("web panel did not start in time".to_string());
+    }
+    Ok(format!("http://{}", addr))
+}
+
+/// Kill the running web-panel server, if any. Best effort; called on app exit.
+fn stop_web_panel_silent() {
+    if let Ok(mut guard) = WEB_PANEL.lock() {
+        if let Some(mut p) = guard.take() {
+            let _ = p.child.kill();
+        }
+    }
 }
 
 /// Best-effort probe for the Claude Code CLI (`claude --version`).
