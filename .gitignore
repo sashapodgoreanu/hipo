@@ -57,3 +57,6 @@ coverage/
 
 # stray sink test outputs
 samples/*.parquet
+
+# Local dev guidelines (do not track)
+CLAUDE.md
