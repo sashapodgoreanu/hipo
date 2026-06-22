@@ -743,6 +743,22 @@ On Windows use **Task Scheduler**; on macOS a **launchd** plist; on Linux a **sy
 duckle-runner --pipeline /path/to/pipeline.json [--workspace /path/to/workspace] [--duckdb /path/to/duckdb]
 ```
 
+### Web panel (remote management console)
+
+To run and monitor pipelines on a server with a browser instead of the desktop app, start the built-in **web panel** - it is part of the same `duckle-runner` binary, so there is nothing extra to install:
+
+```bash
+duckle-runner serve --port 8080 --workspace /path/to/workspace
+```
+
+Open `http://localhost:8080`. The panel has three views:
+
+- **Operations** - run history across every pipeline (status, duration, rows, errors) with expandable per-pipeline run logs and optional auto-refresh.
+- **Pipelines** - every pipeline in the workspace with its last status and an editable interval schedule.
+- **Run** - trigger any pipeline on demand and see its per-node result.
+
+Runs execute in-process through the same engine, are written to the same run history (`<workspace>/runs/`) and logs (`<workspace>/logs/`), and a built-in scheduler triggers any pipeline whose interval has elapsed - so the server itself runs your schedules, no OS cron needed. There is **no authentication**: bind it to `127.0.0.1` (the default) or a trusted network, and put it behind a reverse proxy if you need TLS or a login. Use `--host 0.0.0.0` to accept remote connections.
+
 ---
 
 ## MCP server (connect Claude or any LLM to Duckle)

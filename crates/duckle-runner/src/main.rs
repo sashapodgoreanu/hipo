@@ -23,6 +23,7 @@ use std::process::ExitCode;
 mod build;
 use duckle_duckdb_engine::context;
 mod selfextract;
+mod serve;
 
 const USAGE: &str = "\
 duckle-runner - run a Duckle pipeline headlessly
@@ -565,6 +566,16 @@ fn main() -> ExitCode {
     // (a bare pipeline path or --pipeline) -> the run path.
     if std::env::args().nth(1).as_deref() == Some("build") {
         return match build::run() {
+            Ok(()) => ExitCode::from(0),
+            Err(e) => {
+                eprintln!("duckle-runner: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `serve` -> the web management console (HTTP server + embedded panel).
+    if std::env::args().nth(1).as_deref() == Some("serve") {
+        return match serve::run() {
             Ok(()) => ExitCode::from(0),
             Err(e) => {
                 eprintln!("duckle-runner: {e}");

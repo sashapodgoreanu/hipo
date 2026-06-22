@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duckle - Management Console</title>
+<style>
+  :root {
+    --slate: #1e2330; --slate-2: #272d3d; --slate-3: #323a4d; --line: #3a4257;
+    --ink: #e8eaf0; --muted: #9aa3b8;
+    --lemon: #ffd84d; --orange: #ff8a3d; --maya: #4aa8ff; --red: #ef4444; --amber: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--slate); color: var(--ink);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--maya); }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+    background: var(--slate-2); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  .logo { width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--lemon), var(--orange)); display:inline-block; }
+  .brand { font-weight: 700; font-size: 16px; letter-spacing: .2px; }
+  .brand small { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: 8px; }
+  .chips { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+  .chip { font-size: 12px; color: var(--muted); }
+  .chip b { color: var(--ink); font-size: 15px; display: block; }
+  nav { display: flex; gap: 4px; padding: 0 16px; background: var(--slate-2); border-bottom: 1px solid var(--line); }
+  nav button { background: none; border: none; color: var(--muted); padding: 11px 16px; cursor: pointer;
+    font-size: 14px; border-bottom: 2px solid transparent; }
+  nav button.active { color: var(--ink); border-bottom-color: var(--lemon); }
+  main { padding: 18px 20px; max-width: 1200px; margin: 0 auto; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .spacer { flex: 1; }
+  input, select, button.btn { background: var(--slate-3); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 11px; font-size: 13px; }
+  input[type=number] { width: 80px; }
+  button.btn { cursor: pointer; }
+  button.btn:hover { border-color: var(--muted); }
+  button.primary { background: var(--lemon); color: #20242e; border-color: var(--lemon); font-weight: 600; }
+  button.primary:hover { background: var(--orange); border-color: var(--orange); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 9px 12px; border-bottom: 1px solid var(--line);
+    font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 9px 12px; border-bottom: 1px solid #2c3346; }
+  tbody tr:hover td { background: var(--slate-2); }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 11px; font-size: 11px; font-weight: 600; }
+  .ok { background: rgba(74,168,255,.16); color: var(--maya); }
+  .err { background: rgba(239,68,68,.16); color: var(--red); }
+  .run { background: rgba(245,158,11,.16); color: var(--amber); }
+  .neutral { background: var(--slate-3); color: var(--muted); }
+  .muted { color: var(--muted); }
+  .mono { font-family: Consolas, "SF Mono", monospace; }
+  .toolbar { display:flex; gap:8px; align-items:center; }
+  .filter { background: var(--slate-3); border:1px solid var(--line); border-radius:7px; padding:6px 12px;
+    cursor:pointer; color: var(--muted); font-size:13px; }
+  .filter.active { color: var(--ink); border-color: var(--lemon); }
+  .logbox { font-family: Consolas, monospace; font-size: 12px; background: #161a24; border: 1px solid var(--line);
+    border-radius: 7px; padding: 10px 12px; max-height: 320px; overflow: auto; white-space: pre-wrap;
+    color: #cdd3e1; margin: 6px 0 4px; }
+  .detail { background: var(--slate-2); }
+  .card { background: var(--slate-2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .empty { color: var(--muted); text-align: center; padding: 40px; }
+  label.inline { display:flex; align-items:center; gap:6px; color: var(--muted); font-size:13px; }
+  .switch { transform: scale(1.1); accent-color: var(--lemon); }
+  .nodelist { font-size:12px; }
+  .nodelist span { margin-right: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo"></span>
+  <span class="brand">Duckle <small id="ws">Management Console</small></span>
+  <div class="chips">
+    <div class="chip">Pipelines<b id="c-pipes">-</b></div>
+    <div class="chip">Runs<b id="c-runs">-</b></div>
+    <div class="chip">Successful<b id="c-ok" style="color:var(--maya)">-</b></div>
+    <div class="chip">Failed<b id="c-fail" style="color:var(--red)">-</b></div>
+  </div>
+</header>
+<nav>
+  <button data-tab="ops" class="active">Operations</button>
+  <button data-tab="pipes">Pipelines</button>
+  <button data-tab="run">Run</button>
+</nav>
+<main>
+  <section id="tab-ops">
+    <div class="row">
+      <div class="toolbar">
+        <span class="filter active" data-f="all">All</span>
+        <span class="filter" data-f="ok">Successful</span>
+        <span class="filter" data-f="error">Failed</span>
+      </div>
+      <input id="ops-search" placeholder="Search pipeline..." style="width:220px">
+      <div class="spacer"></div>
+      <label class="inline"><input type="checkbox" id="autorefresh" class="switch"> Auto-refresh (5s)</label>
+      <button class="btn" onclick="loadOps()">Refresh</button>
+    </div>
+    <table>
+      <thead><tr><th>Status</th><th>Pipeline</th><th>Trigger time</th><th>Duration</th><th>Rows</th><th>Trigger</th></tr></thead>
+      <tbody id="ops-body"></tbody>
+    </table>
+    <div id="ops-empty" class="empty" style="display:none">No runs yet. Trigger a pipeline from the Run tab.</div>
+  </section>
+
+  <section id="tab-pipes" style="display:none">
+    <div class="row"><div class="spacer"></div><button class="btn" onclick="loadPipes()">Refresh</button></div>
+    <table>
+      <thead><tr><th>Pipeline</th><th>Nodes</th><th>Last status</th><th>Last run</th><th>Schedule</th><th></th></tr></thead>
+      <tbody id="pipes-body"></tbody>
+    </table>
+    <div id="pipes-empty" class="empty" style="display:none">No pipelines found in this workspace.</div>
+  </section>
+
+  <section id="tab-run" style="display:none">
+    <div class="card">
+      <div class="row">
+        <select id="run-select" style="min-width:280px"></select>
+        <button class="btn primary" id="run-btn" onclick="triggerRun()">Run now</button>
+        <span id="run-status" class="muted"></span>
+      </div>
+      <div id="run-result"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let OPS = [], FILTER = 'all';
+
+function pill(status) {
+  const s = (status || '').toLowerCase();
+  if (s === 'ok' || s === 'successful') return '<span class="pill ok">Successful</span>';
+  if (s === 'error' || s === 'failed') return '<span class="pill err">Failed</span>';
+  if (s === 'running') return '<span class="pill run">Running</span>';
+  return '<span class="pill neutral">' + (status || '-') + '</span>';
+}
+function fmtDur(ms) {
+  if (ms == null) return '-';
+  if (ms < 1000) return ms + 'ms';
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(1) + 's';
+  return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
+}
+function fmtTime(iso) { if (!iso) return '-'; try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
+function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+// ── Tabs ──
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  for (const t of ['ops', 'pipes', 'run']) $('tab-' + t).style.display = (t === b.dataset.tab) ? '' : 'none';
+  if (b.dataset.tab === 'ops') loadOps();
+  if (b.dataset.tab === 'pipes') loadPipes();
+  if (b.dataset.tab === 'run') loadRunSelect();
+});
+
+// ── Summary ──
+async function loadSummary() {
+  const s = await api('/api/summary');
+  $('c-pipes').textContent = s.pipelineCount;
+  $('c-runs').textContent = s.totalRuns;
+  $('c-ok').textContent = s.ok;
+  $('c-fail').textContent = s.failed;
+  if (s.workspace) $('ws').textContent = s.workspace;
+}
+
+// ── Operations ──
+document.querySelectorAll('.filter').forEach(f => f.onclick = () => {
+  document.querySelectorAll('.filter').forEach(x => x.classList.remove('active'));
+  f.classList.add('active'); FILTER = f.dataset.f; renderOps();
+});
+$('ops-search').oninput = renderOps;
+
+async function loadOps() {
+  const d = await api('/api/runs');
+  OPS = d.runs || [];
+  renderOps();
+  loadSummary();
+}
+function renderOps() {
+  const q = $('ops-search').value.toLowerCase();
+  let rows = OPS;
+  if (FILTER === 'ok') rows = rows.filter(r => r.status === 'ok');
+  if (FILTER === 'error') rows = rows.filter(r => r.status !== 'ok');
+  if (q) rows = rows.filter(r => (r.name || r.id).toLowerCase().includes(q));
+  const body = $('ops-body');
+  $('ops-empty').style.display = rows.length ? 'none' : '';
+  body.innerHTML = rows.map((r, i) => {
+    const label = esc(r.name || r.id);
+    return '<tr style="cursor:pointer" onclick="toggleLog(' + i + ',\'' + esc(r.id) + '\')">' +
+      '<td>' + pill(r.status) + '</td>' +
+      '<td>' + label + (r.error ? ' <span class="err mono" style="font-size:11px">' + esc(r.error).slice(0,80) + '</span>' : '') + '</td>' +
+      '<td>' + fmtTime(r.at) + '</td>' +
+      '<td>' + fmtDur(r.durationMs) + '</td>' +
+      '<td>' + (r.rows != null ? r.rows.toLocaleString() : '-') + '</td>' +
+      '<td><span class="muted">' + esc(r.trigger || '-') + '</span></td></tr>' +
+      '<tr id="log-' + i + '" style="display:none"><td colspan="6" class="detail"><div class="logbox" id="logbox-' + i + '">Loading log...</div></td></tr>';
+  }).join('');
+}
+async function toggleLog(i, id) {
+  const tr = $('log-' + i);
+  const open = tr.style.display !== 'none';
+  tr.style.display = open ? 'none' : '';
+  if (open) return;
+  const d = await api('/api/log?id=' + encodeURIComponent(id) + '&tail=200');
+  const box = $('logbox-' + i);
+  if (!d.entries || !d.entries.length) { box.textContent = 'No log entries for this pipeline.'; return; }
+  box.textContent = d.entries.map(e => {
+    if (e.raw != null) return e.raw;
+    const detail = e.error || e.message || (e.rows != null ? e.rows + ' rows' : (e.status || ''));
+    return [e.ts || e.time || '', e.event || '', e.component || '', e.node_id || e.label || '', detail]
+      .filter(Boolean).join('  ');
+  }).join('\n');
+}
+
+// ── Pipelines ──
+async function loadPipes() {
+  const d = await api('/api/pipelines');
+  const pipes = d.pipelines || [];
+  $('pipes-empty').style.display = pipes.length ? 'none' : '';
+  $('pipes-body').innerHTML = pipes.map(p => {
+    const sc = p.schedule || {};
+    return '<tr>' +
+      '<td><b>' + esc(p.name || p.id) + '</b><div class="muted mono" style="font-size:11px">' + esc(p.file) + '</div></td>' +
+      '<td>' + p.nodeCount + '</td>' +
+      '<td>' + (p.lastStatus ? pill(p.lastStatus) : '<span class="muted">never</span>') + '</td>' +
+      '<td>' + fmtTime(p.lastAt) + '</td>' +
+      '<td><label class="inline"><input type="checkbox" class="switch" id="en-' + esc(p.id) + '"' + (sc.enabled ? ' checked' : '') + '> every</label> ' +
+        '<input type="number" min="0" id="iv-' + esc(p.id) + '" value="' + (sc.intervalMinutes || 0) + '"> min ' +
+        '<button class="btn" onclick="saveSched(\'' + esc(p.id) + '\')">Save</button></td>' +
+      '<td><button class="btn primary" onclick="runFile(\'' + esc(p.file) + '\', this)">Run</button></td>' +
+      '</tr>';
+  }).join('');
+  loadSummary();
+}
+async function saveSched(id) {
+  const enabled = $('en-' + id).checked;
+  const intervalMinutes = parseInt($('iv-' + id).value || '0', 10);
+  await api('/api/schedules', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ id, enabled, intervalMinutes }) });
+}
+async function runFile(file, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
+  const r = await api('/api/run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+  if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
+  loadPipes();
+  return r;
+}
+
+// ── Run ──
+async function loadRunSelect() {
+  const d = await api('/api/pipelines');
+  $('run-select').innerHTML = (d.pipelines || []).map(p =>
+    '<option value="' + esc(p.file) + '">' + esc(p.name || p.id) + '</option>').join('');
+}
+async function triggerRun() {
+  const file = $('run-select').value;
+  if (!file) return;
+  const btn = $('run-btn');
+  btn.disabled = true; btn.textContent = 'Running...'; $('run-status').textContent = '';
+  const r = await api('/api/run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
+  btn.disabled = false; btn.textContent = 'Run now';
+  if (r.error && !r.status) { $('run-status').innerHTML = '<span class="err">' + esc(r.error) + '</span>'; return; }
+  $('run-status').innerHTML = pill(r.status) + ' &nbsp;' + fmtDur(r.durationMs);
+  const nodes = (r.nodes || []).map(n =>
+    '<span>' + pill(n.status) + ' ' + esc(n.id) + (n.rows != null ? ' (' + n.rows + ')' : '') + '</span>').join(' ');
+  $('run-result').innerHTML = '<div class="logbox nodelist">' + nodes +
+    (r.error ? '\n\n<span class="err">' + esc(r.error) + '</span>' : '') + '</div>';
+  loadSummary();
+}
+
+// ── Auto-refresh ──
+let timer = null;
+$('autorefresh').onchange = (e) => {
+  if (timer) { clearInterval(timer); timer = null; }
+  if (e.target.checked) timer = setInterval(loadOps, 5000);
+};
+
+loadOps();
+</script>
+</body>
+</html>
