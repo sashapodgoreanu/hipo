@@ -8544,6 +8544,111 @@ fn csv_filename_option_live() {
     assert_eq!(with_fn, 2, "filename column should be populated for every row");
 }
 
+/// qa.contract: clean data passes through unchanged; a violation aborts the run
+/// with a message naming the failed check(s).
+#[test]
+fn contract_passes_clean_and_aborts_on_violation() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let clean = write_file(tmp.path(), "clean.csv", "id,email,amt\n1,a@x.com,5\n2,b@x.com,9\n3,c@x.com,0\n");
+    let out = out_path(tmp.path(), "contract_pass.csv");
+    let rules = json!([
+        { "column": "email", "check": "not_null" },
+        { "column": "amt",   "check": "in_range", "args": { "min": 0, "max": 10 } },
+        { "column": "id",    "check": "unique" }
+    ]);
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": clean, "hasHeader": true })),
+            node("c", "qa.contract", json!({ "rules": rules })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "clean contract must pass: {:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3, "all rows pass through unchanged");
+
+    let dirty = write_file(tmp.path(), "dirty.csv", "id,email,amt\n1,a@x.com,5\n2,b@x.com,99\n2,c@x.com,7\n");
+    let bad = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": dirty, "hasHeader": true })),
+            node("c", "qa.contract", json!({ "rules": [
+                { "column": "amt", "check": "in_range", "args": { "min": 0, "max": 10 } },
+                { "column": "id",  "check": "unique" }
+            ]})),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "contract_never.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    );
+    let rb = engine.execute_pipeline(&bad);
+    assert_eq!(rb.status, "error", "violating contract must fail the run");
+    let err = rb.error.unwrap_or_default();
+    assert!(
+        err.contains("Data contract violated") && err.contains("in_range") && err.contains("unique"),
+        "error should name the violated checks: {}",
+        err
+    );
+}
+
+/// xf.surrogatekey: hash mode gives a stable key per business key; sequence mode
+/// gives contiguous 1..N.
+#[test]
+fn surrogate_key_hash_and_sequence_live() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "company,country,amt\nACME,US,100\nACME,US,200\nBeta,UK,50\nGamma,US,75\n");
+    let out_hash = out_path(tmp.path(), "hash.csv");
+    let dh = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "xf.surrogatekey", json!({ "mode": "hash", "keyColumns": ["company", "country"] })),
+            node("w", "snk.csv", json!({ "path": out_hash, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k"), main_edge("e2", "k", "w")]),
+    );
+    assert_eq!(engine.execute_pipeline(&dh).status, "ok");
+    // 4 business keys, 3 distinct (ACME/US repeats -> one surrogate).
+    let total_distinct = scalar_string(&format!("SELECT count(DISTINCT surrogate_key) FROM read_csv_auto('{}')", out_hash));
+    assert_eq!(total_distinct, "3", "expected 3 distinct surrogate keys, got {}", total_distinct);
+    let any_key = scalar_string(&format!("SELECT surrogate_key FROM read_csv_auto('{}') WHERE company='ACME' LIMIT 1", out_hash));
+    assert_eq!(any_key.len(), 32, "md5 hex is 32 chars, got {}", any_key);
+
+    let out_seq = out_path(tmp.path(), "seq.csv");
+    let ds = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "xf.surrogatekey", json!({ "mode": "sequence", "keyColumns": ["company", "country"] })),
+            node("w", "snk.csv", json!({ "path": out_seq, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "k"), main_edge("e2", "k", "w")]),
+    );
+    assert_eq!(engine.execute_pipeline(&ds).status, "ok");
+    let hi = scalar_string(&format!("SELECT max(surrogate_key) FROM read_csv_auto('{}')", out_seq));
+    assert_eq!(hi, "4", "sequence should end at N=4, got {}", hi);
+}
+
+/// xf.num.bucketize labeled mode: explicit bounds -> human-readable cohort labels.
+#[test]
+fn bucketize_labeled_bounds_live() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,age\n1,5\n2,25\n3,70\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("b", "xf.num.bucketize", json!({ "column": "age", "bounds": [18, 65], "labels": ["minor", "adult", "senior"], "outputColumn": "band" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "b"), main_edge("e2", "b", "k")]),
+    );
+    assert_eq!(engine.execute_pipeline(&d).status, "ok");
+    assert_eq!(scalar_string(&format!("SELECT band FROM read_csv_auto('{}') WHERE id=1", out)), "minor");
+    assert_eq!(scalar_string(&format!("SELECT band FROM read_csv_auto('{}') WHERE id=2", out)), "adult");
+    assert_eq!(scalar_string(&format!("SELECT band FROM read_csv_auto('{}') WHERE id=3", out)), "senior");
+}
+
 /// qa.matchgroup: transitive-closure clustering of matched record pairs. a~b
 /// and b~c collapse a, b, c into one cluster (rep = MIN id); a self-matched d
 /// stays its own cluster.

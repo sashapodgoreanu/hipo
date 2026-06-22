@@ -147,6 +147,8 @@ pub(crate) fn build_view_sql(
         "qa.survivor" => build_survivor(inputs, props),
         "qa.matchgroup" => build_matchgroup(inputs, props),
         "qa.expect" => build_expect(inputs, props),
+        "qa.contract" => build_contract(inputs, props),
+        "xf.surrogatekey" => build_surrogate_key(inputs, props),
         "qa.sample.adv" => build_sample_adv(inputs, props),
         "qa.refintegrity" => build_refintegrity(inputs, props, false),
         "qa.profile.adv" => build_profile_adv(inputs, props),
@@ -2502,6 +2504,90 @@ pub(crate) fn build_classify(inputs: &NodeInputs, props: &JsonValue) -> Result<S
         greatest_args = greatest_args,
         type_case = type_case,
         pii_types = pii_types,
+    ))
+}
+
+/// qa.contract: a DATA CONTRACT enforcement gate. Holds the same rule suite as
+/// qa.expect ({column, check, args}: not_null / unique / in_set / in_range /
+/// regex / non_negative), but instead of a scorecard it passes EVERY upstream
+/// row through unchanged when all rules hold and FAILS THE RUN with a message
+/// naming the violated rule(s) the moment any rule breaks. Built like xf.assert:
+/// a MATERIALIZED CTE of per-rule violation counts, gated by error() in the
+/// outer WHERE (the only shape DuckDB will not optimize away). Empty input is a
+/// vacuous pass.
+pub(crate) fn build_contract(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.contract"))?;
+    let from = quote_ident(upstream);
+    let rules = collect_expect_rules(props)?;
+    if rules.is_empty() {
+        return Err("Data Contract needs at least one rule (column + check)".to_string());
+    }
+    let mut count_cols: Vec<String> = Vec::new();
+    let mut msg_parts: Vec<String> = Vec::new();
+    for (i, (column, check, args)) in rules.iter().enumerate() {
+        if column.trim().is_empty() {
+            return Err(format!("Contract rule '{}' is missing a column", check));
+        }
+        let col = quote_ident(column.trim());
+        let alias = format!("f{}", i);
+        let count_expr = if check == "unique" {
+            format!(
+                "(SELECT CAST(COUNT(*) FILTER (WHERE NOT __dq_ok) AS BIGINT) \
+                 FROM (SELECT (COUNT(*) OVER (PARTITION BY {col}) = 1) AS __dq_ok FROM {from}) __u{i})",
+                col = col, from = from, i = i
+            )
+        } else {
+            let pred = expect_predicate(&col, check, args)?;
+            format!("CAST(COUNT(*) FILTER (WHERE NOT ({pred})) AS BIGINT)", pred = pred)
+        };
+        count_cols.push(format!("{expr} AS {alias}", expr = count_expr, alias = alias));
+        let label = sql_escape(&expect_label(column.trim(), check, args));
+        msg_parts.push(format!(
+            "CASE WHEN {alias} > 0 THEN '{label}: ' || {alias} || ' row(s) failed' END",
+            alias = alias, label = label
+        ));
+    }
+    let total = (0..rules.len()).map(|i| format!("f{}", i)).collect::<Vec<_>>().join(" + ");
+    Ok(format!(
+        "WITH _duckle_contract AS MATERIALIZED (SELECT {counts} FROM {from}) \
+         SELECT u.* FROM {from} u \
+         WHERE (SELECT CASE WHEN ({total}) > 0 \
+           THEN error('Data contract violated: ' || concat_ws('; ', {msg})) \
+           ELSE 0 END FROM _duckle_contract) IS NOT NULL",
+        counts = count_cols.join(", "), from = from, total = total, msg = msg_parts.join(", ")
+    ))
+}
+
+/// xf.surrogatekey: add a deterministic warehouse dimension key column. `hash`
+/// -> md5(concat_ws(sep, CAST key cols)) so the same business key always yields
+/// the same surrogate across runs/systems; `sequence` -> row_number() OVER
+/// (ORDER BY key cols) as a 1..N integer. Unlike xf.uuid (random per row), this
+/// keys off the business columns. Single input, single output.
+pub(crate) fn build_surrogate_key(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.surrogatekey"))?;
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "surrogate_key".into());
+    let keys = columns_list(props, "keyColumns");
+    if keys.is_empty() {
+        return Err("Surrogate Key needs at least one business key column".to_string());
+    }
+    let mode = string_prop(props, "mode").unwrap_or_else(|| "hash".into());
+    let key_expr = match mode.as_str() {
+        "hash" => {
+            let separator = string_prop(props, "separator").filter(|s| !s.is_empty()).unwrap_or_else(|| "||".into());
+            let parts = keys.iter().map(|c| format!("CAST({} AS VARCHAR)", quote_ident(c))).collect::<Vec<_>>().join(", ");
+            format!("md5(concat_ws('{}', {}))", sql_escape(&separator), parts)
+        }
+        "sequence" => {
+            let order = keys.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            format!("row_number() OVER (ORDER BY {})", order)
+        }
+        other => return Err(format!("Surrogate Key: unknown mode '{}' (use hash | sequence)", other)),
+    };
+    Ok(format!(
+        "SELECT *, {key} AS {out} FROM {up}",
+        key = key_expr, out = quote_ident(&output), up = quote_ident(upstream)
     ))
 }
 
@@ -5717,6 +5803,69 @@ pub(crate) fn build_bucketize(inputs: &NodeInputs, props: &JsonValue) -> Result<
     let column = string_prop(props, "column")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Bucketize needs a column".to_string())?;
+    // Labeled mode: explicit ascending breakpoints (a JSON array or a
+    // comma-separated string) make N+1 half-open buckets with human-readable
+    // labels ("<b0", "b0-b1", ..., ">=bN-1"). Optional `labels` (N+1 long)
+    // override the auto range labels. NULL maps to a NULL bucket. This is the
+    // cohorting form; without `bounds` the equal-width numeric mode below runs.
+    let bounds: Vec<f64> = match props.get("bounds") {
+        Some(JsonValue::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok())))
+            .collect(),
+        Some(JsonValue::String(s)) => s
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse::<f64>().ok())
+            .collect(),
+        _ => Vec::new(),
+    };
+    if !bounds.is_empty() {
+        let qcol = quote_ident(&column);
+        let output = string_prop(props, "outputColumn")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("{}_bucket", column));
+        let labels: Vec<String> = match props.get("labels") {
+            Some(JsonValue::Array(a)) => a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+            Some(JsonValue::String(s)) => s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            _ => Vec::new(),
+        };
+        if !labels.is_empty() && labels.len() != bounds.len() + 1 {
+            return Err(format!(
+                "Bucketize: labels must have exactly {} entries (one more than the {} breakpoints)",
+                bounds.len() + 1,
+                bounds.len()
+            ));
+        }
+        let g = |n: f64| -> String {
+            // Render a breakpoint without a trailing .0 for whole numbers.
+            if n.fract() == 0.0 { format!("{}", n as i64) } else { format!("{}", n) }
+        };
+        let label_for = |i: usize, auto: String| -> String {
+            if labels.len() == bounds.len() + 1 {
+                format!("'{}'", sql_escape(&labels[i]))
+            } else {
+                format!("'{}'", sql_escape(&auto))
+            }
+        };
+        let mut whens: Vec<String> = Vec::new();
+        whens.push(format!(
+            "WHEN CAST({col} AS DOUBLE) < {b} THEN {lbl}",
+            col = qcol, b = g(bounds[0]), lbl = label_for(0, format!("<{}", g(bounds[0])))
+        ));
+        for i in 1..bounds.len() {
+            whens.push(format!(
+                "WHEN CAST({col} AS DOUBLE) < {b} THEN {lbl}",
+                col = qcol, b = g(bounds[i]), lbl = label_for(i, format!("{}-{}", g(bounds[i - 1]), g(bounds[i])))
+            ));
+        }
+        let last = label_for(bounds.len(), format!(">={}", g(bounds[bounds.len() - 1])));
+        return Ok(format!(
+            "SELECT *, CASE WHEN {col} IS NULL THEN NULL {whens} ELSE {last} END AS {out} FROM {up}",
+            col = qcol, whens = whens.join(" "), last = last, out = quote_ident(&output), up = quote_ident(upstream)
+        ));
+    }
     let low = props
         .get("low")
         .and_then(|v| v.as_f64())

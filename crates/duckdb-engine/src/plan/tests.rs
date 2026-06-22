@@ -1339,6 +1339,62 @@
     }
 
     #[test]
+    fn contract_builds_gated_passthrough() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let sql = build_contract(
+            &ni,
+            &serde_json::json!({ "rules": [
+                { "column": "email", "check": "not_null" },
+                { "column": "amt",   "check": "in_range", "args": { "min": 0, "max": 10 } },
+                { "column": "id",    "check": "unique" }
+            ]}),
+        )
+        .unwrap();
+        assert!(sql.contains("SELECT u.* FROM \"up\" u"), "got: {}", sql);
+        assert!(sql.contains("WITH _duckle_contract AS MATERIALIZED"), "got: {}", sql);
+        assert!(sql.contains("error('Data contract violated: '"), "got: {}", sql);
+        assert!(sql.contains("COUNT(*) FILTER (WHERE NOT (\"amt\" BETWEEN 0 AND 10)) AS BIGINT) AS f1"), "got: {}", sql);
+        assert!(sql.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", sql);
+        assert!(sql.contains("(f0 + f1 + f2) > 0"), "got: {}", sql);
+        assert!(build_contract(&ni, &serde_json::json!({ "rules": [] })).is_err());
+        assert!(build_contract(&NodeInputs::default(), &serde_json::json!({ "rules": [{ "column": "x", "check": "not_null" }] })).is_err());
+    }
+
+    #[test]
+    fn surrogate_key_builds_hash_and_sequence() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let hash = build_surrogate_key(&ni, &serde_json::json!({"mode":"hash","keyColumns":["company","country"]})).unwrap();
+        assert!(hash.contains("md5(concat_ws('||', CAST(\"company\" AS VARCHAR), CAST(\"country\" AS VARCHAR))) AS \"surrogate_key\""), "got: {}", hash);
+        let sep = build_surrogate_key(&ni, &serde_json::json!({"mode":"hash","keyColumns":["id"],"separator":"-","outputColumn":"dim_key"})).unwrap();
+        assert!(sep.contains("md5(concat_ws('-', CAST(\"id\" AS VARCHAR))) AS \"dim_key\""), "got: {}", sep);
+        let seq = build_surrogate_key(&ni, &serde_json::json!({"mode":"sequence","keyColumns":["company","country"]})).unwrap();
+        assert!(seq.contains("row_number() OVER (ORDER BY \"company\", \"country\") AS \"surrogate_key\""), "got: {}", seq);
+        assert!(build_surrogate_key(&ni, &serde_json::json!({"mode":"hash"})).is_err());
+        assert!(build_surrogate_key(&ni, &serde_json::json!({"mode":"bogus","keyColumns":["id"]})).is_err());
+    }
+
+    #[test]
+    fn bucketize_labeled_bounds_mode() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        // bounds (array) -> labeled half-open ranges + NULL guard.
+        let sql = build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":[18,40,65]})).unwrap();
+        assert!(sql.contains("CASE WHEN \"age\" IS NULL THEN NULL"), "got: {}", sql);
+        assert!(sql.contains("< 18 THEN '<18'"), "got: {}", sql);
+        assert!(sql.contains("< 40 THEN '18-40'"), "got: {}", sql);
+        assert!(sql.contains("ELSE '>=65'"), "got: {}", sql);
+        // comma-string bounds + custom labels.
+        let lab = build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":"18,65","labels":["minor","adult","senior"]})).unwrap();
+        assert!(lab.contains("THEN 'minor'") && lab.contains("THEN 'adult'") && lab.contains("ELSE 'senior'"), "got: {}", lab);
+        // wrong label count is a loud error; without bounds the equal-width path still needs low/high.
+        assert!(build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":[18],"labels":["a","b","c"]})).is_err());
+        let eqw = build_bucketize(&ni, &serde_json::json!({"column":"age","low":0,"high":100,"buckets":4})).unwrap();
+        assert!(eqw.contains("floor(") && !eqw.contains("'<"), "equal-width path unchanged: {}", eqw);
+    }
+
+    #[test]
     fn attach_prelude_loads_spatial_for_sql_template() {
         // #84: spatial loads on opt-in OR when the SQL references an ST_ function,
         // but not for unrelated SQL (and `list_` must not false-fire).

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 342,
+  "componentCount": 344,
   "components": [
     {
       "id": "src.csv",
@@ -11594,6 +11594,108 @@
       }
     },
     {
+      "id": "xf.surrogatekey",
+      "label": "Surrogate Key",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Add a warehouse dimension key derived from the business/natural key columns: hash mode (md5 of the key, stable across runs so the same business key always maps to the same surrogate) or sequence mode (1..N integer ordered by the key). Unlike UUID (random per row), this is deterministic.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.surrogatekey",
+        "kind": "transform",
+        "label": "Surrogate Key",
+        "description": "Add a warehouse dimension key derived from the business/natural key columns: hash mode (md5 of the key, stable across runs so the same business key always maps to the same surrogate) or sequence mode (1..N integer ordered by the key). Unlike UUID (random per row), this is deterministic.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Surrogate key",
+            "fields": [
+              {
+                "key": "keyColumns",
+                "label": "Business key columns",
+                "kind": "columns",
+                "required": true,
+                "description": "The natural/business key columns that identify a dimension member."
+              },
+              {
+                "key": "mode",
+                "label": "Key type",
+                "kind": "select",
+                "defaultValue": "hash",
+                "options": [
+                  {
+                    "label": "Hash (stable across runs)",
+                    "value": "hash"
+                  },
+                  {
+                    "label": "Sequence (1..N integer)",
+                    "value": "sequence"
+                  }
+                ],
+                "description": "hash = md5 of the business key (same key -> same surrogate every run). sequence = row_number ordered by the key columns."
+              },
+              {
+                "key": "separator",
+                "label": "Hash separator",
+                "kind": "text",
+                "defaultValue": "||",
+                "description": "Joins the key columns before hashing (hash mode only)."
+              },
+              {
+                "key": "outputColumn",
+                "label": "Output column",
+                "kind": "text",
+                "defaultValue": "surrogate_key"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "xf.compare",
       "label": "Compare Columns",
       "kind": "transform",
@@ -19639,22 +19741,34 @@
                 "required": true
               },
               {
+                "key": "bounds",
+                "label": "Labeled breakpoints (optional)",
+                "kind": "text",
+                "placeholder": "18, 40, 65",
+                "description": "Comma-separated ascending breakpoints for labeled cohort buckets (e.g. 18,40,65 -> \"<18\", \"18-40\", \"40-65\", \">=65\"). Leave empty to use the equal-width numeric mode (low/high/buckets) below."
+              },
+              {
+                "key": "labels",
+                "label": "Bucket labels (optional)",
+                "kind": "text",
+                "placeholder": "minor, adult, senior",
+                "description": "Comma-separated labels, one more than the breakpoints, to override the auto range labels."
+              },
+              {
                 "key": "low",
-                "label": "Low bound",
+                "label": "Low bound (equal-width)",
                 "kind": "number",
-                "required": true,
                 "defaultValue": 0
               },
               {
                 "key": "high",
-                "label": "High bound",
+                "label": "High bound (equal-width)",
                 "kind": "number",
-                "required": true,
                 "defaultValue": 100
               },
               {
                 "key": "buckets",
-                "label": "Number of buckets",
+                "label": "Number of buckets (equal-width)",
                 "kind": "integer",
                 "defaultValue": 10
               },
@@ -34240,6 +34354,76 @@
                 "kind": "key-value",
                 "required": true,
                 "description": "column -> check. Checks: not_null, unique, non_negative, or with args after a colon: in_set:a,b,c | in_range:min,max | regex:pattern. Emits one scorecard row per rule (total, failed, pass_rate, passed)."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "pass",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.contract",
+      "label": "Data Contract",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "Enforce a data contract: the same rule suite as Expectations (not-null, unique, in-set, in-range, regex, non-negative), but as a GATE. Passes every row through unchanged when all rules hold, and fails the run with a clear error naming the violated rule(s) when any rule breaks. Drop it before a sink or scheduled load to block bad data in CI.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "pass",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.contract",
+        "kind": "transform",
+        "label": "Data Contract",
+        "description": "Enforce a data contract: the same rule suite as Expectations (not-null, unique, in-set, in-range, regex, non-negative), but as a GATE. Passes every row through unchanged when all rules hold, and fails the run with a clear error naming the violated rule(s) when any rule breaks. Drop it before a sink or scheduled load to block bad data in CI.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Data Contract",
+            "fields": [
+              {
+                "key": "rules",
+                "label": "Rules",
+                "kind": "key-value",
+                "required": true,
+                "description": "column -> check. Checks: not_null, unique, non_negative, or with args after a colon: in_set:a,b,c | in_range:min,max | regex:pattern. If any rule is violated the run fails with a message naming the failed rule(s); otherwise all rows pass through unchanged."
               }
             ]
           }

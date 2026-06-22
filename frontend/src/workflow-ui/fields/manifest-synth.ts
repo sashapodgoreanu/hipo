@@ -2560,6 +2560,29 @@ function synthFieldsTransform(comp: ComponentDef): ComponentManifest {
             ] },
         ], 'upstream');
     }
+    if (id === 'xf.surrogatekey') {
+        return base(comp, [
+            {
+                label: 'Surrogate key',
+                fields: [
+                    { key: 'keyColumns', label: 'Business key columns', kind: 'columns', required: true, description: 'The natural/business key columns that identify a dimension member.' },
+                    {
+                        key: 'mode',
+                        label: 'Key type',
+                        kind: 'select',
+                        defaultValue: 'hash',
+                        options: [
+                            { label: 'Hash (stable across runs)', value: 'hash' },
+                            { label: 'Sequence (1..N integer)', value: 'sequence' },
+                        ],
+                        description: 'hash = md5 of the business key (same key -> same surrogate every run). sequence = row_number ordered by the key columns.',
+                    },
+                    { key: 'separator', label: 'Hash separator', kind: 'text', defaultValue: '||', description: 'Joins the key columns before hashing (hash mode only).' },
+                    { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'surrogate_key' },
+                ],
+            },
+        ], 'upstream');
+    }
     if (id === 'xf.compare') {
         return base(comp, [
             {
@@ -3279,9 +3302,11 @@ function synthNumericTransform(comp: ComponentDef): ComponentManifest {
                 label: 'Bucketize',
                 fields: [
                     { key: 'column', label: 'Column', kind: 'column', required: true },
-                    { key: 'low', label: 'Low bound', kind: 'number', required: true, defaultValue: 0 },
-                    { key: 'high', label: 'High bound', kind: 'number', required: true, defaultValue: 100 },
-                    { key: 'buckets', label: 'Number of buckets', kind: 'integer', defaultValue: 10 },
+                    { key: 'bounds', label: 'Labeled breakpoints (optional)', kind: 'text', placeholder: '18, 40, 65', description: 'Comma-separated ascending breakpoints for labeled cohort buckets (e.g. 18,40,65 -> "<18", "18-40", "40-65", ">=65"). Leave empty to use the equal-width numeric mode (low/high/buckets) below.' },
+                    { key: 'labels', label: 'Bucket labels (optional)', kind: 'text', placeholder: 'minor, adult, senior', description: 'Comma-separated labels, one more than the breakpoints, to override the auto range labels.' },
+                    { key: 'low', label: 'Low bound (equal-width)', kind: 'number', defaultValue: 0 },
+                    { key: 'high', label: 'High bound (equal-width)', kind: 'number', defaultValue: 100 },
+                    { key: 'buckets', label: 'Number of buckets (equal-width)', kind: 'integer', defaultValue: 10 },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', placeholder: '<column>_bucket' },
                 ],
             },
@@ -4083,6 +4108,22 @@ function synthQualityCleanse(comp: ComponentDef): ComponentManifest {
                         kind: 'key-value',
                         required: true,
                         description: 'column -> check. Checks: not_null, unique, non_negative, or with args after a colon: in_set:a,b,c | in_range:min,max | regex:pattern. Emits one scorecard row per rule (total, failed, pass_rate, passed).',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (id === 'qa.contract') {
+        return base(comp, [
+            {
+                label: 'Data Contract',
+                fields: [
+                    {
+                        key: 'rules',
+                        label: 'Rules',
+                        kind: 'key-value',
+                        required: true,
+                        description: 'column -> check. Checks: not_null, unique, non_negative, or with args after a colon: in_set:a,b,c | in_range:min,max | regex:pattern. If any rule is violated the run fails with a message naming the failed rule(s); otherwise all rows pass through unchanged.',
                     },
                 ],
             },
