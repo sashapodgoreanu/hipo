@@ -6,281 +6,400 @@
 <title>Duckle - Management Console</title>
 <style>
   :root {
-    --slate: #1e2330; --slate-2: #272d3d; --slate-3: #323a4d; --line: #3a4257;
-    --ink: #e8eaf0; --muted: #9aa3b8;
-    --lemon: #ffd84d; --orange: #ff8a3d; --maya: #4aa8ff; --red: #ef4444; --amber: #f59e0b;
+    --bg: #0f1320; --surface: #161b2b; --surface-2: #1d2335; --surface-3: #252c42;
+    --line: #2c3349; --line-2: #3a4360;
+    --ink: #eef1f8; --muted: #9aa4bd; --faint: #6b7593;
+    --lemon: #ffd84d; --orange: #ff8a3d; --maya: #4aa8ff; --red: #f0556b; --amber: #f5a623;
+    --ok-bg: rgba(74,168,255,.14); --err-bg: rgba(240,85,107,.14); --run-bg: rgba(245,166,35,.16);
+    --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.18);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--slate); color: var(--ink);
-    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  a { color: var(--maya); }
-  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px;
-    background: var(--slate-2); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
-  .logo { width: 26px; height: 26px; border-radius: 7px;
-    background: linear-gradient(135deg, var(--lemon), var(--orange)); display:inline-block; }
-  .brand { font-weight: 700; font-size: 16px; letter-spacing: .2px; }
-  .brand small { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: 8px; }
-  .chips { margin-left: auto; display: flex; gap: 16px; align-items: center; }
-  .chip { font-size: 12px; color: var(--muted); }
-  .chip b { color: var(--ink); font-size: 15px; display: block; }
-  nav { display: flex; gap: 4px; padding: 0 16px; background: var(--slate-2); border-bottom: 1px solid var(--line); }
-  nav button { background: none; border: none; color: var(--muted); padding: 11px 16px; cursor: pointer;
-    font-size: 14px; border-bottom: 2px solid transparent; }
-  nav button.active { color: var(--ink); border-bottom-color: var(--lemon); }
-  main { padding: 18px 20px; max-width: 1200px; margin: 0 auto; }
-  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 6px; }
+  a { color: var(--maya); text-decoration: none; }
+
+  /* Sidebar */
+  aside { width: 230px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; height: 100vh; position: sticky; top: 0; }
+  .brand { display: flex; align-items: center; gap: 11px; padding: 18px 18px 14px; }
+  .logo { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--lemon), var(--orange)); box-shadow: 0 2px 10px rgba(255,138,61,.35); }
+  .brand b { font-size: 16px; letter-spacing: .2px; display: block; }
+  .brand span { font-size: 11px; color: var(--muted); }
+  nav { padding: 8px; flex: 1; }
+  nav button { width: 100%; display: flex; align-items: center; gap: 11px; background: none; border: none;
+    color: var(--muted); padding: 10px 12px; border-radius: 9px; cursor: pointer; font-size: 14px; text-align: left;
+    margin-bottom: 2px; transition: .12s; }
+  nav button:hover { background: var(--surface-2); color: var(--ink); }
+  nav button.active { background: var(--surface-3); color: var(--ink); font-weight: 600; }
+  nav button.active .ico { color: var(--lemon); }
+  .ico { width: 18px; text-align: center; opacity: .9; }
+  .side-foot { padding: 14px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--faint); }
+  .side-foot .ws { color: var(--muted); word-break: break-all; font-family: Consolas, monospace; font-size: 11px; margin-top: 3px; }
+  .side-foot label { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); cursor: pointer; }
+
+  /* Main */
+  main { flex: 1; height: 100vh; overflow-y: auto; }
+  header { display: flex; align-items: center; gap: 18px; padding: 20px 28px 0; }
+  header h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 13px; }
   .spacer { flex: 1; }
-  input, select, button.btn { background: var(--slate-3); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 7px; padding: 7px 11px; font-size: 13px; }
-  input[type=number] { width: 80px; }
-  button.btn { cursor: pointer; }
-  button.btn:hover { border-color: var(--muted); }
+  .content { padding: 18px 28px 40px; }
+
+  /* Metric cards */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 18px 0 22px; }
+  .metric { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px; }
+  .metric .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .metric .v { font-size: 26px; font-weight: 680; margin-top: 4px; }
+
+  /* Toolbar */
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  input, select { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 12px; font-size: 13px; outline: none; }
+  input:focus, select:focus { border-color: var(--line-2); }
+  input[type=number] { width: 76px; }
+  .chips { display: flex; gap: 6px; }
+  .chip { background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); border-radius: 20px;
+    padding: 6px 14px; cursor: pointer; font-size: 13px; transition: .12s; }
+  .chip:hover { color: var(--ink); }
+  .chip.active { background: var(--surface-3); border-color: var(--lemon); color: var(--ink); }
+  .chip b { margin-left: 5px; color: var(--faint); }
+  button.btn { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; transition: .12s; }
+  button.btn:hover { border-color: var(--line-2); }
   button.primary { background: var(--lemon); color: #20242e; border-color: var(--lemon); font-weight: 600; }
   button.primary:hover { background: var(--orange); border-color: var(--orange); }
+  button.btn:disabled { opacity: .55; cursor: default; }
+
+  /* Job cards */
+  .jobs { display: flex; flex-direction: column; gap: 10px; }
+  .job { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    transition: border-color .12s; }
+  .job:hover { border-color: var(--line-2); }
+  .job-head { display: grid; grid-template-columns: 14px 1.7fr 1fr 0.9fr 0.9fr 1.1fr auto; gap: 16px;
+    align-items: center; padding: 14px 18px; cursor: pointer; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .d-ok { background: var(--maya); box-shadow: 0 0 8px rgba(74,168,255,.6); }
+  .d-err { background: var(--red); box-shadow: 0 0 8px rgba(240,85,107,.6); }
+  .d-run { background: var(--amber); box-shadow: 0 0 8px rgba(245,166,35,.6); animation: pulse 1.4s infinite; }
+  .d-none { background: var(--faint); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .job-name { font-weight: 620; font-size: 14.5px; }
+  .job-file { color: var(--faint); font-size: 11.5px; font-family: Consolas, monospace; margin-top: 2px; }
+  .col-k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .col-v { font-size: 13px; margin-top: 2px; }
+  .sched { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted);
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 16px; padding: 2px 10px; }
+  .sched.on { color: var(--maya); border-color: rgba(74,168,255,.4); }
+  .rate { height: 6px; border-radius: 4px; background: var(--surface-3); overflow: hidden; margin-top: 5px; }
+  .rate > i { display: block; height: 100%; background: linear-gradient(90deg, var(--maya), #6cc0ff); }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+  .p-ok { background: var(--ok-bg); color: var(--maya); }
+  .p-err { background: var(--err-bg); color: var(--red); }
+  .p-run { background: var(--run-bg); color: var(--amber); }
+  .p-none { background: var(--surface-3); color: var(--muted); }
+  .job-body { border-top: 1px solid var(--line); padding: 6px 18px 14px; display: none; background: var(--surface-2); }
+  .job.open .job-body { display: block; }
+  .caret { transition: transform .15s; color: var(--faint); }
+  .job.open .caret { transform: rotate(90deg); }
+
+  /* Tables */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: var(--muted); font-weight: 500; padding: 9px 12px; border-bottom: 1px solid var(--line);
-    font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  td { padding: 9px 12px; border-bottom: 1px solid #2c3346; }
-  tbody tr:hover td { background: var(--slate-2); }
-  .pill { display: inline-block; padding: 1px 9px; border-radius: 11px; font-size: 11px; font-weight: 600; }
-  .ok { background: rgba(74,168,255,.16); color: var(--maya); }
-  .err { background: rgba(239,68,68,.16); color: var(--red); }
-  .run { background: rgba(245,158,11,.16); color: var(--amber); }
-  .neutral { background: var(--slate-3); color: var(--muted); }
-  .muted { color: var(--muted); }
-  .mono { font-family: Consolas, "SF Mono", monospace; }
-  .toolbar { display:flex; gap:8px; align-items:center; }
-  .filter { background: var(--slate-3); border:1px solid var(--line); border-radius:7px; padding:6px 12px;
-    cursor:pointer; color: var(--muted); font-size:13px; }
-  .filter.active { color: var(--ink); border-color: var(--lemon); }
-  .logbox { font-family: Consolas, monospace; font-size: 12px; background: #161a24; border: 1px solid var(--line);
-    border-radius: 7px; padding: 10px 12px; max-height: 320px; overflow: auto; white-space: pre-wrap;
-    color: #cdd3e1; margin: 6px 0 4px; }
-  .detail { background: var(--slate-2); }
-  .card { background: var(--slate-2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
-  .empty { color: var(--muted); text-align: center; padding: 40px; }
-  label.inline { display:flex; align-items:center; gap:6px; color: var(--muted); font-size:13px; }
-  .switch { transform: scale(1.1); accent-color: var(--lemon); }
-  .nodelist { font-size:12px; }
-  .nodelist span { margin-right: 12px; }
+  thead th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 12px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--line); }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  tbody tr.run-row { cursor: pointer; }
+  tbody tr.run-row:hover td { background: var(--surface-2); }
+  .mini td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  .muted { color: var(--muted); } .mono { font-family: Consolas, monospace; }
+  .err-text { color: var(--red); font-family: Consolas, monospace; font-size: 11px; }
+
+  .logbox { font-family: Consolas, monospace; font-size: 12px; background: #0c0f18; border: 1px solid var(--line);
+    border-radius: 9px; padding: 11px 13px; max-height: 320px; overflow: auto; white-space: pre-wrap; color: #c6cde0;
+    margin: 8px 0 4px; }
+  .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
+  .empty .big { font-size: 34px; opacity: .5; margin-bottom: 10px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+
+  /* Toast */
+  #toast { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+  .toast { background: var(--surface-3); border: 1px solid var(--line-2); border-radius: 10px; padding: 11px 15px;
+    box-shadow: var(--shadow); font-size: 13px; display: flex; align-items: center; gap: 9px; min-width: 240px;
+    animation: slidein .2s ease; }
+  @keyframes slidein { from { transform: translateY(8px); opacity: 0; } }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
-<header>
-  <span class="logo"></span>
-  <span class="brand">Duckle <small id="ws">Management Console</small></span>
-  <div class="chips">
-    <div class="chip">Pipelines<b id="c-pipes">-</b></div>
-    <div class="chip">Runs<b id="c-runs">-</b></div>
-    <div class="chip">Successful<b id="c-ok" style="color:var(--maya)">-</b></div>
-    <div class="chip">Failed<b id="c-fail" style="color:var(--red)">-</b></div>
+<aside>
+  <div class="brand"><span class="logo"></span><div><b>Duckle</b><span>Management Console</span></div></div>
+  <nav>
+    <button data-tab="overview" class="active"><span class="ico">▦</span> Overview</button>
+    <button data-tab="runs"><span class="ico">≡</span> Runs</button>
+    <button data-tab="schedules"><span class="ico">◷</span> Schedules</button>
+  </nav>
+  <div class="side-foot">
+    Workspace
+    <div class="ws" id="ws">-</div>
+    <label><input type="checkbox" id="autorefresh"> Auto-refresh (5s)</label>
   </div>
-</header>
-<nav>
-  <button data-tab="ops" class="active">Operations</button>
-  <button data-tab="pipes">Pipelines</button>
-  <button data-tab="run">Run</button>
-</nav>
+</aside>
+
 <main>
-  <section id="tab-ops">
-    <div class="row">
+  <header>
+    <div>
+      <h1 id="page-title">Overview</h1>
+      <div class="sub" id="page-sub">Pipelines grouped by job, with their latest status.</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" onclick="refreshAll()">↻ Refresh</button>
+  </header>
+
+  <div class="content">
+    <!-- OVERVIEW -->
+    <section id="tab-overview">
+      <div class="metrics">
+        <div class="metric"><div class="k">Pipelines</div><div class="v" id="m-pipes">-</div></div>
+        <div class="metric"><div class="k">Total runs</div><div class="v" id="m-runs">-</div></div>
+        <div class="metric"><div class="k">Success rate</div><div class="v" id="m-rate" style="color:var(--maya)">-</div></div>
+        <div class="metric"><div class="k">Failed</div><div class="v" id="m-failed" style="color:var(--red)">-</div></div>
+      </div>
       <div class="toolbar">
-        <span class="filter active" data-f="all">All</span>
-        <span class="filter" data-f="ok">Successful</span>
-        <span class="filter" data-f="error">Failed</span>
+        <input id="job-search" placeholder="Search pipelines..." style="width:240px">
+        <div class="chips">
+          <span class="chip active" data-jf="all">All</span>
+          <span class="chip" data-jf="ok">Healthy</span>
+          <span class="chip" data-jf="err">Failing</span>
+          <span class="chip" data-jf="never">Never run</span>
+        </div>
       </div>
-      <input id="ops-search" placeholder="Search pipeline..." style="width:220px">
-      <div class="spacer"></div>
-      <label class="inline"><input type="checkbox" id="autorefresh" class="switch"> Auto-refresh (5s)</label>
-      <button class="btn" onclick="loadOps()">Refresh</button>
-    </div>
-    <table>
-      <thead><tr><th>Status</th><th>Pipeline</th><th>Trigger time</th><th>Duration</th><th>Rows</th><th>Trigger</th></tr></thead>
-      <tbody id="ops-body"></tbody>
-    </table>
-    <div id="ops-empty" class="empty" style="display:none">No runs yet. Trigger a pipeline from the Run tab.</div>
-  </section>
+      <div class="jobs" id="jobs"></div>
+      <div id="jobs-empty" class="empty hidden"><div class="big">▦</div>No pipelines found in this workspace.</div>
+    </section>
 
-  <section id="tab-pipes" style="display:none">
-    <div class="row"><div class="spacer"></div><button class="btn" onclick="loadPipes()">Refresh</button></div>
-    <table>
-      <thead><tr><th>Pipeline</th><th>Nodes</th><th>Last status</th><th>Last run</th><th>Schedule</th><th></th></tr></thead>
-      <tbody id="pipes-body"></tbody>
-    </table>
-    <div id="pipes-empty" class="empty" style="display:none">No pipelines found in this workspace.</div>
-  </section>
-
-  <section id="tab-run" style="display:none">
-    <div class="card">
-      <div class="row">
-        <select id="run-select" style="min-width:280px"></select>
-        <button class="btn primary" id="run-btn" onclick="triggerRun()">Run now</button>
-        <span id="run-status" class="muted"></span>
+    <!-- RUNS -->
+    <section id="tab-runs" class="hidden">
+      <div class="toolbar">
+        <div class="chips">
+          <span class="chip active" data-rf="all">All</span>
+          <span class="chip" data-rf="ok">Successful</span>
+          <span class="chip" data-rf="err">Failed</span>
+        </div>
+        <input id="run-search" placeholder="Search job..." style="width:200px">
+        <select id="run-period">
+          <option value="0">All time</option>
+          <option value="24">Last 24 hours</option>
+          <option value="168">Last 7 days</option>
+          <option value="720">Last 30 days</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="muted" id="runs-count"></span>
       </div>
-      <div id="run-result"></div>
-    </div>
-  </section>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr><th>Status</th><th>Pipeline</th><th>Trigger time</th><th>Duration</th><th>Rows</th><th>Trigger</th></tr></thead>
+          <tbody id="runs-body"></tbody>
+        </table>
+      </div>
+      <div id="runs-empty" class="empty hidden"><div class="big">≡</div>No runs match the current filter.</div>
+    </section>
+
+    <!-- SCHEDULES -->
+    <section id="tab-schedules" class="hidden">
+      <div class="sub" style="margin-bottom:14px">Run a pipeline on an interval. The console runs schedules itself while it is open.</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr><th>Pipeline</th><th>Last status</th><th>Schedule</th><th></th></tr></thead>
+          <tbody id="sched-body"></tbody>
+        </table>
+      </div>
+      <div id="sched-empty" class="empty hidden"><div class="big">◷</div>No pipelines to schedule.</div>
+    </section>
+  </div>
 </main>
+<div id="toast"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let OPS = [], FILTER = 'all';
+let PIPES = [], RUNS = [], JOB_FILTER = 'all', RUN_FILTER = 'all', OPEN_JOB = null;
 
-function pill(status) {
-  const s = (status || '').toLowerCase();
-  if (s === 'ok' || s === 'successful') return '<span class="pill ok">Successful</span>';
-  if (s === 'error' || s === 'failed') return '<span class="pill err">Failed</span>';
-  if (s === 'running') return '<span class="pill run">Running</span>';
-  return '<span class="pill neutral">' + (status || '-') + '</span>';
+async function api(p, opts) { const r = await fetch(p, opts); return r.json(); }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function statusKey(s){ s=(s||'').toLowerCase(); if(s==='ok'||s==='successful')return 'ok'; if(s==='running')return 'run'; if(s)return 'err'; return 'none'; }
+function pill(s){ const k=statusKey(s); const t={ok:'Successful',err:'Failed',run:'Running',none:'Never run'}[k]; return `<span class="pill p-${k}">${t}</span>`; }
+function dot(s){ return `<span class="dot d-${statusKey(s)}"></span>`; }
+function fmtDur(ms){ if(ms==null)return '-'; if(ms<1000)return ms+'ms'; const s=ms/1000; if(s<60)return s.toFixed(1)+'s'; const m=Math.floor(s/60); return m+'m '+Math.round(s%60)+'s'; }
+function fmtNum(n){ return n==null?'-':Number(n).toLocaleString(); }
+function relTime(iso){
+  if(!iso) return 'never';
+  const t=new Date(iso).getTime(); if(isNaN(t)) return iso;
+  const d=(Date.now()-t)/1000;
+  if(d<60)return 'just now'; if(d<3600)return Math.floor(d/60)+'m ago';
+  if(d<86400)return Math.floor(d/3600)+'h ago'; if(d<604800)return Math.floor(d/86400)+'d ago';
+  try{return new Date(iso).toLocaleDateString();}catch(e){return iso;}
 }
-function fmtDur(ms) {
-  if (ms == null) return '-';
-  if (ms < 1000) return ms + 'ms';
-  const s = ms / 1000;
-  if (s < 60) return s.toFixed(1) + 's';
-  return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
-}
-function fmtTime(iso) { if (!iso) return '-'; try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
-function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-
-async function api(path, opts) {
-  const r = await fetch(path, opts);
-  return r.json();
-}
+function fullTime(iso){ if(!iso)return '-'; try{return new Date(iso).toLocaleString();}catch(e){return iso;} }
+function toast(msg, kind){ const el=document.createElement('div'); el.className='toast';
+  el.innerHTML=(kind?dot(kind):'')+'<span>'+esc(msg)+'</span>'; $('toast').appendChild(el);
+  setTimeout(()=>el.remove(), 3800); }
 
 // ── Tabs ──
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  for (const t of ['ops', 'pipes', 'run']) $('tab-' + t).style.display = (t === b.dataset.tab) ? '' : 'none';
-  if (b.dataset.tab === 'ops') loadOps();
-  if (b.dataset.tab === 'pipes') loadPipes();
-  if (b.dataset.tab === 'run') loadRunSelect();
+const TITLES={overview:['Overview','Pipelines grouped by job, with their latest status.'],
+  runs:['Runs','Every execution across all pipelines, newest first.'],
+  schedules:['Schedules','Run a pipeline on an interval. The console runs schedules itself while it is open.']};
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
+  const tab=b.dataset.tab;
+  for(const t of ['overview','runs','schedules']) $('tab-'+t).classList.toggle('hidden', t!==tab);
+  $('page-title').textContent=TITLES[tab][0]; $('page-sub').textContent=TITLES[tab][1];
+  if(tab==='runs') renderRuns(); if(tab==='schedules') renderSchedules();
 });
 
-// ── Summary ──
-async function loadSummary() {
-  const s = await api('/api/summary');
-  $('c-pipes').textContent = s.pipelineCount;
-  $('c-runs').textContent = s.totalRuns;
-  $('c-ok').textContent = s.ok;
-  $('c-fail').textContent = s.failed;
-  if (s.workspace) $('ws').textContent = s.workspace;
+// ── Data ──
+function jobStats(id){
+  const rs=RUNS.filter(r=>r.id===id);
+  const ok=rs.filter(r=>r.status==='ok').length;
+  return { runs: rs.length, ok, rate: rs.length? Math.round(ok/rs.length*100): null, recent: rs.slice(0,6) };
+}
+async function refreshAll(){
+  const [s,p,r]=await Promise.all([api('/api/summary'),api('/api/pipelines'),api('/api/runs')]);
+  PIPES=p.pipelines||[]; RUNS=r.runs||[];
+  $('ws').textContent=(s.workspace||'').replace(/^\\\\\?\\/,'');
+  $('m-pipes').textContent=s.pipelineCount; $('m-runs').textContent=s.totalRuns;
+  $('m-failed').textContent=s.failed;
+  $('m-rate').textContent=s.totalRuns? Math.round(s.ok/s.totalRuns*100)+'%':'-';
+  renderJobs();
+  if(!$('tab-runs').classList.contains('hidden')) renderRuns();
+  if(!$('tab-schedules').classList.contains('hidden')) renderSchedules();
 }
 
-// ── Operations ──
-document.querySelectorAll('.filter').forEach(f => f.onclick = () => {
-  document.querySelectorAll('.filter').forEach(x => x.classList.remove('active'));
-  f.classList.add('active'); FILTER = f.dataset.f; renderOps();
-});
-$('ops-search').oninput = renderOps;
-
-async function loadOps() {
-  const d = await api('/api/runs');
-  OPS = d.runs || [];
-  renderOps();
-  loadSummary();
+// ── Overview (grouped by job) ──
+document.querySelectorAll('[data-jf]').forEach(c=>c.onclick=()=>{
+  document.querySelectorAll('[data-jf]').forEach(x=>x.classList.remove('active')); c.classList.add('active');
+  JOB_FILTER=c.dataset.jf; renderJobs(); });
+$('job-search').oninput=renderJobs;
+function renderJobs(){
+  const q=$('job-search').value.toLowerCase();
+  let list=PIPES.map(p=>({...p, st:jobStats(p.id)}));
+  if(JOB_FILTER==='ok') list=list.filter(p=>statusKey(p.lastStatus)==='ok');
+  if(JOB_FILTER==='err') list=list.filter(p=>statusKey(p.lastStatus)==='err');
+  if(JOB_FILTER==='never') list=list.filter(p=>!p.lastStatus);
+  if(q) list=list.filter(p=>(p.name||p.id).toLowerCase().includes(q));
+  $('jobs-empty').classList.toggle('hidden', list.length>0);
+  $('jobs').innerHTML=list.map(p=>{
+    const sc=p.schedule||{}; const on=sc.enabled&&sc.intervalMinutes>0;
+    const schedHtml=on?`<span class="sched on">◷ every ${sc.intervalMinutes}m</span>`:`<span class="sched">manual</span>`;
+    const rate=p.st.rate==null?'':`<div class="rate"><i style="width:${p.st.rate}%"></i></div>`;
+    const open=OPEN_JOB===p.id?'open':'';
+    return `<div class="job ${open}" data-id="${esc(p.id)}">
+      <div class="job-head" onclick="toggleJob('${esc(p.id)}')">
+        ${dot(p.lastStatus)}
+        <div><div class="job-name">${esc(p.name||p.id)}</div><div class="job-file">${esc(p.file)} · ${p.nodeCount} nodes</div></div>
+        <div>${schedHtml}</div>
+        <div><div class="col-k">Last run</div><div class="col-v">${relTime(p.lastAt)}</div></div>
+        <div><div class="col-k">Duration</div><div class="col-v">${fmtDur(p.lastDurationMs)}</div></div>
+        <div><div class="col-k">${p.st.runs} run${p.st.runs===1?'':'s'} · ${p.st.rate==null?'-':p.st.rate+'%'}</div>${rate}</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn primary" onclick="event.stopPropagation();runJob('${esc(p.file)}','${esc(p.id)}',this)">Run</button>
+          <span class="caret">▸</span>
+        </div>
+      </div>
+      <div class="job-body" id="body-${esc(p.id)}"></div>
+    </div>`;
+  }).join('');
+  if(OPEN_JOB) fillJobBody(OPEN_JOB);
 }
-function renderOps() {
-  const q = $('ops-search').value.toLowerCase();
-  let rows = OPS;
-  if (FILTER === 'ok') rows = rows.filter(r => r.status === 'ok');
-  if (FILTER === 'error') rows = rows.filter(r => r.status !== 'ok');
-  if (q) rows = rows.filter(r => (r.name || r.id).toLowerCase().includes(q));
-  const body = $('ops-body');
-  $('ops-empty').style.display = rows.length ? 'none' : '';
-  body.innerHTML = rows.map((r, i) => {
-    const label = esc(r.name || r.id);
-    return '<tr style="cursor:pointer" onclick="toggleLog(' + i + ',\'' + esc(r.id) + '\')">' +
-      '<td>' + pill(r.status) + '</td>' +
-      '<td>' + label + (r.error ? ' <span class="err mono" style="font-size:11px">' + esc(r.error).slice(0,80) + '</span>' : '') + '</td>' +
-      '<td>' + fmtTime(r.at) + '</td>' +
-      '<td>' + fmtDur(r.durationMs) + '</td>' +
-      '<td>' + (r.rows != null ? r.rows.toLocaleString() : '-') + '</td>' +
-      '<td><span class="muted">' + esc(r.trigger || '-') + '</span></td></tr>' +
-      '<tr id="log-' + i + '" style="display:none"><td colspan="6" class="detail"><div class="logbox" id="logbox-' + i + '">Loading log...</div></td></tr>';
+function toggleJob(id){
+  OPEN_JOB = OPEN_JOB===id? null : id;
+  document.querySelectorAll('.job').forEach(j=>j.classList.toggle('open', j.dataset.id===OPEN_JOB));
+  if(OPEN_JOB) fillJobBody(OPEN_JOB);
+}
+function fillJobBody(id){
+  const st=jobStats(id); const body=$('body-'+id); if(!body) return;
+  if(!st.recent.length){ body.innerHTML='<div class="muted" style="padding:10px 0">No runs yet for this pipeline.</div>'; return; }
+  body.innerHTML='<table class="mini"><thead><tr><th>Status</th><th>When</th><th>Duration</th><th>Rows</th><th>Trigger</th><th></th></tr></thead><tbody>'
+    + st.recent.map((r,i)=>`<tr><td>${pill(r.status)}</td><td>${fullTime(r.at)}</td><td>${fmtDur(r.durationMs)}</td><td>${fmtNum(r.rows)}</td><td class="muted">${esc(r.trigger||'-')}</td>`
+      + `<td><button class="btn" style="padding:3px 9px;font-size:12px" onclick="showLog('${esc(id)}','jb-${esc(id)}-${i}')">Logs</button></td></tr>`
+      + `<tr id="jb-${esc(id)}-${i}" class="hidden"><td colspan="6"><div class="logbox">loading...</div></td></tr>`).join('')
+    + '</tbody></table>';
+}
+
+// ── Runs ──
+document.querySelectorAll('[data-rf]').forEach(c=>c.onclick=()=>{
+  document.querySelectorAll('[data-rf]').forEach(x=>x.classList.remove('active')); c.classList.add('active');
+  RUN_FILTER=c.dataset.rf; renderRuns(); });
+$('run-search').oninput=renderRuns; $('run-period').onchange=renderRuns;
+function renderRuns(){
+  const q=$('run-search').value.toLowerCase(); const hrs=parseInt($('run-period').value||'0',10);
+  let rows=RUNS.slice();
+  if(RUN_FILTER==='ok') rows=rows.filter(r=>r.status==='ok');
+  if(RUN_FILTER==='err') rows=rows.filter(r=>r.status!=='ok');
+  if(q) rows=rows.filter(r=>(r.name||r.id).toLowerCase().includes(q));
+  if(hrs) { const cut=Date.now()-hrs*3600*1000; rows=rows.filter(r=>new Date(r.at).getTime()>=cut); }
+  $('runs-count').textContent=rows.length+' run'+(rows.length===1?'':'s');
+  $('runs-empty').classList.toggle('hidden', rows.length>0);
+  $('runs-body').innerHTML=rows.map((r,i)=>
+    `<tr class="run-row" onclick="showLog('${esc(r.id)}','rl-${i}')">
+      <td>${pill(r.status)}</td>
+      <td>${esc(r.name||r.id)}${r.error?` <span class="err-text">${esc(r.error).slice(0,70)}</span>`:''}</td>
+      <td>${fullTime(r.at)}</td><td>${fmtDur(r.durationMs)}</td><td>${fmtNum(r.rows)}</td>
+      <td class="muted">${esc(r.trigger||'-')}</td></tr>
+     <tr id="rl-${i}" class="hidden"><td colspan="6"><div class="logbox">loading...</div></td></tr>`).join('');
+}
+
+// ── Schedules ──
+function renderSchedules(){
+  $('sched-empty').classList.toggle('hidden', PIPES.length>0);
+  $('sched-body').innerHTML=PIPES.map(p=>{
+    const sc=p.schedule||{};
+    return `<tr>
+      <td><b>${esc(p.name||p.id)}</b><div class="job-file">${esc(p.file)}</div></td>
+      <td>${p.lastStatus?pill(p.lastStatus):'<span class="muted">never</span>'}</td>
+      <td><label class="muted" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="en-${esc(p.id)}" ${sc.enabled?'checked':''}> every</label>
+        <input type="number" min="0" id="iv-${esc(p.id)}" value="${sc.intervalMinutes||0}"> min</td>
+      <td style="text-align:right"><button class="btn" onclick="saveSched('${esc(p.id)}')">Save</button>
+        <button class="btn primary" onclick="runJob('${esc(p.file)}','${esc(p.id)}',this)">Run now</button></td>
+    </tr>`;
   }).join('');
 }
-async function toggleLog(i, id) {
-  const tr = $('log-' + i);
-  const open = tr.style.display !== 'none';
-  tr.style.display = open ? 'none' : '';
-  if (open) return;
-  const d = await api('/api/log?id=' + encodeURIComponent(id) + '&tail=200');
-  const box = $('logbox-' + i);
-  if (!d.entries || !d.entries.length) { box.textContent = 'No log entries for this pipeline.'; return; }
-  box.textContent = d.entries.map(e => {
-    if (e.raw != null) return e.raw;
-    const detail = e.error || e.message || (e.rows != null ? e.rows + ' rows' : (e.status || ''));
-    return [e.ts || e.time || '', e.event || '', e.component || '', e.node_id || e.label || '', detail]
-      .filter(Boolean).join('  ');
-  }).join('\n');
+async function saveSched(id){
+  await api('/api/schedules',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id, enabled:$('en-'+id).checked, intervalMinutes:parseInt($('iv-'+id).value||'0',10)})});
+  toast('Schedule saved for '+id);
+  const p=PIPES.find(x=>x.id===id); if(p) p.schedule={enabled:$('en-'+id).checked,intervalMinutes:parseInt($('iv-'+id).value||'0',10)};
+  renderJobs();
 }
 
-// ── Pipelines ──
-async function loadPipes() {
-  const d = await api('/api/pipelines');
-  const pipes = d.pipelines || [];
-  $('pipes-empty').style.display = pipes.length ? 'none' : '';
-  $('pipes-body').innerHTML = pipes.map(p => {
-    const sc = p.schedule || {};
-    return '<tr>' +
-      '<td><b>' + esc(p.name || p.id) + '</b><div class="muted mono" style="font-size:11px">' + esc(p.file) + '</div></td>' +
-      '<td>' + p.nodeCount + '</td>' +
-      '<td>' + (p.lastStatus ? pill(p.lastStatus) : '<span class="muted">never</span>') + '</td>' +
-      '<td>' + fmtTime(p.lastAt) + '</td>' +
-      '<td><label class="inline"><input type="checkbox" class="switch" id="en-' + esc(p.id) + '"' + (sc.enabled ? ' checked' : '') + '> every</label> ' +
-        '<input type="number" min="0" id="iv-' + esc(p.id) + '" value="' + (sc.intervalMinutes || 0) + '"> min ' +
-        '<button class="btn" onclick="saveSched(\'' + esc(p.id) + '\')">Save</button></td>' +
-      '<td><button class="btn primary" onclick="runFile(\'' + esc(p.file) + '\', this)">Run</button></td>' +
-      '</tr>';
-  }).join('');
-  loadSummary();
+// ── Logs + Run ──
+async function showLog(id, rowId){
+  const tr=$(rowId); if(!tr) return; const open=!tr.classList.contains('hidden');
+  tr.classList.toggle('hidden', open); if(open) return;
+  const box=tr.querySelector('.logbox');
+  const d=await api('/api/log?id='+encodeURIComponent(id)+'&tail=200');
+  if(!d.entries||!d.entries.length){ box.textContent='No log entries yet for this pipeline.'; return; }
+  box.textContent=d.entries.map(e=> e.raw!=null? e.raw :
+    [e.ts||e.time||'', e.event||'', e.component||'', e.node_id||e.label||'', e.error||e.message||(e.rows!=null?e.rows+' rows':(e.status||''))]
+      .filter(Boolean).join('  ')).join('\n');
 }
-async function saveSched(id) {
-  const enabled = $('en-' + id).checked;
-  const intervalMinutes = parseInt($('iv-' + id).value || '0', 10);
-  await api('/api/schedules', { method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ id, enabled, intervalMinutes }) });
-}
-async function runFile(file, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
-  const r = await api('/api/run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
-  if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
-  loadPipes();
-  return r;
-}
-
-// ── Run ──
-async function loadRunSelect() {
-  const d = await api('/api/pipelines');
-  $('run-select').innerHTML = (d.pipelines || []).map(p =>
-    '<option value="' + esc(p.file) + '">' + esc(p.name || p.id) + '</option>').join('');
-}
-async function triggerRun() {
-  const file = $('run-select').value;
-  if (!file) return;
-  const btn = $('run-btn');
-  btn.disabled = true; btn.textContent = 'Running...'; $('run-status').textContent = '';
-  const r = await api('/api/run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ file }) });
-  btn.disabled = false; btn.textContent = 'Run now';
-  if (r.error && !r.status) { $('run-status').innerHTML = '<span class="err">' + esc(r.error) + '</span>'; return; }
-  $('run-status').innerHTML = pill(r.status) + ' &nbsp;' + fmtDur(r.durationMs);
-  const nodes = (r.nodes || []).map(n =>
-    '<span>' + pill(n.status) + ' ' + esc(n.id) + (n.rows != null ? ' (' + n.rows + ')' : '') + '</span>').join(' ');
-  $('run-result').innerHTML = '<div class="logbox nodelist">' + nodes +
-    (r.error ? '\n\n<span class="err">' + esc(r.error) + '</span>' : '') + '</div>';
-  loadSummary();
+async function runJob(file, id, btn){
+  if(btn){ btn.disabled=true; btn.textContent='Running...'; }
+  try{
+    const r=await api('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file})});
+    if(r.error&&!r.status){ toast('Failed: '+r.error,'err'); }
+    else { toast((r.name||id)+': '+(r.status==='ok'?'completed':'failed')+' in '+fmtDur(r.durationMs), r.status); }
+  }catch(e){ toast('Run failed: '+e,'err'); }
+  if(btn){ btn.disabled=false; btn.textContent=btn.classList.contains('primary')&&btn.textContent==='Running...'?'Run':'Run'; }
+  refreshAll();
 }
 
 // ── Auto-refresh ──
-let timer = null;
-$('autorefresh').onchange = (e) => {
-  if (timer) { clearInterval(timer); timer = null; }
-  if (e.target.checked) timer = setInterval(loadOps, 5000);
-};
+let timer=null;
+$('autorefresh').onchange=e=>{ if(timer){clearInterval(timer);timer=null;} if(e.target.checked) timer=setInterval(refreshAll,5000); };
 
-loadOps();
+refreshAll();
 </script>
 </body>
 </html>

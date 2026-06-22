@@ -90,19 +90,15 @@ pub fn run() {
                 // falling back to free Apache dbt-core via uv when Fusion can't
                 // be fetched. This also upgrades earlier dbt-core-only installs.
                 // ensure() is idempotent: a no-op once Fusion is in place.
+                // Only publish an ALREADY-provisioned dbt (cheap, no spawn). Do
+                // NOT auto-provision at startup: ensure() shells out to `uv`,
+                // whose python grandchildren get their own console on Windows
+                // (CREATE_NO_WINDOW does not propagate to grandchildren), so a
+                // failed-Fusion-fetch retry would flash a console on every
+                // launch and slow startup. dbt is provisioned on demand instead
+                // (the dbt node's Install action -> dbt_install), and the engine
+                // errors clearly if xf.dbt runs before dbt is present.
                 dbt_engine::publish_if_present(&dir);
-                if !dbt_engine::fusion_present(&dir) {
-                    let dir = dir.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = tokio::task::spawn_blocking(move || {
-                            match dbt_engine::ensure(&dir) {
-                                Ok(p) => tracing::info!("dbt provisioned at {}", p.display()),
-                                Err(e) => tracing::warn!("dbt provisioning failed: {e}"),
-                            }
-                        })
-                        .await;
-                    });
-                }
             }
             // Boot the scheduler. The `.setup` hook runs on the main
             // thread, OUTSIDE any tokio runtime, so calling spawn_ticker
