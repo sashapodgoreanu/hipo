@@ -300,8 +300,6 @@ textarea:focus-visible {
     width: 24px;
     height: 24px;
     flex: none;
-    /* Soft orange glow around the mark (Claude-style). */
-    filter: drop-shadow(0 0 5px var(--accent-glow)) drop-shadow(0 0 2px var(--accent-soft));
 }
 
 /* "Duckle" wordmark with the "by SlothFlowLabs" maker signature stacked below it,
