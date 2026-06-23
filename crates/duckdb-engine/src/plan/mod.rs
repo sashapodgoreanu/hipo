@@ -234,7 +234,10 @@ pub fn compile_partial(
             .cloned()
             .collect(),
     };
-    compile(&filtered)
+    // Partial runs never batch (the executor only batches when target.is_none()),
+    // so suppress the live-VIEW upgrade - keep ATTACH-backed sources as
+    // materialized TABLEs that survive across the per-stage processes (#87).
+    compile_impl(&filtered, false)
 }
 
 /// Remote / catalog sources that, when exactly one stage consumes them, take
@@ -259,6 +262,16 @@ const ATTACH_PARQUET_SOURCES: &[&str] = &[
 ];
 
 pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> {
+    compile_impl(pipeline, true)
+}
+
+/// `allow_view_upgrade=false` is used by partial ("Run from here") runs: those
+/// never take the single-session batched path (the executor only batches when
+/// target.is_none()), so the #76 TABLE->live-VIEW upgrade below MUST be
+/// suppressed - otherwise the source's `duckle_src_<node>` ATTACH/VIEW, created
+/// in the source stage's process, would not exist when the next stage runs in
+/// its own process, giving `Catalog "duckle_src_..." does not exist` (#87).
+fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<CompiledPipeline, EngineError> {
     let node_index: HashMap<&str, &PipelineNode> = pipeline
         .nodes
         .iter()
@@ -525,7 +538,7 @@ pub fn compile(pipeline: &PipelineDoc) -> Result<CompiledPipeline, EngineError> 
     // The batchable condition here is a strict subset of the executor's
     // `batchable` check (compile() is the no-target path), so whenever we
     // upgrade, the executor is guaranteed to take the single-session path.
-    if stages.iter().any(|s| s.attach_view) {
+    if allow_view_upgrade && stages.iter().any(|s| s.attach_view) {
         // An Auto attach-view candidate carries its parquet fast-path spec as a
         // fallback, which makes it non-pure-SQL; treat it as batch-compatible
         // here since the upgrade below clears that spec (so the executor then

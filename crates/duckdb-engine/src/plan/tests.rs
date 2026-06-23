@@ -730,6 +730,58 @@
     }
 
     #[test]
+    fn sqlserver_bulk_honours_trust_and_batch() {
+        // #86 follow-up: trustCert + batchSize now apply to the bulk (mssql
+        // extension) path, not only the legacy driver.
+        let mk = |extra: &str| pipeline_from_json(&format!(
+            r#"{{"nodes":[
+                {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"S","componentId":"src.csv","properties":{{"path":"/tmp/in.csv"}}}}}},
+                {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"M","componentId":"snk.sqlserver","properties":{{"host":"h","database":"db","user":"u","password":"p","tableName":"t"{}}}}}}}
+              ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#, extra));
+        let sql = |extra: &str| {
+            let c = compile(&mk(extra)).unwrap();
+            c.stages.iter().find(|s| s.node_id == "k").unwrap().sql.clone()
+        };
+        // Default: trust off (matches the legacy driver default), batch 1000.
+        let d = sql("");
+        assert!(!d.contains("TrustServerCertificate"), "trust off by default: {}", d);
+        assert!(d.contains("SET mssql_insert_batch_size = 1000"), "default batch 1000: {}", d);
+        // Trust on -> TrustServerCertificate in the connection string.
+        assert!(sql(r#","trustCert":true"#).contains("TrustServerCertificate=true"));
+        // batchSize honoured, and clamped to SQL Server's 1000 ceiling.
+        assert!(sql(r#","batchSize":500"#).contains("SET mssql_insert_batch_size = 500"));
+        assert!(sql(r#","batchSize":5000"#).contains("SET mssql_insert_batch_size = 1000"), "clamp to 1000");
+    }
+
+    #[test]
+    fn partial_run_keeps_attach_source_materialized() {
+        // #87: "Run from here" (compile_partial) must NOT upgrade an attach-backed
+        // source to a live VIEW. Partial runs execute per-stage in separate
+        // processes, so a `duckle_src` VIEW from the source stage would not exist
+        // for the next stage ("Catalog duckle_src... does not exist"). Keep the
+        // source a materialized TABLE that survives across stages.
+        let p = pipeline_from_json(
+            r#"{"nodes":[
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"Duck","componentId":"src.duckdb","properties":{"database":"/tmp/src.duckdb","tableName":"orders"}}},
+                {"id":"f","position":{"x":0,"y":0},"data":{"label":"F","componentId":"xf.filter","properties":{"predicate":"id > 0"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"Out","componentId":"snk.csv","properties":{"path":"/tmp/out.csv"}}}
+              ],"edges":[
+                {"id":"e1","source":"s","target":"f","data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"k","data":{"connectionType":"main"}}
+              ]}"#,
+        );
+        // Full run: the single-session executor can keep the source a live VIEW.
+        let full = compile(&p).unwrap();
+        let sf = full.stages.iter().find(|s| s.node_id == "s").unwrap();
+        assert!(sf.sql.contains("CREATE OR REPLACE VIEW"), "full run upgrades source to a live VIEW: {}", sf.sql);
+        // Partial run-to-here at the filter: per-stage, so source stays a TABLE.
+        let part = compile_partial(&p, "f").unwrap();
+        let sp = part.stages.iter().find(|s| s.node_id == "s").unwrap();
+        assert!(sp.sql.contains("CREATE OR REPLACE TABLE"), "partial source must stay a TABLE: {}", sp.sql);
+        assert!(!sp.sql.contains("CREATE OR REPLACE VIEW"), "partial source must NOT be a live VIEW: {}", sp.sql);
+    }
+
+    #[test]
     fn relational_source_infers_custom_sql_without_mode() {
         // issue #77: a filled SQL box wins even when the Read-mode dropdown is
         // left at its default (no "mode" prop), mirroring src.duckdb. A

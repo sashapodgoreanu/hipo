@@ -4456,11 +4456,29 @@ fn mssql_attach(props: &JsonValue) -> String {
     if let Some(p) = string_prop(props, "password").filter(|s| !s.is_empty()) {
         parts.push(format!("password={}", p));
     }
-    // Self-signed dev/test certs are common; mirror the driver's trust default.
-    parts.push("TrustServerCertificate=true".to_string());
+    // #86 follow-up: honour the same "Trust TLS cert" toggle as the legacy
+    // driver (default off). When off we omit the key so the extension validates
+    // the cert / lets an older non-TLS server negotiate plainly; when on we trust
+    // self-signed certs. Previously this was hardcoded true, which forced a TLS
+    // handshake that fails against servers without TLS.
+    let trust = props.get("trustCert").and_then(|v| v.as_bool()).unwrap_or(false);
+    if trust {
+        parts.push("TrustServerCertificate=true".to_string());
+    }
     let connstr = parts.join(";");
+    // #86 follow-up: expose the insert batch size to the bulk path too. SQL
+    // Server caps INSERT ... VALUES at 1000 rows (mssql_insert_max_rows_per_statement),
+    // so clamp. It is a session setting, applied after LOAD. COPY/BCP (the fast
+    // overwrite path) is unaffected and stays on by default.
+    let batch = props
+        .get("batchSize")
+        .and_then(|v| v.as_u64())
+        .filter(|n| *n > 0)
+        .map(|n| n.min(1000))
+        .unwrap_or(1000);
     format!(
-        "INSTALL mssql FROM community; LOAD mssql; ATTACH '{}' AS duckle_dst (TYPE mssql); ",
+        "INSTALL mssql FROM community; LOAD mssql; SET mssql_insert_batch_size = {}; ATTACH '{}' AS duckle_dst (TYPE mssql); ",
+        batch,
         sql_escape(&connstr)
     )
 }

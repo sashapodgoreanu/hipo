@@ -398,7 +398,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'run',
-                    label: 'Run from here',
+                    label: 'Run to here (this node + all upstream)',
                     icon: <Play size={ICON_SIZE} />,
                     onClick: () => onNodeAction('run-from-here', node.id),
                     disabled: isDisabled,

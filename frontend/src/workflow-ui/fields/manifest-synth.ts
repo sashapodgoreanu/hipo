@@ -1276,7 +1276,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'schema', label: 'Schema', kind: 'text', defaultValue: 'dbo' },
                     { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'orders' },
-                    { key: 'batchSize', label: 'Insert batch size (driver mode only)', kind: 'integer', defaultValue: 1000 },
+                    { key: 'batchSize', label: 'Insert batch size', kind: 'integer', defaultValue: 1000 },
                     ...upsertModeFields(),
                 ],
             },

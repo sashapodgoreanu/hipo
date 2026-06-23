@@ -344,6 +344,26 @@ fn duckdb_command(bin: &Path) -> std::process::Command {
     cmd
 }
 
+/// #91: ask the DuckDB binary its actual version (it prints e.g.
+/// "v1.5.4 19864453f7" on the first line). Only duckdb is assumed to support
+/// `--version` reliably. Used as a fallback when the install stamp is
+/// missing/stale so a genuine pinned-version binary - placed by an older build,
+/// an in-app self-update, or a manual drop - is not falsely flagged outdated.
+fn probed_version(bin: &Path, s: &EngineSpec) -> Option<String> {
+    if s.id != "duckdb" {
+        return None;
+    }
+    let out = duckdb_command(bin).arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(|t| t.trim_start_matches('v').to_string())
+        .filter(|v| !v.is_empty())
+}
+
 /// Walk through every DuckDB extension Duckle needs, INSTALL+LOADing each
 /// so the file lands in the user's local DuckDB extension cache. Failures
 /// are logged via the progress callback but never abort the engine
@@ -377,13 +397,30 @@ pub fn status(app_data: &Path) -> Vec<EngineStatus> {
             let path = binary_path(app_data, s);
             let exists = path.exists();
             let on_disk = installed_version(app_data, s);
+            // #91: trust the install stamp as the fast path, but when it is
+            // absent/stale fall back to the binary's own reported version, so a
+            // genuine pinned-version binary without a stamp is not falsely
+            // flagged outdated (the spurious "upgrade DuckDB 1.5.4" banner).
+            let effective = if on_disk.is_some() {
+                on_disk.clone()
+            } else if exists {
+                probed_version(&path, s)
+            } else {
+                None
+            };
+            // Backfill the stamp when the probe confirms the pinned version, so
+            // subsequent calls hit the fast path and skip re-spawning the binary.
+            if exists
+                && on_disk.as_deref() != Some(s.version)
+                && effective.as_deref() == Some(s.version)
+            {
+                let _ = std::fs::write(version_stamp_path(app_data, s), s.version);
+            }
             // "installed" requires the binary to exist AND match the pinned
-            // version, so bumping a version re-triggers the install flow for
-            // existing users (a stamp-less old install reads as outdated).
-            let installed = exists && on_disk.as_deref() == Some(s.version);
-            // A binary is present but stamped with a different version (or no
-            // stamp at all): an upgrade is due, not a fresh install.
-            let outdated = exists && on_disk.as_deref() != Some(s.version);
+            // version, so bumping a version re-triggers the install flow.
+            let installed = exists && effective.as_deref() == Some(s.version);
+            // A binary is present but a different version: an upgrade is due.
+            let outdated = exists && effective.as_deref() != Some(s.version);
             EngineStatus {
                 id: s.id.to_string(),
                 name: s.name.to_string(),
@@ -392,7 +429,7 @@ pub fn status(app_data: &Path) -> Vec<EngineStatus> {
                 installed,
                 // Report the real on-disk version when a binary is present
                 // (so the UI shows the outdated version, not the pinned one).
-                version: if exists { on_disk } else { None },
+                version: if exists { effective } else { None },
                 target_version: s.version.to_string(),
                 outdated,
                 path: exists.then(|| path.to_string_lossy().to_string()),

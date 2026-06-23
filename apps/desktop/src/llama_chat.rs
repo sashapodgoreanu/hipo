@@ -15,11 +15,11 @@
 //!   - Subsequent messages: reuse the running server
 //!   - App shutdown: kill child
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -100,28 +100,75 @@ impl LlamaServer {
             // very chatty about token sampling.
             .arg("--log-disable");
         cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
+        // #89: capture stderr so a failed boot (missing/corrupt model, port in
+        // use, missing shared lib) surfaces in the error instead of a blank
+        // "didn't become ready".
+        cmd.stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("spawn llama-server: {}", e))?;
-        let server = LlamaServer { child, port };
-        // Poll /health until ready (or 30s deadline).
-        let deadline = Instant::now() + Duration::from_secs(30);
+        // Drain stderr on a thread into a bounded tail (the project's
+        // pipe-buffer-deadlock lesson: never read a child pipe only after exit).
+        let stderr_tail = Arc::new(Mutex::new(String::new()));
+        if let Some(err) = child.stderr.take() {
+            let tail = Arc::clone(&stderr_tail);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(err);
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    if let Ok(mut t) = tail.lock() {
+                        t.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if t.len() > 4096 {
+                            let cut = t.len() - 4096;
+                            t.drain(..cut);
+                        }
+                    }
+                }
+            });
+        }
+        let mut server = LlamaServer { child, port };
+        // Poll /health until ready, or a (configurable) deadline. Default 120s:
+        // a cold load of the GGUF on a slow disk/CPU can exceed the old 30s (#89).
+        let timeout = ready_timeout_secs();
+        let deadline = Instant::now() + Duration::from_secs(timeout);
         let url = format!("http://127.0.0.1:{}/health", port);
+        let tail = || stderr_tail.lock().map(|t| t.trim().to_string()).unwrap_or_default();
         loop {
             if let Ok(resp) = ureq::get(&url).timeout(Duration::from_millis(500)).call() {
                 if resp.status() < 400 {
                     return Ok(server);
                 }
             }
-            if Instant::now() > deadline {
+            // Server died before becoming ready (bad model, port in use, missing
+            // lib): report why instead of waiting out the whole deadline.
+            if let Ok(Some(code)) = server.child.try_wait() {
+                let t = tail();
                 let _ = server.kill();
-                return Err("llama-server didn't become ready within 30s".into());
+                return Err(format!(
+                    "llama-server exited before it was ready ({}). model {}. {}",
+                    code,
+                    model.display(),
+                    if t.is_empty() { "no stderr captured".to_string() } else { format!("stderr: {}", t) }
+                ));
+            }
+            if Instant::now() > deadline {
+                let t = tail();
+                let _ = server.kill();
+                return Err(format!(
+                    "llama-server didn't become ready within {}s (port {}, model {}). {} Set DUCKLE_LLAMA_READY_TIMEOUT_SECS to wait longer.",
+                    timeout,
+                    port,
+                    model.display(),
+                    if t.is_empty() { String::new() } else { format!("Last stderr: {}", t) }
+                ));
             }
             std::thread::sleep(Duration::from_millis(250));
         }
@@ -137,6 +184,16 @@ impl LlamaServer {
         let _ = self.child.wait();
         Ok(())
     }
+}
+
+/// #89: how long to wait for llama-server `/health`. Cold GGUF loads can exceed
+/// 30s on slow machines; default 120s, override via DUCKLE_LLAMA_READY_TIMEOUT_SECS.
+fn ready_timeout_secs() -> u64 {
+    std::env::var("DUCKLE_LLAMA_READY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(120)
 }
 
 /// Best-effort thread count for inference. Use half the cores so the
