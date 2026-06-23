@@ -12,20 +12,20 @@ the repo root:
 from PIL import Image
 
 S = 1024                              # output size
-TILE = (0xFB, 0xF3, 0xE8, 255)        # warm cream tile (light, distinct, not a dark ground)
+TILE = (0x0A, 0x0B, 0x0F, 255)        # full black ground
 MARK = "apps/desktop/icons/icon-mark.png"
 OUT = "apps/desktop/icons/icon-source.png"
 
 
 def main():
     tile = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    # Dark rounded tile (transparent corners -> rounded app icon).
+    # Black rounded tile (transparent corners -> rounded app icon).
     from PIL import ImageDraw
-    ImageDraw.Draw(tile).rounded_rectangle([0, 0, S - 1, S - 1], radius=int(0.20 * S), fill=TILE)
+    ImageDraw.Draw(tile).rounded_rectangle([0, 0, S - 1, S - 1], radius=int(0.18 * S), fill=TILE)
 
     mark = Image.open(MARK).convert("RGBA")
-    # Fit the mark to ~62% of the tile, preserving its aspect ratio.
-    target = int(0.62 * S)
+    # Maximise the mark (fill the icon, minimal padding), preserving aspect ratio.
+    target = int(0.88 * S)
     scale = target / max(mark.width, mark.height)
     mark = mark.resize((round(mark.width * scale), round(mark.height * scale)), Image.LANCZOS)
     ox = (S - mark.width) // 2
