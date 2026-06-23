@@ -148,6 +148,8 @@ pub enum RuntimeSpec {
     XmlSink(XmlSinkSpec),
     AvroSink(AvroSinkSpec),
     QvdSink(QvdSinkSpec),
+    GizmoSqlSource(GizmoSqlSourceSpec),
+    GizmoSqlSink(GizmoSqlSinkSpec),
     RabbitSink(RabbitSinkSpec),
     RabbitSource(RabbitSourceSpec),
     GitSource(GitSourceSpec),
@@ -743,6 +745,8 @@ fn build_stage(
     let mut xml_sink: Option<XmlSinkSpec> = None;
     let mut avro_sink: Option<AvroSinkSpec> = None;
     let mut qvd_sink: Option<QvdSinkSpec> = None;
+    let mut gizmosql_source: Option<GizmoSqlSourceSpec> = None;
+    let mut gizmosql_sink: Option<GizmoSqlSinkSpec> = None;
     let mut rabbit_sink: Option<RabbitSinkSpec> = None;
     let mut rabbit_source: Option<RabbitSourceSpec> = None;
     let mut git_source: Option<GitSourceSpec> = None;
@@ -1463,6 +1467,30 @@ fn build_stage(
         qvd_sink = Some(QvdSinkSpec {
             from_view: from_view.to_string(),
             path,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.gizmosql" {
+        // GizmoSQL (Arrow Flight SQL) sink: CREATE + batched INSERT over Flight
+        // SQL via the clean-room crate::gizmosql client.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let host = string_prop(&props, "host")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: host required", component_id)))?;
+        let table = string_prop(&props, "table")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: table required", component_id)))?;
+        gizmosql_sink = Some(GizmoSqlSinkSpec {
+            from_view: from_view.to_string(),
+            host,
+            port: string_prop(&props, "port").and_then(|s| s.parse().ok()).unwrap_or(31337),
+            username: string_prop(&props, "username").unwrap_or_default(),
+            password: string_prop(&props, "password").unwrap_or_default(),
+            tls: props.get("tls").and_then(|v| v.as_bool()).unwrap_or(false),
+            tls_skip_verify: props.get("tlsSkipVerify").and_then(|v| v.as_bool()).unwrap_or(false),
+            table,
+            mode: string_prop(&props, "mode")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "append".into()),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.nats" {
@@ -2445,6 +2473,32 @@ fn build_stage(
         qvd_source = Some(QvdSourceSpec {
             node_id: node.id.clone(),
             path,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.gizmosql" {
+        // GizmoSQL (Arrow Flight SQL) source via the clean-room crate::gizmosql
+        // client. Result streams to Parquet + materializes like the ADBC source.
+        let host = string_prop(&props, "host")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: host required", component_id)))?;
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: query required", component_id)))?;
+        let single_consumer = consumer_count
+            .get(&output_table_ref(&node.id, None))
+            .copied()
+            .unwrap_or(0)
+            <= 1;
+        gizmosql_source = Some(GizmoSqlSourceSpec {
+            node_id: node.id.clone(),
+            host,
+            port: string_prop(&props, "port").and_then(|s| s.parse().ok()).unwrap_or(31337),
+            username: string_prop(&props, "username").unwrap_or_default(),
+            password: string_prop(&props, "password").unwrap_or_default(),
+            tls: props.get("tls").and_then(|v| v.as_bool()).unwrap_or(false),
+            tls_skip_verify: props.get("tlsSkipVerify").and_then(|v| v.as_bool()).unwrap_or(false),
+            query,
+            single_consumer,
         });
         (String::new(), StageKind::View, None)
     } else if matches!(component_id, "src.yaml" | "src.toml") {
@@ -3505,6 +3559,8 @@ fn build_stage(
         .or_else(|| kafka_source.map(RuntimeSpec::KafkaSource))
         .or_else(|| avro_source.map(RuntimeSpec::AvroSource))
         .or_else(|| qvd_source.map(RuntimeSpec::QvdSource))
+        .or_else(|| gizmosql_source.map(RuntimeSpec::GizmoSqlSource))
+        .or_else(|| gizmosql_sink.map(RuntimeSpec::GizmoSqlSink))
         .or_else(|| nats_sink.map(RuntimeSpec::NatsSink))
         .or_else(|| nats_source.map(RuntimeSpec::NatsSource))
         .or_else(|| pubsub_sink.map(RuntimeSpec::PubsubSink))

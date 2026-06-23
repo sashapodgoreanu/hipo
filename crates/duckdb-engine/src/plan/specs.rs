@@ -481,6 +481,38 @@ pub struct QvdSinkSpec {
     pub path: String,
 }
 
+/// src.gizmosql: read from a GizmoSQL (Arrow Flight SQL) server via the
+/// clean-room `crate::gizmosql` client. Result is streamed to Parquet and
+/// materialized with DuckDB read_parquet, like the ADBC source.
+#[derive(Debug, Clone)]
+pub struct GizmoSqlSourceSpec {
+    pub node_id: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub tls: bool,
+    pub tls_skip_verify: bool,
+    pub query: String,
+    pub single_consumer: bool,
+}
+
+/// snk.gizmosql: write upstream rows to a table on a GizmoSQL (Arrow Flight SQL)
+/// server via CREATE + batched INSERT over the Flight SQL protocol.
+#[derive(Debug, Clone)]
+pub struct GizmoSqlSinkSpec {
+    pub from_view: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub tls: bool,
+    pub tls_skip_verify: bool,
+    pub table: String,
+    /// "append" | "overwrite" | "create".
+    pub mode: String,
+}
+
 /// snk.rabbit: publish one AMQP message per upstream row to
 /// (exchange, routing_key) via the pure-Rust lapin driver. value =
 /// JSON-stringified row. Persistent delivery mode (= survives broker

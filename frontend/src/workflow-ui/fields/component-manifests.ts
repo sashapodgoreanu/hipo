@@ -324,6 +324,86 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
         },
     },
 
+    'src.gizmosql': {
+        id: 'src.gizmosql',
+        kind: 'source',
+        label: 'GizmoSQL',
+        description:
+            'Query a GizmoSQL (Arrow Flight SQL) server. Pure-Rust Flight SQL client: rows stream back as Arrow and materialize fast - no ADBC driver or JDBC needed.',
+        schemaSource: 'declared',
+        sections: [
+            {
+                label: 'Connection',
+                fields: [
+                    { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'localhost' },
+                    { key: 'port', label: 'Port', kind: 'integer', defaultValue: 31337 },
+                    { key: 'username', label: 'Username', kind: 'text', placeholder: 'gizmosql_username or ${ENV:GIZMOSQL_USER}' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '${ENV:GIZMOSQL_PASSWORD}' },
+                    { key: 'tls', label: 'Use TLS', kind: 'bool', defaultValue: false },
+                    { key: 'tlsSkipVerify', label: 'Skip TLS verification (self-signed)', kind: 'bool', defaultValue: false },
+                ],
+            },
+            {
+                label: 'Query',
+                fields: [
+                    { key: 'query', label: 'SQL query', kind: 'expression', rows: 5, required: true, placeholder: 'SELECT * FROM my_table' },
+                ],
+            },
+        ],
+        ports: {
+            inputs: [],
+            outputs: [
+                { id: 'main', label: 'main', type: 'main' },
+                { id: 'reject', label: 'reject', type: 'reject', optional: true },
+            ],
+        },
+    },
+
+    'snk.gizmosql': {
+        id: 'snk.gizmosql',
+        kind: 'sink',
+        label: 'GizmoSQL',
+        description:
+            'Write rows to a table on a GizmoSQL (Arrow Flight SQL) server via CREATE + batched INSERT over the pure-Rust Flight SQL client.',
+        schemaSource: 'declared',
+        sections: [
+            {
+                label: 'Connection',
+                fields: [
+                    { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'localhost' },
+                    { key: 'port', label: 'Port', kind: 'integer', defaultValue: 31337 },
+                    { key: 'username', label: 'Username', kind: 'text', placeholder: 'gizmosql_username or ${ENV:GIZMOSQL_USER}' },
+                    { key: 'password', label: 'Password', kind: 'text', placeholder: '${ENV:GIZMOSQL_PASSWORD}' },
+                    { key: 'tls', label: 'Use TLS', kind: 'bool', defaultValue: false },
+                    { key: 'tlsSkipVerify', label: 'Skip TLS verification (self-signed)', kind: 'bool', defaultValue: false },
+                ],
+            },
+            {
+                label: 'Target',
+                fields: [
+                    { key: 'table', label: 'Table', kind: 'text', required: true, placeholder: 'my_table' },
+                    {
+                        key: 'mode',
+                        label: 'Write mode',
+                        kind: 'select',
+                        defaultValue: 'append',
+                        options: [
+                            { label: 'Append (create if missing)', value: 'append' },
+                            { label: 'Overwrite (replace table)', value: 'overwrite' },
+                        ],
+                    },
+                ],
+            },
+        ],
+        ports: {
+            inputs: [
+                { id: 'main', label: 'main', type: 'main' },
+                { id: 'reject', label: 'reject', type: 'reject', optional: true },
+            ],
+            outputs: [],
+        },
+    },
+
     'src.s3': {
         id: 'src.s3',
         kind: 'source',

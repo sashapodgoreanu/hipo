@@ -2346,6 +2346,133 @@ impl DuckdbEngine {
         Ok(format!("qvd: wrote {} records to {}", rows.len(), spec.path))
     }
 
+    /// src.gizmosql: query a GizmoSQL (Arrow Flight SQL) server, stream the
+    /// result to a temp Parquet, then materialize it as a table.
+    pub(crate) fn run_gizmosql_source(
+        &self,
+        db: &Path,
+        spec: &GizmoSqlSourceSpec,
+    ) -> Result<String, EngineError> {
+        let conn = crate::gizmosql::GizmoConn {
+            host: spec.host.clone(),
+            port: spec.port,
+            username: spec.username.clone(),
+            password: spec.password.clone(),
+            tls: spec.tls,
+            tls_skip_verify: spec.tls_skip_verify,
+        };
+        let safe_node: String = spec
+            .node_id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+        let db_name = db
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let parquet_path = db.with_file_name(format!("{}.gizmosql-{}.parquet", db_name, safe_node));
+        let count = crate::gizmosql::query_to_parquet(&conn, &spec.query, &parquet_path)
+            .map_err(EngineError::Query)?;
+        let ppath = parquet_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''");
+        let create = format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_parquet('{}')",
+            plan::quote_ident(&spec.node_id),
+            ppath
+        );
+        self.run(Some(db), &create, false)?;
+        let _ = std::fs::remove_file(&parquet_path);
+        Ok(format!(
+            "gizmosql: materialized {} records into {}",
+            count, spec.node_id
+        ))
+    }
+
+    /// snk.gizmosql: CREATE the target table (DuckDB types from the upstream
+    /// DESCRIBE) then batched INSERT, all over Flight SQL.
+    pub(crate) fn run_gizmosql_sink(
+        &self,
+        db: &Path,
+        spec: &GizmoSqlSinkSpec,
+    ) -> Result<String, EngineError> {
+        let view = plan::quote_ident(&spec.from_view);
+        let desc = self.run_rows(Some(db), &format!("DESCRIBE SELECT * FROM {}", view))?;
+        let mut cols: Vec<(String, String)> = Vec::new();
+        for r in &desc {
+            let Some(o) = r.as_object() else { continue };
+            let name = o
+                .get("column_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let ty = o
+                .get("column_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("VARCHAR")
+                .to_string();
+            cols.push((name, ty));
+        }
+        if cols.is_empty() {
+            return Err(EngineError::Query("gizmosql: upstream has no columns".into()));
+        }
+        let rows = self.run_rows(Some(db), &format!("SELECT * FROM {}", view))?;
+
+        let tbl = plan::quote_ident(&spec.table);
+        let coldefs = cols
+            .iter()
+            .map(|(n, t)| format!("{} {}", plan::quote_ident(n), t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut stmts: Vec<String> = Vec::new();
+        match spec.mode.as_str() {
+            "overwrite" | "create" => {
+                stmts.push(format!("CREATE OR REPLACE TABLE {} ({})", tbl, coldefs))
+            }
+            _ => stmts.push(format!("CREATE TABLE IF NOT EXISTS {} ({})", tbl, coldefs)),
+        }
+        let colnames = cols
+            .iter()
+            .map(|(n, _)| plan::quote_ident(n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for chunk in rows.chunks(500) {
+            let mut tuples: Vec<String> = Vec::with_capacity(chunk.len());
+            for r in chunk {
+                let o = r.as_object();
+                let tuple = cols
+                    .iter()
+                    .map(|(n, _)| gizmo_sql_literal(o.and_then(|o| o.get(n)).unwrap_or(&JsonValue::Null)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                tuples.push(format!("({})", tuple));
+            }
+            if !tuples.is_empty() {
+                stmts.push(format!(
+                    "INSERT INTO {} ({}) VALUES {}",
+                    tbl,
+                    colnames,
+                    tuples.join(", ")
+                ));
+            }
+        }
+
+        let conn = crate::gizmosql::GizmoConn {
+            host: spec.host.clone(),
+            port: spec.port,
+            username: spec.username.clone(),
+            password: spec.password.clone(),
+            tls: spec.tls,
+            tls_skip_verify: spec.tls_skip_verify,
+        };
+        crate::gizmosql::execute_updates(&conn, &stmts).map_err(EngineError::Query)?;
+        Ok(format!("gizmosql: wrote {} rows to {}", rows.len(), spec.table))
+    }
+
     pub(crate) fn run_avro_sink(
         &self,
         db: &Path,
@@ -7835,5 +7962,18 @@ mod context_var_tests {
         let vars = context_vars_for_workspace(dir.path());
         assert!(vars.contains_key("workspace"));
         assert!(!vars.contains_key("MOTHERDUCK_TOKEN"));
+    }
+}
+
+/// Render a JSON value as a DuckDB SQL literal for snk.gizmosql INSERTs. The
+/// target column type (from DESCRIBE) drives any cast, so numeric-looking
+/// strings are quoted safely.
+fn gizmo_sql_literal(v: &JsonValue) -> String {
+    match v {
+        JsonValue::Null => "NULL".to_string(),
+        JsonValue::Bool(b) => if *b { "TRUE".to_string() } else { "FALSE".to_string() },
+        JsonValue::Number(n) => n.to_string(),
+        JsonValue::String(s) => format!("'{}'", s.replace('\'', "''")),
+        other => format!("'{}'", other.to_string().replace('\'', "''")),
     }
 }

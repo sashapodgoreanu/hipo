@@ -139,6 +139,7 @@ export const PALETTE: Category[] = [
                     src('synapse', 'Azure Synapse', 'available', 'Azure Synapse rides the SQL Server TDS wire - same connection form as src.sqlserver.'),
                     src('motherduck', 'MotherDuck', 'available', 'Read from MotherDuck via ATTACH md:'),
                     src('quack', 'DuckDB Quack', 'available', 'Read tables from a remote DuckDB instance over the Quack protocol (HTTP on port 9494). Server runs quack_serve(...); client ATTACHes the quack: URL with a token-based SECRET.'),
+                    src('gizmosql', 'GizmoSQL', 'available', 'Query a GizmoSQL (Arrow Flight SQL) server via a clean-room pure-Rust Flight SQL client - no ADBC driver or JDBC needed. Basic-auth handshake then streams Arrow back for fast loads; TLS optional.'),
                 ],
             },
             {
@@ -511,6 +512,7 @@ export const PALETTE: Category[] = [
                 components: [
                     snk('motherduck', 'MotherDuck', 'available', 'Write a table into MotherDuck via ATTACH md:'),
                     snk('quack', 'DuckDB Quack', 'available', 'Write a table to a remote DuckDB instance over the Quack protocol (HTTP on port 9494). Supports append / overwrite / truncate / upsert modes via the standard relational sink path.'),
+                    snk('gizmosql', 'GizmoSQL', 'available', 'Write rows to a table on a GizmoSQL (Arrow Flight SQL) server via CREATE + batched INSERT over the clean-room pure-Rust Flight SQL client. Append or overwrite; TLS optional.'),
                     snk('snowflake', 'Snowflake', 'available', 'INSERT to a Snowflake table via the SQL API (/api/v2/statements) with PAT (Personal Access Token) bearer auth. Multi-row INSERTs batched at 1000 rows by default.'),
                     snk('bigquery', 'BigQuery', 'available', 'Write tables to BigQuery via the duckdb-bigquery community extension'),
                     snk('redshift', 'Redshift', 'available', 'Write Redshift via the postgres ATTACH path (Postgres wire on port 5439); overwrite / append / truncate / upsert all supported via the existing PG sink modes'),

@@ -155,6 +155,16 @@ adbc_core = { version = "0.16", features = ["driver_manager"] }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 parquet = { workspace = true }
+# GizmoSQL source/sink: a self-contained, pure-Rust Arrow Flight SQL client.
+# We use BASE arrow-flight (the gRPC Flight protocol + IPC decode) and hand-roll
+# the few Flight SQL command messages with prost - deliberately NOT enabling the
+# flight-sql-experimental feature, which drags in arrow-arith 53 (it fails to
+# build against chrono >= 0.4.42, which russh-sftp pins us above). arrow-flight 53
+# unifies with the workspace arrow pins; do_get RecordBatches stream to a Parquet
+# temp file + materialize via DuckDB read_parquet, like the ADBC source.
+arrow-flight = { version = "53", features = ["tls"] }
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+prost = "0.13"
 
 [features]
 default = ["oracle"]

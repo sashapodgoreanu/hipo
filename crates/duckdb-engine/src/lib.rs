@@ -27,6 +27,7 @@ pub mod context;
 pub mod error_category;
 pub mod history;
 pub mod lineage;
+pub mod gizmosql;
 pub mod plan;
 pub mod qvd;
 pub mod tls;
@@ -44,7 +45,8 @@ use plan::{
     ClickHouseSourceSpec, ClipboardSourceSpec, DatabricksSinkSpec, DatabricksSourceSpec,
     DbtSpec, DynamoDbSourceSpec, ElasticSourceSpec, EmailSinkSpec, EmailSourceSpec,
     FormatFileSinkSpec,
-    FormatFileSourceSpec, FormatKind, FtpSinkSpec, FtpSourceSpec, GitSourceSpec, JavaScriptSpec,
+    FormatFileSourceSpec, FormatKind, FtpSinkSpec, FtpSourceSpec, GitSourceSpec,
+    GizmoSqlSinkSpec, GizmoSqlSourceSpec, JavaScriptSpec,
     KafkaSinkSpec, KafkaSourceSpec, KinesisSourceSpec, MilvusSourceSpec, MongoSinkSpec,
     MongoSourceSpec,
     NatsSinkSpec, NatsSourceSpec, OracleSinkSpec, OracleSourceSpec, PubSubSinkSpec,
@@ -1013,6 +1015,10 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::XmlSink(spec)) => self.run_xml_sink(&db_path, spec),
                     Some(RuntimeSpec::AvroSink(spec)) => self.run_avro_sink(&db_path, spec),
                     Some(RuntimeSpec::QvdSink(spec)) => self.run_qvd_sink(&db_path, spec),
+                    Some(RuntimeSpec::GizmoSqlSource(spec)) => {
+                        self.run_gizmosql_source(&db_path, spec)
+                    }
+                    Some(RuntimeSpec::GizmoSqlSink(spec)) => self.run_gizmosql_sink(&db_path, spec),
                     Some(RuntimeSpec::RabbitSink(spec)) => self.run_rabbit_sink(&db_path, spec),
                     Some(RuntimeSpec::RabbitSource(spec)) => self.run_rabbit_source(&db_path, spec),
                     Some(RuntimeSpec::GitSource(spec)) => self.run_git_source(&db_path, spec),
