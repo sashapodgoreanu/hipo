@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="docs/assets/duckle-wordmark.png" alt="Duckle" width="340"/>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/duckle-wordmark-dark.png" width="340"/>
+  <img src="docs/assets/duckle-wordmark-light.png" alt="Duckle" width="340"/>
+</picture>
 
 <h3>The local-first data studio with a built-in AI assistant.</h3>
 
