@@ -1484,6 +1484,26 @@
     }
 
     #[test]
+    fn csv_ignore_errors_and_null_padding() {
+        // #98: first-class toggles surface read_csv ignore_errors / null_padding.
+        let sql = build_csv_source(
+            &serde_json::json!({
+                "path": "d.csv",
+                "hasHeader": true,
+                "ignoreErrors": true,
+                "nullPadding": true
+            }),
+            None,
+        );
+        assert!(sql.contains("ignore_errors=true"), "got: {}", sql);
+        assert!(sql.contains("null_padding=true"), "got: {}", sql);
+        // Default off: neither appears.
+        let plain = build_csv_source(&serde_json::json!({ "path": "d.csv", "hasHeader": true }), None);
+        assert!(!plain.contains("ignore_errors"), "got: {}", plain);
+        assert!(!plain.contains("null_padding"), "got: {}", plain);
+    }
+
+    #[test]
     fn contract_builds_gated_passthrough() {
         let mut ni = NodeInputs::default();
         ni.ports.insert("main".into(), vec!["up".into()]);

@@ -3972,6 +3972,16 @@ fn csv_read_args_base(props: &JsonValue) -> Vec<String> {
         };
         args.push(format!("encoding='{}'", sql_escape(&enc)));
     }
+    // #98: surface common parse-leniency options as first-class toggles so users
+    // don't have to discover the readOptions passthrough. `ignore_errors` skips
+    // rows DuckDB can't parse (bad encoding, wrong column count, trailing blank
+    // lines); `null_padding` pads short rows with NULL instead of erroring.
+    if props.get("ignoreErrors").and_then(JsonValue::as_bool).unwrap_or(false) {
+        args.push("ignore_errors=true".to_string());
+    }
+    if props.get("nullPadding").and_then(JsonValue::as_bool).unwrap_or(false) {
+        args.push("null_padding=true".to_string());
+    }
     // #83: expose DuckDB's read_csv options that the Basic tab doesn't surface.
     // `filename=true` adds a `filename` column (extract data from the path when
     // globbing a folder); `readOptions` is a passthrough key-value list of any

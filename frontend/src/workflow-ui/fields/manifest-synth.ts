@@ -855,6 +855,20 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
                             description: 'When reading a folder glob (e.g. data/*.csv), add a `filename` column so you can extract data from the source path.',
                         },
                         {
+                            key: 'ignoreErrors',
+                            label: 'Ignore bad rows',
+                            kind: 'bool' as const,
+                            defaultValue: false,
+                            description: 'Skip rows DuckDB cannot parse (bad encoding, wrong column count, a trailing blank line) instead of failing the whole read. Maps to read_csv ignore_errors=true.',
+                        },
+                        {
+                            key: 'nullPadding',
+                            label: 'Pad short rows with NULL',
+                            kind: 'bool' as const,
+                            defaultValue: false,
+                            description: 'Rows with fewer columns than the header are padded with NULLs rather than erroring. Maps to read_csv null_padding=true.',
+                        },
+                        {
                             key: 'readOptions',
                             label: 'Extra read options',
                             kind: 'key-value' as const,
