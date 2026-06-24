@@ -177,6 +177,8 @@ struct WebState {
     workspace: PathBuf,
     duckdb: PathBuf,
     dist: PathBuf,
+    /// Bind host, for the cross-origin / DNS-rebind guard on POST routes.
+    host: String,
     /// Serialize runs: the shared workspace env + DuckDB process make concurrent
     /// executions unsafe, so browser run requests queue.
     run_lock: Mutex<()>,
@@ -200,6 +202,7 @@ pub fn run_web() -> Result<(), String> {
         workspace: workspace.clone(),
         duckdb: duckdb.clone(),
         dist: dist.clone(),
+        host: args.host.clone(),
         run_lock: Mutex::new(()),
     });
     let addr = format!("{}:{}", args.host, args.port);
@@ -225,6 +228,10 @@ pub fn run_web() -> Result<(), String> {
 
 fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
     let req = read_request(&mut stream)?;
+    // Block cross-origin / non-local state-changing POSTs (CSRF + DNS-rebind).
+    if req.method == "POST" && req.path.starts_with("/api/") && !guard_local(&req, &state.host) {
+        return respond_403(&mut stream, "blocked: cross-origin or non-local request");
+    }
     if req.method == "POST" && req.path.starts_with("/api/cmd/") {
         let cmd = req.path.trim_start_matches("/api/cmd/").to_string();
         return dispatch_cmd(&mut stream, state, &cmd, &req.body);
@@ -492,6 +499,8 @@ struct Request {
     method: String,
     path: String,
     query: HashMap<String, String>,
+    origin: Option<String>,
+    host: Option<String>,
     body: Vec<u8>,
 }
 
@@ -523,10 +532,17 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     let (path, query) = split_query(&raw_target);
 
     let mut content_length = 0usize;
+    let mut origin = None;
+    let mut host = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
+            let key = k.trim();
+            if key.eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse().unwrap_or(0);
+            } else if key.eq_ignore_ascii_case("origin") {
+                origin = Some(v.trim().to_string());
+            } else if key.eq_ignore_ascii_case("host") {
+                host = Some(v.trim().to_string());
             }
         }
     }
@@ -539,7 +555,63 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         body.extend_from_slice(&tmp[..n]);
     }
     body.truncate(content_length);
-    Ok(Request { method, path, query, body })
+    Ok(Request { method, path, query, origin, host, body })
+}
+
+/// Host part of an Origin/Host header value (drop scheme, port, path, ipv6 []).
+fn header_host(s: &str) -> &str {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("http://")
+        .or_else(|| s.strip_prefix("https://"))
+        .unwrap_or(s);
+    let s = s.split('/').next().unwrap_or(s);
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    s.rsplit_once(':').map(|(h, _)| h).unwrap_or(s)
+}
+
+fn is_loopback_host(h: &str) -> bool {
+    matches!(h, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Whether a state-changing POST is allowed. Closes the no-auth CSRF /
+/// DNS-rebinding gap that the web server otherwise has: a cross-origin Origin
+/// (a random website's JS hitting localhost) is rejected, and when bound to
+/// loopback the Host must be loopback too, so a DNS name rebound to 127.0.0.1
+/// cannot drive the local server. A loopback bind (the default) is fully
+/// guarded; a 0.0.0.0 / explicit-IP bind is an opted-in remote exposure (the
+/// startup banner already warns "no authentication"), so only the cross-origin
+/// check applies there.
+fn guard_local(req: &Request, bind_host: &str) -> bool {
+    let bound_loopback = is_loopback_host(bind_host);
+    if bound_loopback {
+        if let Some(h) = req.host.as_deref() {
+            if !is_loopback_host(header_host(h)) {
+                return false;
+            }
+        }
+    }
+    if let Some(o) = req.origin.as_deref() {
+        let oh = header_host(o);
+        let same_as_host = req.host.as_deref().map(header_host) == Some(oh);
+        if !(is_loopback_host(oh) || oh == bind_host || same_as_host) {
+            return false;
+        }
+    }
+    true
+}
+
+fn respond_403(stream: &mut TcpStream, msg: &str) -> Result<(), String> {
+    let body = msg.as_bytes();
+    let head = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream.write_all(body).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
