@@ -6,6 +6,9 @@ import { useState } from 'react';
 import type { RepoItem } from '../repo-types';
 import { loadDive } from './dive-io';
 import { DivePanel } from './DivePanel';
+import { runDive } from './dive-run';
+import { buildDiveHtml } from './dive-export';
+import { saveTextFile } from '../tauri-io';
 import { DIVE_SCHEMA_VERSION, type Dive } from './dive-types';
 
 interface DiveModalProps {
@@ -47,12 +50,37 @@ export function DiveModal({ item, workspacePath, theme, onClose, onSave }: DiveM
     const canRun = sql.trim().length > 0;
     const headTitle = editing ? (isCreate ? 'New dive' : 'Edit dive') : item?.name ?? 'Dive';
 
+    const [exporting, setExporting] = useState(false);
+    const exportHtml = async () => {
+        const d = existing ?? (canRun ? draft() : null);
+        if (!d) return;
+        setExporting(true);
+        try {
+            const res = await runDive(d, workspacePath);
+            const html = buildDiveHtml(d, res.columns, res.rows);
+            const slug = (d.title || 'dive').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'dive';
+            await saveTextFile(`${slug}.html`, html, [{ name: 'HTML', extensions: ['html'] }]);
+        } catch (e) {
+            console.error('dive export failed', e);
+        } finally {
+            setExporting(false);
+        }
+    };
+
     return (
         <div className="dive-modal-backdrop" onClick={onClose}>
             <div className="dive-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="dive-modal-head">
                     <span>{headTitle}</span>
                     <div className="dive-modal-actions">
+                        <button
+                            className="dive-btn"
+                            onClick={() => void exportHtml()}
+                            disabled={exporting || (!existing && !canRun)}
+                            title="Export a self-contained HTML snapshot"
+                        >
+                            {exporting ? 'Exporting…' : 'Export HTML'}
+                        </button>
                         {!editing ? (
                             <button className="dive-btn" onClick={() => setEditing(true)}>
                                 Edit
