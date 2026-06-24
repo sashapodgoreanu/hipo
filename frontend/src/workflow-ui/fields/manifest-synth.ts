@@ -86,6 +86,38 @@ const writeModeField = (): Field => ({
     ],
 });
 
+// Validate-before-insert / dead-letter for DB sinks (#101): split rows that
+// cannot be cast to the declared column types off to a file instead of failing
+// the whole load. Needs a declared schema on the node.
+const deadLetterFields = (): Field[] => [
+    {
+        key: 'validateBeforeInsert',
+        label: 'Validate before insert (dead-letter bad rows)',
+        kind: 'bool',
+        defaultValue: false,
+        description:
+            'Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node.',
+    },
+    {
+        key: 'deadLetterPath',
+        label: 'Dead-letter file',
+        kind: 'text',
+        placeholder: 'rejected.parquet',
+        description: 'Where rejected rows go when Validate before insert is on. Required when it is enabled.',
+    },
+    {
+        key: 'deadLetterFormat',
+        label: 'Dead-letter format',
+        kind: 'select',
+        defaultValue: 'parquet',
+        options: [
+            { label: 'Parquet', value: 'parquet' },
+            { label: 'CSV', value: 'csv' },
+            { label: 'JSON', value: 'json' },
+        ],
+    },
+];
+
 // Write-mode + conflict-columns for driver DB sinks that support MERGE upsert
 // (SQL Server, Oracle, Snowflake). Upsert MERGEs on the conflict columns.
 const upsertModeFields = (supportsMerge = false): Field[] => [
@@ -335,6 +367,7 @@ const dbWriteFields = (): Field[] => [
         defaultValue: 'delete',
         description: 'The value in the delete flag column that marks a row for deletion (default "delete").',
     },
+    ...deadLetterFields(),
 ];
 
 // Synthesizers ---------------------------------------------------------
@@ -1233,6 +1266,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'orders' },
                     ...upsertModeFields(true),
+                    ...deadLetterFields(),
                 ],
             },
         ], 'upstream');

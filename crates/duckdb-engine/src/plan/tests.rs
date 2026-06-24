@@ -2775,6 +2775,7 @@
             &serde_json::json!({"tableName": "t", "mode": "appnd"}),
             "v",
             &[],
+            None,
         )
         .unwrap_err();
         assert!(
@@ -2788,6 +2789,7 @@
             &serde_json::json!({"tableName": "t", "mode": "overwrite"}),
             "v",
             &[],
+            None,
         )
         .unwrap();
         assert!(ok.contains("DROP TABLE IF EXISTS"), "overwrite stays a recreate, got: {}", ok);
@@ -2804,6 +2806,7 @@
             &serde_json::json!({"database": "my_db", "tableName": "process_ledger", "mode": "append"}),
             "v",
             &[],
+            None,
         )
         .unwrap();
         assert!(
@@ -2823,6 +2826,7 @@
             &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
             "v",
             &["k".to_string(), "a".to_string(), "b".to_string()],
+            None,
         )
         .unwrap();
         assert!(sql.contains("MERGE INTO"), "got: {}", sql);
@@ -2848,6 +2852,7 @@
             &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
             "v",
             &["k".to_string(), "a".to_string()],
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("merge"), "got: {:?}", err);
@@ -2860,6 +2865,7 @@
             &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
             "v",
             &[],
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("input columns"), "got: {:?}", err);
@@ -2875,6 +2881,7 @@
             &serde_json::json!({"tableName": "t", "mode": "upsert", "conflictColumns": ["", "  "]}),
             "v",
             &[],
+            None,
         )
         .unwrap_err();
         assert!(

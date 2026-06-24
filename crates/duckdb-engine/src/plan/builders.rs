@@ -6689,6 +6689,18 @@ pub(crate) fn build_excel_source(
             let id = quote_ident(&c.name);
             let fmt = c.format.as_deref().filter(|s| !s.is_empty());
             match (fmt, c.data_type) {
+                // #104: Excel-native serial dates store a number = days since
+                // 1899-12-30 (the base accounts for Excel's 1900 leap-year bug).
+                // Set the column's format to "excel" to convert the serial to a
+                // real date/timestamp instead of parsing it as text.
+                (Some(f), DataType::Timestamp) if f.eq_ignore_ascii_case("excel") => format!(
+                    "(TIMESTAMP '1899-12-30' + try_cast({id} AS DOUBLE) * INTERVAL 1 DAY) AS {id}",
+                    id = id
+                ),
+                (Some(f), DataType::Date) if f.eq_ignore_ascii_case("excel") => format!(
+                    "(TIMESTAMP '1899-12-30' + try_cast({id} AS DOUBLE) * INTERVAL 1 DAY)::DATE AS {id}",
+                    id = id
+                ),
                 (Some(fmt), DataType::Date) => {
                     format!("try_strptime({id}, '{f}')::DATE AS {id}", id = id, f = sql_escape(fmt))
                 }
@@ -6859,11 +6871,74 @@ pub(crate) fn build_cloud_source(
 
 // ---- Sinks --------------------------------------------------------------
 
+/// Validate-before-insert / dead-letter for DB sinks (#101 slice 6). When the
+/// sink has `validateBeforeInsert` on AND a typed declared schema, build a
+/// prelude that splits the upstream into rows that cleanly cast to the declared
+/// types and rows that don't: the bad rows are COPYed to `deadLetterPath` (with
+/// a `__rejected_at` stamp) and the sink then reads only the clean rows. Returns
+/// (effective_from_view, prelude_sql); when off it returns (from_view, "") so the
+/// sink SQL is byte-identical to before. DuckDB runs this against the ATTACHed
+/// target in the same session, so no new execution path is needed.
+fn dead_letter_prelude(
+    props: &JsonValue,
+    schema: Option<&[duckle_metadata::Column]>,
+    from_view: &str,
+) -> Result<(String, String), EngineError> {
+    if !props
+        .get("validateBeforeInsert")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok((from_view.to_string(), String::new()));
+    }
+    let cols = match schema.filter(|c| !c.is_empty()) {
+        Some(c) => c,
+        None => return Ok((from_view.to_string(), String::new())),
+    };
+    // A row is bad if any typed column's raw value won't cast to its declared
+    // type (reuses the CSV reject predicate; text columns can never fail).
+    let fails: Vec<String> = cols
+        .iter()
+        .filter_map(|c| csv_typed_col_exprs(c).map(|(f, _)| f))
+        .collect();
+    if fails.is_empty() {
+        return Ok((from_view.to_string(), String::new()));
+    }
+    let path = string_prop(props, "deadLetterPath")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            EngineError::Config(
+                "validate-before-insert needs a dead-letter path to write rejected rows to".into(),
+            )
+        })?;
+    let fmt = string_prop(props, "deadLetterFormat").unwrap_or_else(|| "parquet".into());
+    let opts = match fmt.to_ascii_lowercase().as_str() {
+        "csv" => "(FORMAT CSV, HEADER)",
+        "json" => "(FORMAT JSON)",
+        _ => "(FORMAT PARQUET, COMPRESSION 'ZSTD')",
+    };
+    let staged = format!("{}__dlq_stg", from_view);
+    let valid = format!("{}__dlq_ok", from_view);
+    let prelude = format!(
+        "CREATE OR REPLACE TEMP VIEW {staged} AS SELECT *, ({fails}) AS __dlq_bad FROM {from}; \
+         COPY (SELECT * EXCLUDE (__dlq_bad), CURRENT_TIMESTAMP AS __rejected_at FROM {staged} WHERE __dlq_bad) TO '{path}' {opts}; \
+         CREATE OR REPLACE TEMP VIEW {valid} AS SELECT * EXCLUDE (__dlq_bad) FROM {staged} WHERE NOT __dlq_bad; ",
+        staged = quote_ident(&staged),
+        valid = quote_ident(&valid),
+        from = quote_ident(from_view),
+        fails = fails.join(" OR "),
+        path = sql_escape(&path.replace('\\', "/")),
+        opts = opts,
+    );
+    Ok((valid, prelude))
+}
+
 pub(crate) fn build_sink_sql(
     component_id: &str,
     props: &JsonValue,
     from_view: &str,
     cols: &[String],
+    schema: Option<&[duckle_metadata::Column]>,
 ) -> Result<String, EngineError> {
     match component_id {
         "snk.csv" => Ok(build_csv_sink(props, from_view)),
@@ -6877,14 +6952,20 @@ pub(crate) fn build_sink_sql(
         "snk.parquet" => Ok(build_parquet_sink(props, from_view)),
         "snk.json" | "snk.jsonl" => Ok(build_json_sink(props, from_view)),
         "snk.s3" | "snk.gcs" | "snk.azureblob" => build_cloud_sink(props, from_view),
-        "snk.sqlite" | "snk.duckdb" => build_db_sink(component_id, props, from_view, cols),
+        "snk.sqlite" | "snk.duckdb" => {
+            let (eff_from, prelude) = dead_letter_prelude(props, schema, from_view)?;
+            Ok(format!("{}{}", prelude, build_db_sink(component_id, props, &eff_from, cols)?))
+        }
         "snk.postgres" | "snk.cockroach" | "snk.mysql" | "snk.mariadb"
         | "snk.motherduck" | "snk.ducklake" | "snk.pgvector"
         | "snk.redshift" | "snk.bigquery" | "snk.quack"
         // #86: SQL Server / Synapse bulk path via the DuckDB mssql extension
         // (ATTACH + COPY/INSERT). Reached only in the bulk path; bulk=false
         // routes to the tiberius driver instead (see plan/mod.rs).
-        | "snk.sqlserver" | "snk.synapse" => build_relational_sink(component_id, props, from_view, cols),
+        | "snk.sqlserver" | "snk.synapse" => {
+            let (eff_from, prelude) = dead_letter_prelude(props, schema, from_view)?;
+            Ok(format!("{}{}", prelude, build_relational_sink(component_id, props, &eff_from, cols)?))
+        }
         "snk.excel" => Ok(build_excel_sink(props, from_view)),
         "snk.spatial" => Ok(build_spatial_sink(props, from_view)),
         "snk.iceberg" => Ok(build_iceberg_sink(props, from_view)),

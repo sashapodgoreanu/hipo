@@ -26667,6 +26667,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -26822,6 +26856,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -26977,6 +27045,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -27132,6 +27234,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -27572,6 +27708,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -27703,6 +27873,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -27945,6 +28149,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -28333,6 +28571,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }
@@ -29082,6 +29354,40 @@
                 "kind": "text",
                 "defaultValue": "delete",
                 "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
+              },
+              {
+                "key": "validateBeforeInsert",
+                "label": "Validate before insert (dead-letter bad rows)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
+              },
+              {
+                "key": "deadLetterPath",
+                "label": "Dead-letter file",
+                "kind": "text",
+                "placeholder": "rejected.parquet",
+                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
+              },
+              {
+                "key": "deadLetterFormat",
+                "label": "Dead-letter format",
+                "kind": "select",
+                "defaultValue": "parquet",
+                "options": [
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           }

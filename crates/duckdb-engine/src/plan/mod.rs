@@ -1648,7 +1648,7 @@ fn build_stage(
                 // still gives the merge its input column list.
                 .unwrap_or_else(|| upstream_cols.to_vec());
             (
-                format!("{}{}", attach, build_sink_sql(component_id, &props, from_view, &sink_cols)?),
+                format!("{}{}", attach, build_sink_sql(component_id, &props, from_view, &sink_cols, node.data.schema.as_deref())?),
                 StageKind::Sink,
                 Some(from_view.to_string()),
             )
