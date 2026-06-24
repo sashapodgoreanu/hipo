@@ -123,12 +123,18 @@ Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 ## What's new in v0.5.1
 
-A self-hosted web editor, two new connectors, external AI endpoints, and a refreshed brand.
+Local-first dives + dashboards, a column-lineage viewer, record-level error traceback, a self-hosted web editor, two new connectors, external AI endpoints, and a refreshed brand.
 
-- **Self-hosted web editor (#75).** Run the full Duckle editor in your browser, not just the management console: `docker compose -f docker-compose.web.yml up` (or `duckle serve`) serves the drag-and-drop canvas over HTTP. Build and run pipelines from the browser with live per-node progress over SSE, run-to-here (partial runs), and a server-side file browser to pick workspace files. Pipelines stay portable via `${workspace}`. Single-tenant, local-first, no auth - put it behind a trusted network.
+- **Dives + dashboards.** Build local-first, live-querying, shareable data views, and stitch several into a multi-chart dashboard. Ask a plain-language question and have a chart generated for you, export any dive as a self-contained HTML file, and open standalone `/dive/<id>` and `/dash/<id>` share pages. A top-bar **Dives** gallery lists everything you have built.
+- **Column lineage viewer.** A top-bar **Lineage** button shows, per node, each output column traced back to the source column(s) it derives from.
+- **Record-level error traceback.** Every failed stage now reports the exact compiled SQL plus the DuckDB message (in the Run view and the NDJSON run log), so any component's failure is debuggable.
+- **DB-sink dead-letter (validate-before-insert).** Split rows that do not match the declared column types to a dead-letter file (parquet / csv / json) and insert only the clean rows.
+- **Self-hosted web editor (#75).** Run the full Duckle editor in your browser, not just the management console: `docker compose -f docker-compose.web.yml up` (or `duckle serve`) serves the drag-and-drop canvas over HTTP. Build and run pipelines from the browser with live per-node progress over SSE, run-to-here (partial runs), and a server-side file browser to pick workspace files. Pipelines stay portable via `${workspace}`. Single-tenant, local-first, no auth - put it behind a trusted network. State-changing routes are now cross-origin / DNS-rebind hardened.
 - **GizmoSQL connector.** `src.gizmosql` / `snk.gizmosql` talk to GizmoSQL over a clean-room Arrow Flight SQL client.
 - **Qlik QVD read + write (#88).** `src.qvd` reads Qlik QVD files and `snk.qvd` writes them - clean-room, no Qlik runtime required.
 - **External AI endpoints for Duckie (#92).** Point the Duckie assistant at any OpenAI-compatible endpoint; plus workspace reload-from-disk and MCP `create_pipeline` / `update_pipeline`.
+- **Source + SQL fixes.** `src.json` gains a "skip malformed records" toggle and a working Format selector (auto / array / JSON Lines / object); CSV surfaces `ignoreErrors` and `nullPadding` toggles in the GUI; SQL nodes get a raw-SQL mode that runs verbatim SQL (a leading `WITH` / multiple CTEs / UNIONs) with no input-CTE wrapper; and a date / timestamp column's format can be set to "excel" to convert Excel day-serials correctly.
+- **UI polish.** A resizable right properties panel, a node-label tooltip (no longer hidden by the collapse button), an always-reachable data-preview horizontal scrollbar, and clearer per-stage memory-limit guidance.
 - **In-app review prompt.** A light, dismissible nudge to review Duckle once you have used it a while.
 - **New logo + brand.** A non-circular three-node pipeline mark and a refreshed "Duckle" wordmark across the app, web editor, icons, and README.
 
@@ -252,7 +258,9 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Desktop** | System clipboard (pure-Rust `arboard`, auto-detects JSON-array shape) | Available |
 | **Repos** | Git (commit log or file tree from a local working copy; shells out to system `git` CLI) | Available |
 
-For CSV / TSV sources, the **Schema** panel accepts an optional per-column **Format** (a `strptime` token string such as `%d/%m/%Y`) on Date and Timestamp columns. Several date columns can each parse a different layout in one read - the column is read as text and re-parsed with its own format, working around DuckDB's single global date format. A value that does not match its format becomes null rather than failing the run.
+For CSV / TSV sources, the **Schema** panel accepts an optional per-column **Format** (a `strptime` token string such as `%d/%m/%Y`) on Date and Timestamp columns. Several date columns can each parse a different layout in one read - the column is read as text and re-parsed with its own format, working around DuckDB's single global date format. A value that does not match its format becomes null rather than failing the run. Set a Date or Timestamp column's Format to `excel` to convert Excel day-serials correctly. CSV sources also surface `ignoreErrors` (skip unparseable rows) and `nullPadding` (pad short rows with nulls) toggles in the GUI.
+
+For JSON sources, a **Format** selector picks how the file is read (auto / array / JSON Lines / object), and a **skip malformed records** toggle drops records that fail to parse instead of failing the run.
 
 ### Transforms (126 available)
 
@@ -300,7 +308,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 | Capability | What it does |
 |---|---|
-| **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, result runs as a real materialized stage |
+| **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, result runs as a real materialized stage. A **raw SQL** mode runs verbatim SQL (a leading `WITH` / multiple CTEs / UNIONs) with no input-CTE wrapper |
 | **SQL Template** | Parameterized SQL with `${context.var}` substitution |
 | **SQL Routines** | Reusable, named SQL saved in the workspace |
 | **dbt** | Run a dbt project (or one inline model) as a node, against the pipeline's DuckDB. Wire several upstream sources in and the project reads them all via dbt `sources`, so one project models across Postgres, MySQL, files, and lakes at once. Powered by the dbt Fusion engine, fetched free at first launch (Apache dbt-core fallback); no Python setup. |
@@ -330,6 +338,8 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Streaming** | Pulsar, Kinesis | Planned |
 | **Vector / AI databases** | pgvector, Pinecone (`/vectors/upsert`), Qdrant (`/points` PUT), Weaviate (`/v1/batch/objects`), Milvus (`/v1/vector/insert`) | Available |
 | **Vector / AI databases** | Chroma, LanceDB | Preview (need vendor SDK) |
+
+Database sinks support an optional **dead-letter (validate-before-insert)** step: rows that do not match the declared column types are split off to a dead-letter file (parquet / csv / json) and only the clean rows are inserted.
 
 ### Control flow (19 available)
 
@@ -370,6 +380,9 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 | Capability | What it does |
 |---|---|
 | **Run feedback** | Streaming run events light nodes up stage by stage, with per-node row counts, real mid-query cancel, and run history. |
+| **Error traceback** | A failed stage reports the exact compiled SQL plus the underlying DuckDB message, in both the Run view and the NDJSON run log, so any component's failure is debuggable. |
+| **Column lineage** | A top-bar **Lineage** button shows, per node, each output column traced back to the source column(s) it derives from. |
+| **Dives + dashboards** | Local-first, live-querying, shareable data views, stitched into multi-chart dashboards. Generate a chart from a plain-language question, export a dive to a self-contained HTML file, open standalone `/dive/<id>` and `/dash/<id>` share pages, and find everything in the top-bar **Dives** gallery. |
 | **Run logs** | Every run writes component-level NDJSON to `<workspace>/logs/<pipeline name>/runtime.log` (start/finish per stage, row counts, durations, `ctl.log` / `ctl.warn` / `ctl.die` messages). Tail it straight into Splunk or Dynatrace. |
 | **Schedules** | Cron, fixed-interval, and file-watch triggers, driven by an in-process scheduler. |
 | **Context variables** | Per-environment variables; bind any field to one via a Manual / Context dropdown, or reference `${var}` inline. Resolved at run time. |
@@ -403,7 +416,7 @@ Duckle ships a thin shell and installs its engines on first launch.
 
 | Engine | Role | Status |
 |---|---|---|
-| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.3** (latest stable). | Working |
+| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.3** (latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
 | **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB; runs entirely offline once installed. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
 | **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
