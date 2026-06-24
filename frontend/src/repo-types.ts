@@ -5,7 +5,8 @@ export type RepoItemType =
     | 'connection'
     | 'context'
     | 'routine'
-    | 'doc';
+    | 'doc'
+    | 'dive';
 
 // ---- Per-type payloads ----
 
