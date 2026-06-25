@@ -304,7 +304,7 @@ export default function PropertiesPanel({
                         aria-hidden="true"
                     />
                     <span className="properties-kind">{KIND_LABEL[kind] ?? kind}</span>
-                    <span className="properties-id">#{selected.id}</span>
+                    <span className="properties-id" title={selected.id}>#{selected.id}</span>
                 </div>
                 <input
                     ref={nameInputRef}

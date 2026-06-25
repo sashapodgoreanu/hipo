@@ -2025,6 +2025,9 @@ textarea:focus-visible {
     gap: 8px;
     font-size: 11px;
     margin-bottom: 8px;
+    /* #102: reserve room on the right so the node id is not slid under / clipped
+       by the absolutely-positioned collapse toggle (right: 8px). */
+    padding-right: 26px;
 }
 
 .properties-kind-dot {
@@ -2046,6 +2049,13 @@ textarea:focus-visible {
     font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
     margin-left: auto;
     font-size: 10px;
+    /* Truncate a long id with an ellipsis (full value on hover via title=) rather
+       than letting it overflow under the collapse toggle (#102). */
+    min-width: 0;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .properties-name-input {
