@@ -81,7 +81,9 @@ test:linux:
     - cargo build -p duckle-runner
     - mkdir -p apps/desktop/bin
     - cp target/debug/duckle-runner apps/desktop/bin/duckle-runner
-    - cargo test --workspace
+    # duckle-lance (LanceDB sidecar) needs protoc + pulls DataFusion; built
+    # separately in the release/bundle job, excluded from the routine test.
+    - cargo test --workspace --exclude duckle-lance
   rules:
     - if: $CI_PIPELINE_SOURCE == "push"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -105,7 +107,7 @@ style:clippy:
   allow_failure: true
   script:
     - rustup component add clippy
-    - cargo clippy --workspace --all-targets
+    - cargo clippy --workspace --all-targets --exclude duckle-lance
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"

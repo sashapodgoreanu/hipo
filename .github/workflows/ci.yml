@@ -104,7 +104,10 @@ jobs:
           fi
 
       - name: Test
-        run: cargo test --workspace
+        # Exclude duckle-lance: the LanceDB sidecar pulls lancedb + DataFusion and
+        # needs protoc to build. It is built separately (with protoc) in the
+        # release/bundle job, so the routine workspace test stays fast + toolchain-free.
+        run: cargo test --workspace --exclude duckle-lance
 
       # Style checks are informational - they report problems without
       # failing the build.
@@ -113,7 +116,7 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         continue-on-error: true
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets --exclude duckle-lance
 
   # Smoke build of the desktop release binary - the exact same command
   # the release workflow runs. Catches feature-flag regressions like
