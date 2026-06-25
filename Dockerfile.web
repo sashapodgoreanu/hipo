@@ -29,10 +29,12 @@ ENV CARGO_NET_RETRY=10 \
     CARGO_HTTP_LOW_SPEED_LIMIT=0 \
     CARGO_HTTP_TIMEOUT=600
 WORKDIR /app
-# protoc is needed to build the LanceDB / Vortex sidecar (duckle-lance). Pin the
-# same protoc used elsewhere so lance's proto codegen is consistent.
+# Build deps for the LanceDB / Vortex sidecar (duckle-lance):
+#  - protoc: lance's proto codegen (pinned to match local builds).
+#  - clang + libclang: bindgen, pulled transitively (custom-labels) when the
+#    sidecar's crates join the build set.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates unzip \
+    && apt-get install -y --no-install-recommends curl ca-certificates unzip clang libclang-dev \
     && curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v28.3/protoc-28.3-linux-x86_64.zip \
     && unzip -o /tmp/protoc.zip -d /usr/local \
     && rm /tmp/protoc.zip && rm -rf /var/lib/apt/lists/*
