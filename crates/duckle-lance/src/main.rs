@@ -114,6 +114,110 @@ async fn run_write(args: HashMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Build a Vortex session with the standard array / layout / scalar / runtime
+/// components + default encodings, matching what the file reader & writer need.
+fn vortex_session() -> vortex::session::VortexSession {
+    use vortex::array::scalar_fn::session::ScalarFnSession;
+    use vortex::array::session::ArraySession;
+    use vortex::io::session::RuntimeSession;
+    use vortex::layout::session::LayoutSession;
+    use vortex::session::VortexSession;
+    let session = VortexSession::empty()
+        .with::<ArraySession>()
+        .with::<LayoutSession>()
+        .with::<ScalarFnSession>()
+        .with::<RuntimeSession>();
+    vortex::file::register_default_encodings(&session);
+    session
+}
+
+/// read-vortex --path <in.vortex> --out <file.parquet>
+/// Reads a Vortex file into arrow RecordBatches and writes them to Parquet for
+/// the engine to ingest via DuckDB read_parquet.
+#[allow(deprecated)] // into_arrow_preferred is the stable conversion path in 0.75
+async fn run_read_vortex(args: HashMap<String, String>) -> Result<(), String> {
+    use futures::StreamExt;
+    use vortex::array::arrow::IntoArrowArray;
+    use vortex::file::OpenOptionsSessionExt;
+    let path = args.get("path").ok_or("read-vortex: --path required")?;
+    let out = args.get("out").ok_or("read-vortex: --out required")?;
+    let session = vortex_session();
+    let file = session
+        .open_options()
+        .open_path(path)
+        .await
+        .map_err(|e| format!("open {path}: {e}"))?;
+    let stream = file
+        .scan()
+        .map_err(|e| format!("scan: {e}"))?
+        .into_array_stream()
+        .map_err(|e| format!("scan stream: {e}"))?;
+    futures::pin_mut!(stream);
+    let mut batches: Vec<RecordBatch> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let arr = chunk.map_err(|e| format!("read chunk: {e}"))?;
+        let arrow = arr
+            .into_arrow_preferred()
+            .map_err(|e| format!("vortex -> arrow: {e}"))?;
+        let st = arrow
+            .as_any()
+            .downcast_ref::<arrow_array::StructArray>()
+            .ok_or("read-vortex: top-level array is not a struct")?;
+        batches.push(RecordBatch::from(st.clone()));
+    }
+    let schema = batches
+        .first()
+        .map(|b| b.schema())
+        .ok_or("read-vortex: file has no data/schema")?;
+    let f = std::fs::File::create(out).map_err(|e| format!("create {out}: {e}"))?;
+    let props = parquet::file::properties::WriterProperties::builder().build();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(f, schema, Some(props))
+        .map_err(|e| format!("parquet writer: {e}"))?;
+    let mut rows = 0u64;
+    for b in &batches {
+        rows += b.num_rows() as u64;
+        writer.write(b).map_err(|e| format!("write batch: {e}"))?;
+    }
+    writer.close().map_err(|e| format!("close parquet: {e}"))?;
+    eprintln!("duckle-lance: read {rows} rows from {path} (vortex)");
+    Ok(())
+}
+
+/// write-vortex --in <file.parquet> --path <out.vortex>
+/// Reads the Parquet file the engine produced and writes it as a Vortex file.
+async fn run_write_vortex(args: HashMap<String, String>) -> Result<(), String> {
+    use vortex::array::arrow::FromArrowArray;
+    use vortex::array::ArrayRef;
+    use vortex::buffer::ByteBufferMut;
+    use vortex::file::WriteOptionsSessionExt;
+    let input = args.get("in").ok_or("write-vortex: --in required")?;
+    let path = args.get("path").ok_or("write-vortex: --path required")?;
+    let f = std::fs::File::open(input).map_err(|e| format!("open {input}: {e}"))?;
+    let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(f)
+        .map_err(|e| format!("parquet reader: {e}"))?;
+    let schema = builder.schema().clone();
+    let reader = builder.build().map_err(|e| format!("build reader: {e}"))?;
+    let batches: Vec<RecordBatch> = reader
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("read parquet: {e}"))?;
+    let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
+    // Merge into one RecordBatch -> Vortex array (a struct) -> array stream.
+    let merged = arrow_select::concat::concat_batches(&schema, &batches)
+        .map_err(|e| format!("concat batches: {e}"))?;
+    let array = ArrayRef::from_arrow(merged, false)
+        .map_err(|e| format!("arrow -> vortex: {e}"))?;
+    let session = vortex_session();
+    let mut buf = ByteBufferMut::empty();
+    session
+        .write_options()
+        .write(&mut buf, array.to_array_stream())
+        .await
+        .map_err(|e| format!("write vortex: {e}"))?;
+    std::fs::write(path, buf.as_slice()).map_err(|e| format!("write {path}: {e}"))?;
+    eprintln!("duckle-lance: wrote {rows} rows to {path} (vortex)");
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let (cmd, args) = parse_args();
     let rt = match tokio::runtime::Runtime::new() {
@@ -126,7 +230,11 @@ fn main() -> ExitCode {
     let res = match cmd.as_str() {
         "read" => rt.block_on(run_read(args)),
         "write" => rt.block_on(run_write(args)),
-        other => Err(format!("unknown command {other:?} (use read|write)")),
+        "read-vortex" => rt.block_on(run_read_vortex(args)),
+        "write-vortex" => rt.block_on(run_write_vortex(args)),
+        other => Err(format!(
+            "unknown command {other:?} (use read|write|read-vortex|write-vortex)"
+        )),
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,

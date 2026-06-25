@@ -1097,6 +1097,23 @@ pub struct LanceSinkSpec {
     pub region: Option<String>,
 }
 
+/// src.vortex: read a Vortex file (#111) via the duckle-lance sidecar, which owns
+/// the vortex crate and bridges through a Parquet temp file the engine ingests.
+#[derive(Debug, Clone)]
+pub struct VortexSourceSpec {
+    pub node_id: String,
+    /// Path to the .vortex file.
+    pub path: String,
+}
+
+/// snk.vortex: write the upstream rows to a Vortex file via the sidecar (the
+/// engine COPYs the upstream view to a Parquet temp file the sidecar reads).
+#[derive(Debug, Clone)]
+pub struct VortexSinkSpec {
+    pub from_view: String,
+    pub path: String,
+}
+
 /// Elasticsearch / OpenSearch pagination strategy.
 #[derive(Debug, Clone)]
 pub enum ElasticPagination {

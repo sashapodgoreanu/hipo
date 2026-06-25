@@ -654,6 +654,27 @@ function defaultDescription(comp: ComponentDef): string {
 }
 
 function synthFileSource(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'src.vortex') {
+        // Vortex is a binary columnar file read via the duckle-lance sidecar;
+        // just a path (no encoding/glob/format options).
+        return base(comp, [
+            {
+                label: 'Vortex file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Path',
+                        kind: 'file-path',
+                        required: true,
+                        filters: [
+                            { name: 'Vortex', extensions: ['vortex'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                    },
+                ],
+            },
+        ]);
+    }
     const ext = comp.id.split('.').pop() ?? 'txt';
     // The component id rarely matches the on-disk extension (src.excel ->
     // .xlsx, not ".excel"; issue #18). Map the known mismatches; everything
@@ -712,6 +733,26 @@ function partitionBySection(): FormSection {
 }
 
 function synthFileSink(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'snk.vortex') {
+        // Vortex output file written via the duckle-lance sidecar; just a path.
+        return base(comp, [
+            {
+                label: 'Vortex file',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Output path',
+                        kind: 'file-path',
+                        required: true,
+                        filters: [
+                            { name: 'Vortex', extensions: ['vortex'] },
+                            { name: 'All files', extensions: ['*'] },
+                        ],
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'snk.ftp') {
         // File-transfer sink (write-side mirror of src.ftp). The view is
         // written to a local temp file in `format`, then uploaded to

@@ -119,6 +119,8 @@ pub enum RuntimeSpec {
     MongoSource(MongoSourceSpec),
     LanceSink(LanceSinkSpec),
     LanceSource(LanceSourceSpec),
+    VortexSink(VortexSinkSpec),
+    VortexSource(VortexSourceSpec),
     ClickhouseSink(ClickHouseSinkSpec),
     ClickhouseSource(ClickHouseSourceSpec),
     SqlserverSink(SqlServerSinkSpec),
@@ -720,6 +722,8 @@ fn build_stage(
     let mut mongo_source: Option<MongoSourceSpec> = None;
     let mut lance_sink: Option<LanceSinkSpec> = None;
     let mut lance_source: Option<LanceSourceSpec> = None;
+    let mut vortex_sink: Option<VortexSinkSpec> = None;
+    let mut vortex_source: Option<VortexSourceSpec> = None;
     let mut clickhouse_sink: Option<ClickHouseSinkSpec> = None;
     let mut clickhouse_source: Option<ClickHouseSourceSpec> = None;
     let mut sqlserver_sink: Option<SqlServerSinkSpec> = None;
@@ -1230,6 +1234,16 @@ fn build_stage(
             mode: string_prop(&props, "mode").unwrap_or_else(|| "create".into()),
             api_key: string_prop(&props, "apiKey").filter(|s| !s.is_empty()),
             region: string_prop(&props, "region").filter(|s| !s.is_empty()),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.vortex" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        vortex_sink = Some(VortexSinkSpec {
+            from_view: from_view.to_string(),
+            path,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.snowflake" {
@@ -2745,6 +2759,15 @@ fn build_stage(
             limit: props.get("limit").and_then(|v| v.as_i64()).filter(|n| *n > 0),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.vortex" {
+        let path = string_prop(&props, "path")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?;
+        vortex_source = Some(VortexSourceSpec {
+            node_id: node.id.clone(),
+            path,
+        });
+        (String::new(), StageKind::View, None)
     } else if matches!(component_id, "src.graphql" | "src.linear" | "src.monday") {
         // GraphQL source + Linear alias: POST {query, variables} to
         // the endpoint, walk the response data path. Rides
@@ -3596,6 +3619,8 @@ fn build_stage(
         .or_else(|| mongo_source.map(RuntimeSpec::MongoSource))
         .or_else(|| lance_sink.map(RuntimeSpec::LanceSink))
         .or_else(|| lance_source.map(RuntimeSpec::LanceSource))
+        .or_else(|| vortex_sink.map(RuntimeSpec::VortexSink))
+        .or_else(|| vortex_source.map(RuntimeSpec::VortexSource))
         .or_else(|| clickhouse_sink.map(RuntimeSpec::ClickhouseSink))
         .or_else(|| clickhouse_source.map(RuntimeSpec::ClickhouseSource))
         .or_else(|| sqlserver_sink.map(RuntimeSpec::SqlserverSink))
