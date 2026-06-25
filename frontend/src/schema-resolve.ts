@@ -192,6 +192,29 @@ function computeNodeSchema(
         return up;
     }
 
+    // AI transforms (xf.ai.*) - 3-segment ids, so they miss the generic rule
+    // above. Keep the input columns and add whatever each node emits.
+    if (id?.startsWith('xf.ai.')) {
+        const up = upstream();
+        const out = props.outputColumn as string | undefined;
+        if (id === 'xf.ai.chunk') {
+            // explode mode adds the chunk text plus index/count metadata
+            const name = out || 'chunk';
+            const cols = [...up];
+            if (!cols.some(c => c.name === name)) cols.push({ name, type: 'string', nullable: true });
+            for (const meta of ['chunk_index', 'chunk_count']) {
+                if (!cols.some(c => c.name === meta)) cols.push({ name: meta, type: 'int64', nullable: true });
+            }
+            return cols;
+        }
+        // pii / embed / classify / llm: optional new output column (else in-place).
+        if (out && !up.some(c => c.name === out)) {
+            const type: DataType = id === 'xf.ai.embed' ? 'json' : 'string';
+            return [...up, { name: out, type, nullable: true }];
+        }
+        return up;
+    }
+
     // Custom code - fall back to declared schema if any, otherwise pass through
     if (id?.startsWith('code.')) {
         return node.data.schema ?? upstream();
