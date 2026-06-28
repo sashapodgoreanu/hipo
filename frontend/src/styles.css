@@ -8015,3 +8015,7 @@ html[dir='rtl'] .topbar-lang {
 .lineage-roots { display: flex; flex-wrap: wrap; gap: 6px; }
 .lineage-root { background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; font-family: Consolas, monospace; font-size: 12px; color: var(--text-1); }
 .lineage-none { color: var(--text-2); }
+.lineage-tabs { display: flex; gap: 4px; margin: 2px 0 10px; }
+.lineage-tab { background: transparent; border: 1px solid var(--border); border-radius: 7px; padding: 4px 14px; font-size: 13px; font-weight: 550; color: var(--text-2); cursor: pointer; }
+.lineage-tab:hover { color: var(--text-1); }
+.lineage-tab-active { background: var(--bg-2); color: var(--text-1); border-color: var(--accent, var(--border)); }
