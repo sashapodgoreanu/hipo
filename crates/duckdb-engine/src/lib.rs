@@ -1843,6 +1843,23 @@ impl DuckdbEngine {
         let rows = arrays.get(1).cloned().unwrap_or_default();
         Ok(QueryResult { columns, rows })
     }
+
+    /// Like [`Engine::query`] but opens `db` as the default catalog for the
+    /// query (`duckdb <db> -json -c ...`), so the SQL can name the database's own
+    /// tables (`SELECT * FROM t`, `duckdb_tables()`). Read-only: no run_lock, no
+    /// temp db. Used to inspect a branch database file.
+    pub fn query_db(&self, db: &Path, sql: &str, row_limit: usize) -> Result<QueryResult, EngineError> {
+        let s = sql.trim().trim_end_matches(';').trim();
+        let combined = format!("DESCRIBE ({s}); SELECT * FROM ({s}) LIMIT {row_limit};");
+        let out = self.run(Some(db), &combined, true)?;
+        let arrays = parse_json_arrays(&out);
+        let columns = arrays
+            .first()
+            .map(|rows| rows.iter().filter_map(parse_describe_row).collect())
+            .unwrap_or_default();
+        let rows = arrays.get(1).cloned().unwrap_or_default();
+        Ok(QueryResult { columns, rows })
+    }
 }
 
 /// Removes the temp run database (and its WAL) when dropped, plus any

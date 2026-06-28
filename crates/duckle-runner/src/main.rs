@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod branch;
 mod build;
 use duckle_duckdb_engine::context;
 mod manifest;
@@ -949,6 +950,16 @@ fn main() -> ExitCode {
     // `review` -> static review of a pipeline change (diff + compile gate).
     if std::env::args().nth(1).as_deref() == Some("review") {
         return match run_review() {
+            Ok(code) => ExitCode::from(code as u8),
+            Err(e) => {
+                eprintln!("duckle-runner: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    // `branch` -> data branches over a DuckDB database file.
+    if std::env::args().nth(1).as_deref() == Some("branch") {
+        return match branch::run() {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {
                 eprintln!("duckle-runner: {e}");
