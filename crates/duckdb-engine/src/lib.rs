@@ -392,6 +392,23 @@ impl DuckdbEngine {
                 out.insert(st.node_id.clone(), cols);
             }
         }
+        // Make sinks and pass-through nodes transparent: a node that resolved no
+        // columns of its own (a COPY sink, a pass-through view) carries through
+        // the columns + roots of its sole upstream when that upstream resolved.
+        // This lets lineage and impact reach the sink. Stages are topologically
+        // ordered, so a single forward pass also propagates through chains.
+        for st in &compiled.stages {
+            if out.contains_key(&st.node_id) || st.component_id.starts_with("src.") {
+                continue;
+            }
+            let ups = match upstreams.get(&st.node_id) {
+                Some(u) if u.len() == 1 => u,
+                _ => continue,
+            };
+            if let Some(cols) = out.get(&ups[0]).cloned() {
+                out.insert(st.node_id.clone(), cols);
+            }
+        }
         Ok(out)
     }
 

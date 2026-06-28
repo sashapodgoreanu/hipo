@@ -704,6 +704,12 @@ fn t_suggest_contracts(args: &Value) -> Result<Value, String> {
                 .and_then(|d| d.get("label"))
                 .and_then(|c| c.as_str())
                 .unwrap_or("");
+            // Sinks now appear in lineage, but tagging PII on the sink itself is
+            // self-defeating (the contract check would flag it reaching itself);
+            // PII is governed upstream (tag the source / mask before the sink).
+            if cid.starts_with("snk.") {
+                continue;
+            }
             let cols = match cols_by_node.get(id) {
                 Some(c) if !c.is_empty() => c,
                 _ => continue,
