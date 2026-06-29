@@ -774,13 +774,21 @@ fn handle(mut stream: TcpStream, state: &State) -> Result<(), String> {
                 Err(e) => respond_err(&mut stream, "400 Bad Request", &e),
             }
         }
+        ("GET", "/api/params") => match req.query.get("file") {
+            Some(f) => match discover_pipeline_params(state, f) {
+                Ok(names) => respond_json(&mut stream, &json!({ "params": names })),
+                Err(e) => respond_err(&mut stream, "404 Not Found", &e),
+            },
+            None => respond_err(&mut stream, "400 Bad Request", "missing file"),
+        },
         ("POST", "/api/run") => {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
             let file = match body.get("file").and_then(|v| v.as_str()) {
                 Some(f) => f.to_string(),
                 None => return respond_err(&mut stream, "400 Bad Request", "missing file"),
             };
-            match execute_one(state, &file, "manual") {
+            let params = parse_run_params(body.get("params"));
+            match execute_one(state, &file, "manual", &params) {
                 Ok(v) => respond_json(&mut stream, &v),
                 Err(e) => respond_err(&mut stream, "400 Bad Request", &e),
             }
@@ -1062,11 +1070,46 @@ fn save_schedule(state: &State, body: &Value) -> Result<Value, String> {
 
 // ── Execution ──
 
+/// Parse the optional `params` object from a run request into a {name: value}
+/// map, keeping only non-empty string-ish values (a blank field means "use the
+/// context default", so it is dropped rather than overriding with an empty value).
+fn parse_run_params(v: Option<&Value>) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if let Some(Value::Object(m)) = v {
+        for (k, val) in m {
+            let s = match val {
+                Value::String(s) => s.clone(),
+                Value::Null => continue,
+                other => other.to_string(),
+            };
+            if !s.is_empty() {
+                out.insert(k.clone(), s);
+            }
+        }
+    }
+    out
+}
+
+/// List the `${...}` parameters a pipeline file exposes, for the dashboard's
+/// run-parameters form. Reads the file and delegates to the engine's discovery.
+fn discover_pipeline_params(state: &State, file: &str) -> Result<Vec<String>, String> {
+    let path = resolve_in_workspace(&state.workspace, file)?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let doc: PipelineDoc =
+        serde_json::from_str(&text).map_err(|e| format!("parse {}: {}", path.display(), e))?;
+    Ok(duckle_duckdb_engine::context::discover_parameters(&doc))
+}
+
 /// Run one pipeline by its workspace-relative file path, end to end: resolve
 /// env/time placeholders (as the runner does), execute through the engine,
 /// append a run-history record, and return a result summary. Serialized by the
 /// run lock so a scheduled run never overlaps a manual one.
-fn execute_one(state: &State, file: &str, trigger: &str) -> Result<Value, String> {
+fn execute_one(
+    state: &State,
+    file: &str,
+    trigger: &str,
+    params: &HashMap<String, String>,
+) -> Result<Value, String> {
     let path = resolve_in_workspace(&state.workspace, file)?;
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
     let mut doc: PipelineDoc = serde_json::from_str(&text).map_err(|e| format!("parse {}: {}", path.display(), e))?;
@@ -1080,6 +1123,10 @@ fn execute_one(state: &State, file: &str, trigger: &str) -> Result<Value, String
     let env_file = state.workspace.join("secrets.env");
     crate::apply_env_pass(&mut doc, &state.workspace, &env_file)?;
     duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    // Per-run input parameters from the dashboard (issue #127) override the
+    // static workspace context for this run; applied before the context pass so a
+    // supplied value wins and any unset ${KEY} still resolves from the context.
+    duckle_duckdb_engine::context::apply_params(&mut doc, params);
     // Match the web cmd paths and headless `duckle-runner --pipeline`: resolve
     // ${workspace}/${projectroot} and workspace-relative file paths before run,
     // so file-loaded pipelines (manual /api/run + scheduled runs) work too.
@@ -1141,7 +1188,7 @@ fn spawn_scheduler(state: Arc<State>) {
                     if let Some(path) = pipes.get(id) {
                         let file = rel(&state.workspace, path);
                         last_fired.insert(id.clone(), now);
-                        match execute_one(&state, &file, "scheduled") {
+                        match execute_one(&state, &file, "scheduled", &HashMap::new()) {
                             Ok(v) => eprintln!(
                                 "duckle-runner: scheduled {} -> {}",
                                 id,

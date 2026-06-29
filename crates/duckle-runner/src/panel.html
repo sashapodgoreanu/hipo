@@ -331,12 +331,29 @@ function toggleJob(id){
 }
 function fillJobBody(id){
   const st=jobStats(id); const body=$('body-'+id); if(!body) return;
-  if(!st.recent.length){ body.innerHTML='<div class="muted" style="padding:10px 0">No runs yet for this pipeline.</div>'; return; }
-  body.innerHTML='<table class="mini"><thead><tr><th>Status</th><th>When</th><th>Duration</th><th>Rows</th><th>Trigger</th><th></th></tr></thead><tbody>'
-    + st.recent.map((r,i)=>`<tr><td>${pill(r.status)}</td><td>${fullTime(r.at)}</td><td>${fmtDur(r.durationMs)}</td><td>${fmtNum(r.rows)}</td><td class="muted">${esc(r.trigger||'-')}</td>`
-      + `<td><button class="btn" style="padding:3px 9px;font-size:12px" onclick="showLog('${esc(id)}','jb-${esc(id)}-${i}')">Logs</button></td></tr>`
-      + `<tr id="jb-${esc(id)}-${i}" class="hidden"><td colspan="6"><div class="logbox">loading...</div></td></tr>`).join('')
-    + '</tbody></table>';
+  const runs = !st.recent.length
+    ? '<div class="muted" style="padding:10px 0">No runs yet for this pipeline.</div>'
+    : '<table class="mini"><thead><tr><th>Status</th><th>When</th><th>Duration</th><th>Rows</th><th>Trigger</th><th></th></tr></thead><tbody>'
+      + st.recent.map((r,i)=>`<tr><td>${pill(r.status)}</td><td>${fullTime(r.at)}</td><td>${fmtDur(r.durationMs)}</td><td>${fmtNum(r.rows)}</td><td class="muted">${esc(r.trigger||'-')}</td>`
+        + `<td><button class="btn" style="padding:3px 9px;font-size:12px" onclick="showLog('${esc(id)}','jb-${esc(id)}-${i}')">Logs</button></td></tr>`
+        + `<tr id="jb-${esc(id)}-${i}" class="hidden"><td colspan="6"><div class="logbox">loading...</div></td></tr>`).join('')
+      + '</tbody></table>';
+  body.innerHTML=`<div id="params-${esc(id)}"></div>`+runs;
+  const p=PIPES.find(x=>x.id===id);
+  if(p) loadParams(p.file, id);
+}
+// Discover the pipeline's ${...} parameters and render a small form so an
+// operator can override context variables for this run (issue #127).
+async function loadParams(file, id){
+  const box=$('params-'+id); if(!box) return;
+  let names=[];
+  try{ const d=await api('/api/params?file='+encodeURIComponent(file)); names=(d&&d.params)||[]; }catch(e){}
+  if(!names.length){ box.innerHTML=''; return; }
+  box.innerHTML=`<div style="padding:10px 0;border-top:1px solid var(--line)">
+    <div style="font-weight:600;margin-bottom:6px">Run parameters <span class="muted" style="font-weight:400">(leave blank to use the context default)</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px">${names.map(n=>`<label class="muted" style="display:flex;flex-direction:column;gap:3px;font-size:12px">${esc(n)}<input type="text" data-param-name="${esc(n)}" placeholder="\${${esc(n)}}" style="font-size:13px;padding:5px 8px;min-width:170px"></label>`).join('')}</div>
+    <button class="btn primary" onclick="runJob('${esc(file)}','${esc(id)}',this)">Run with parameters</button>
+  </div>`;
 }
 
 // ── Runs ──
@@ -396,10 +413,17 @@ async function showLog(id, rowId){
     [e.ts||e.time||'', e.event||'', e.component||'', e.node_id||e.label||'', e.error||e.message||(e.rows!=null?e.rows+' rows':(e.status||''))]
       .filter(Boolean).join('  ')).join('\n');
 }
+function collectParams(id){
+  const out={}; const box=$('params-'+id); if(!box) return out;
+  box.querySelectorAll('input[data-param-name]').forEach(inp=>{
+    const v=inp.value.trim(); if(v) out[inp.getAttribute('data-param-name')]=v;
+  });
+  return out;
+}
 async function runJob(file, id, btn){
   if(btn){ btn.disabled=true; btn.textContent='Running...'; }
   try{
-    const r=await api('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file})});
+    const r=await api('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file, params:collectParams(id)})});
     if(r.error&&!r.status){ toast('Failed: '+r.error,'err'); }
     else { toast((r.name||id)+': '+(r.status==='ok'?'completed':'failed')+' in '+fmtDur(r.durationMs), r.status); }
   }catch(e){ toast('Run failed: '+e,'err'); }

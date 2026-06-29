@@ -158,6 +158,78 @@ pub fn apply_workspace_context(doc: &mut PipelineDoc, workspace: &Path) {
     }
 }
 
+/// Resolve user-supplied runtime parameters (`${KEY}` -> value) in every node
+/// property, in place. The web dashboard's "run with parameters" form sends
+/// these so an operator can override context variables for a single manual run
+/// without editing the workspace context. Apply this AFTER
+/// [`apply_time_builtins`] and BEFORE [`apply_workspace_context`] so a supplied
+/// value wins over the static context default, while any `${KEY}` left unset
+/// falls through to the normal context resolution. An unknown `${...}` is left
+/// verbatim.
+pub fn apply_params(doc: &mut PipelineDoc, params: &HashMap<String, String>) {
+    if params.is_empty() {
+        return;
+    }
+    let re = match regex::Regex::new(r"\$\{([^}]+)\}") {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+    let replace = |s: &str| -> String {
+        re.replace_all(s, |caps: &regex::Captures| match params.get(caps[1].trim()) {
+            Some(v) => v.clone(),
+            None => caps[0].to_string(),
+        })
+        .into_owned()
+    };
+    for node in &mut doc.nodes {
+        if let Some(props) = node.data.properties.as_mut() {
+            substitute_deep(props, &replace);
+        }
+    }
+}
+
+/// List the overridable `${...}` parameter names referenced anywhere in the
+/// pipeline's node properties, so a UI can offer a value for each. Excludes the
+/// date/time builtins and the `${workspace}` / `${projectroot}` path builtins
+/// (resolved automatically) and `${ENV:...}` secrets (supplied via secrets.env).
+/// Sorted and de-duplicated.
+pub fn discover_parameters(doc: &PipelineDoc) -> Vec<String> {
+    let re = match regex::Regex::new(r"\$\{([^}]+)\}") {
+        Ok(re) => re,
+        Err(_) => return Vec::new(),
+    };
+    let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for node in &doc.nodes {
+        if let Some(props) = node.data.properties.as_ref() {
+            collect_param_names(props, &re, &mut set);
+        }
+    }
+    set.into_iter().collect()
+}
+
+fn collect_param_names(
+    value: &JsonValue,
+    re: &regex::Regex,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    const BUILTINS: [&str; 7] =
+        ["date", "time", "datetime", "timestamp", "now", "workspace", "projectroot"];
+    match value {
+        JsonValue::String(s) => {
+            for caps in re.captures_iter(s) {
+                let name = caps[1].trim();
+                if name.starts_with("ENV:") || BUILTINS.contains(&name) {
+                    continue;
+                }
+                out.insert(name.to_string());
+            }
+        }
+        JsonValue::Array(a) => a.iter().for_each(|v| collect_param_names(v, re, out)),
+        JsonValue::Object(m) => m.values().for_each(|v| collect_param_names(v, re, out)),
+        _ => {}
+    }
+}
+
 /// Global context file: a workspace setting (`.duckle/settings.json`
 /// "context_file") can point at a key/value file whose entries load
 /// into the global context for every run, so `${KEY}` resolves everywhere
@@ -640,6 +712,32 @@ mod tests {
             serde_json::json!(format!("{}/data/orders.csv", root)),
             "apply_workspace_context must resolve ${{workspace}} for file-loaded pipelines"
         );
+    }
+
+    #[test]
+    fn run_params_override_and_discover() {
+        // The web dashboard discovers ${...} parameters and lets an operator
+        // override them for a single run; provided values win, blanks fall back.
+        let json = r#"{"nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"CSV","componentId":"src.csv","properties":{"path":"${workspace}/sales_${MONTH}.csv","where":"region = '${REGION}'","key":"${ENV:SECRET}","stamp":"${date}"}}}],"edges":[]}"#;
+
+        // Discovery lists MONTH + REGION but never the builtins or ENV secrets.
+        let doc: crate::PipelineDoc = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            super::discover_parameters(&doc),
+            vec!["MONTH".to_string(), "REGION".to_string()],
+        );
+
+        // Applying a param substitutes only the provided key; the rest survive
+        // for the later context / env / time passes.
+        let mut doc: crate::PipelineDoc = serde_json::from_str(json).unwrap();
+        let mut params = std::collections::HashMap::new();
+        params.insert("MONTH".to_string(), "03".to_string());
+        super::apply_params(&mut doc, &params);
+        let props = doc.nodes[0].data.properties.as_ref().unwrap();
+        assert_eq!(props["path"], serde_json::json!("${workspace}/sales_03.csv"));
+        assert_eq!(props["where"], serde_json::json!("region = '${REGION}'"));
+        assert_eq!(props["key"], serde_json::json!("${ENV:SECRET}"));
+        assert_eq!(props["stamp"], serde_json::json!("${date}"));
     }
 
     #[test]
