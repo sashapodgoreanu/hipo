@@ -179,6 +179,7 @@ export default function EditorHeader({
                 <button
                     type="button"
                     className="toolbar-icon-button"
+                    data-tour="save"
                     onClick={onSave}
                     title={t('header.saveTooltip')}
                     aria-label={t('header.save')}
