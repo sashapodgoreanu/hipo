@@ -33,6 +33,7 @@ pub mod plan;
 pub mod drift;
 pub mod qvd;
 pub mod review;
+pub mod trust;
 pub mod tls;
 pub mod watermark;
 mod connectors;

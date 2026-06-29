@@ -160,6 +160,7 @@ pub fn run() {
             cancel_pipeline,
             compile_pipeline,
             pipeline_column_lineage,
+            pipeline_trust_report,
             schedule_set_workspace,
             schedule_list,
             schedule_upsert,
@@ -486,6 +487,14 @@ fn pipeline_column_lineage(
     engine()?
         .pipeline_column_lineage(&pipeline)
         .map_err(|e| e.to_string())
+}
+
+/// An explainable trust scorecard for the open pipeline: compile status,
+/// structural risks and ungoverned PII, each costed into a 0-100 score. Static
+/// (no source reads), so it is fast and deterministic right in the editor.
+#[tauri::command]
+fn pipeline_trust_report(pipeline: serde_json::Value) -> Result<serde_json::Value, String> {
+    Ok(duckle_duckdb_engine::trust::trust_report(&pipeline, None))
 }
 
 // ---- Scheduler commands ------------------------------------------------

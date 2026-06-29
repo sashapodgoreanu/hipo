@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { BarChart3, Braces, FolderOpen, GitBranch, LayoutDashboard, Moon, RotateCw, Sparkles, Sun, Waypoints } from 'lucide-react';
+import { BarChart3, Braces, FolderOpen, GitBranch, LayoutDashboard, Moon, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -113,6 +113,7 @@ import { DashboardModal } from './dives/DashboardModal';
 import type { Dashboard } from './dives/dashboard-types';
 import { DivesGallery } from './dives/DivesGallery';
 import { LineageModal } from './workflow-ui/LineageModal';
+import { TrustModal } from './workflow-ui/TrustModal';
 
 type RuntimeState = 'connecting' | 'ready' | 'offline';
 
@@ -1997,6 +1998,7 @@ export default function App() {
         return () => window.removeEventListener('duckle:dives-visibility', onChange);
     }, []);
     const [showLineage, setShowLineage] = useState(false);
+    const [showTrust, setShowTrust] = useState(false);
 
     const openJobIds = useMemo(() => new Set(jobs.map(j => j.id)), [jobs]);
 
@@ -2106,6 +2108,16 @@ export default function App() {
                     aria-label="Open column lineage"
                 >
                     <Waypoints size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="topbar-theme-toggle"
+                    data-tour="trust"
+                    onClick={() => setShowTrust(true)}
+                    title="Trust score - an explainable score for this pipeline"
+                    aria-label="Open trust score"
+                >
+                    <ShieldCheck size={14} />
                 </button>
                 <button
                     type="button"
@@ -2424,6 +2436,9 @@ export default function App() {
             ) : null}
             {showLineage ? (
                 <LineageModal nodes={nodes} edges={edges} onClose={() => setShowLineage(false)} />
+            ) : null}
+            {showTrust ? (
+                <TrustModal nodes={nodes} edges={edges} onClose={() => setShowTrust(false)} />
             ) : null}
             {showMcpModal ? <McpModal onClose={() => setShowMcpModal(false)} /> : null}
             {showSettings ? (

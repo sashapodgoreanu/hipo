@@ -570,6 +570,36 @@ export async function pipelineColumnLineage(
     });
 }
 
+// ---- Trust scorecard ---------------------------------------------------
+
+/** One costed line item in the trust scorecard. */
+export type TrustFinding = {
+    code: string;
+    severity: 'error' | 'warning' | 'info';
+    deduction: number;
+    message: string;
+};
+/** Explainable 0-100 trust score for the open pipeline (static checks). */
+export type TrustReport = {
+    ok: boolean;
+    score: number;
+    grade: string;
+    compiles: boolean;
+    findings: TrustFinding[];
+    drift: unknown | null;
+    summary: string;
+};
+
+export async function pipelineTrustReport(
+    nodes: Node<DuckleNodeData>[],
+    edges: Edge[],
+): Promise<TrustReport | null> {
+    if (!isTauri() && !isWebBackend()) return null;
+    return await invoke<TrustReport>('pipeline_trust_report', {
+        pipeline: { nodes, edges },
+    });
+}
+
 // ---- Schedules ---------------------------------------------------------
 
 export type ScheduleKind =

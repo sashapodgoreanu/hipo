@@ -406,6 +406,15 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
                 Err(e) => respond_err(stream, "400 Bad Request", &e.to_string()),
             }
         }
+        // Static trust scorecard for the open pipeline (compile + structural
+        // risks + ungoverned PII). No source reads, so it is fast and matches
+        // the desktop command and the MCP trust_report tool exactly.
+        "pipeline_trust_report" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let pipeline = args.get("pipeline").cloned().unwrap_or(Value::Null);
+            let report = duckle_duckdb_engine::trust::trust_report(&pipeline, None);
+            respond_json(stream, &report)
+        }
         // Tells the browser editor which server workspace it is editing, so it
         // can auto-load it (there is no native folder picker on the web).
         "web_bootstrap" => respond_json(

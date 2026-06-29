@@ -8019,3 +8019,31 @@ html[dir='rtl'] .topbar-lang {
 .lineage-tab { background: transparent; border: 1px solid var(--border); border-radius: 7px; padding: 4px 14px; font-size: 13px; font-weight: 550; color: var(--text-2); cursor: pointer; }
 .lineage-tab:hover { color: var(--text-1); }
 .lineage-tab-active { background: var(--bg-2); color: var(--text-1); border-color: var(--accent, var(--border)); }
+
+/* Trust scorecard modal */
+.trust-modal { background: var(--bg-1); border: 1px solid var(--border); border-radius: 12px; width: min(640px, 94vw); max-height: 88vh; overflow: auto; padding: 18px 20px; }
+.trust-scoreline { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); margin-bottom: 14px; }
+.trust-score { display: flex; align-items: baseline; gap: 2px; font-weight: 700; }
+.trust-score-num { font-size: 34px; line-height: 1; }
+.trust-score-max { font-size: 14px; color: var(--text-2); font-weight: 550; }
+.trust-grade { font-size: 18px; font-weight: 700; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+.trust-grade-good { color: var(--maya); }
+.trust-grade-warn { color: var(--warn); }
+.trust-grade-bad { color: var(--error); }
+.trust-grade.trust-grade-good { background: color-mix(in srgb, var(--maya) 16%, transparent); }
+.trust-grade.trust-grade-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.trust-grade.trust-grade-bad { background: color-mix(in srgb, var(--error) 16%, transparent); }
+.trust-score-meta { display: flex; flex-direction: column; gap: 2px; }
+.trust-summary { font-size: 13px; color: var(--text-1); font-weight: 550; }
+.trust-compile { font-size: 12px; color: var(--text-2); }
+.trust-clean { color: var(--maya); }
+.trust-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.trust-finding { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.trust-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--text-2); }
+.trust-error .trust-dot { background: var(--error); }
+.trust-warning .trust-dot { background: var(--warn); }
+.trust-info .trust-dot { background: var(--maya); }
+.trust-finding-body { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.trust-finding-code { font-family: Consolas, monospace; font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: .03em; }
+.trust-finding-msg { font-size: 13px; color: var(--text-1); }
+.trust-deduction { flex: 0 0 auto; font-weight: 700; font-size: 13px; color: var(--error); }

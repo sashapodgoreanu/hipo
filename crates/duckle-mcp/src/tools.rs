@@ -6,6 +6,7 @@
 //! can read and react to it.
 
 use crate::catalog;
+use duckle_duckdb_engine::trust::{declared_columns, looks_like_pii, structural_risks};
 use duckle_duckdb_engine::{compile_pipeline_sql, DuckdbEngine, PipelineDoc};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -406,226 +407,35 @@ fn t_diff_pipelines(args: &Value) -> Result<Value, String> {
 }
 
 /// A trust scorecard where every lost point is itemized as a finding, so the
-/// score is explainable rather than a black-box number. All checks are static.
+/// score is explainable rather than a black-box number. Static by default;
+/// `checkDrift` also folds in live source schema drift (needs a DuckDB binary).
+/// The scorecard itself lives in the engine so the CLI and the desktop/web
+/// editor report the same numbers.
 fn t_trust_report(args: &Value) -> Result<Value, String> {
     let (v, _name) = load_pipeline_value(args)?;
-    let doc = to_doc(&v)?;
-    let mut findings: Vec<Value> = Vec::new();
-    let mut deduction: i64 = 0;
-
-    // 1. Does it compile at all? A non-compiling pipeline is the deepest failure.
-    let compile_res = compile_pipeline_sql(&doc);
-    let compiles = compile_res.is_ok();
-    if let Err(e) = &compile_res {
-        deduction += 60;
-        findings.push(json!({
-            "code": "does_not_compile", "severity": "error", "deduction": 60,
-            "message": format!("pipeline does not compile: {e}")
-        }));
-    }
-
-    // 2. Structural risks (shared with verify_pipeline).
-    for r in structural_risks(&v) {
-        let sev = r["severity"].as_str().unwrap_or("warning").to_string();
-        let d = if sev == "error" { 15 } else { 8 };
-        deduction += d;
-        findings.push(json!({
-            "code": r["code"], "severity": sev, "deduction": d, "message": r["message"]
-        }));
-    }
-
-    // 3. Columns that look like PII but nothing governs (no contract tag, no mask).
-    let nodes = v.get("nodes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
-    let mut pii_cols: Vec<String> = Vec::new();
-    for n in &nodes {
-        for c in declared_columns(n) {
-            if looks_like_pii(&c).is_some() && !pii_cols.contains(&c) {
-                pii_cols.push(c);
-            }
-        }
-    }
-    let has_sink = nodes.iter().any(|n| {
-        n.pointer("/data/componentId").and_then(|x| x.as_str()).map(|s| s.starts_with("snk.")).unwrap_or(false)
-    });
-    let governed = nodes.iter().any(|n| {
-        let cid = n.pointer("/data/componentId").and_then(|x| x.as_str()).unwrap_or("");
-        if cid.starts_with("qa.mask") {
-            return true;
-        }
-        n.pointer("/data/properties/contracts/pii")
-            .and_then(|x| x.as_array())
-            .map(|a| !a.is_empty())
-            .unwrap_or(false)
-    });
-    if !pii_cols.is_empty() && has_sink && !governed {
-        deduction += 10;
-        findings.push(json!({
-            "code": "ungoverned_pii", "severity": "warning", "deduction": 10,
-            "message": format!(
-                "column(s) {:?} look like PII but no contract tag or qa.mask governs them; run suggest_contracts",
-                pii_cols
-            )
-        }));
-    }
-
-    // 4. Opt-in: live schema drift on the sources (needs a DuckDB binary). Off
-    // by default so the report stays static and deterministic; when on, each
-    // source that drifted from its declared schema costs points.
-    let mut drift_report: Value = Value::Null;
+    // Validate the pipeline up front so a malformed document is an explicit
+    // tool error, not a low-scoring report (matches verify_pipeline and the
+    // prior contract).
+    let mut doc = to_doc(&v)?;
     if arg_bool(args, "checkDrift", false) {
-        match resolve_duckdb(arg_str(args, "duckdb")) {
-            Some(duckdb) => {
-                std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
-                let mut ddoc = to_doc(&v)?;
-                if let Some(ws) = arg_str(args, "workspace") {
+        if let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) {
+            std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
+            // Resolve ${workspace}/${date} placeholders before reading sources,
+            // so drift hits the real files rather than a literal path.
+            let resolved = match arg_str(args, "workspace") {
+                Some(ws) => {
                     let wsp = std::path::Path::new(ws);
-                    duckle_duckdb_engine::context::apply_time_builtins(&mut ddoc);
-                    duckle_duckdb_engine::context::apply_workspace_context(&mut ddoc, wsp);
+                    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+                    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, wsp);
+                    serde_json::to_value(&doc).map_err(|e| e.to_string())?
                 }
-                let engine = DuckdbEngine::new(duckdb);
-                let report = duckle_duckdb_engine::drift::schema_drift(&engine, &ddoc);
-                let breaking = report["summary"]["breakingSources"].as_u64().unwrap_or(0);
-                if breaking > 0 {
-                    // Cap the count before the cast so the deduction is bounded
-                    // (max 36) and can never overflow on a surprising count.
-                    let d = (breaking.min(3) * 12) as i64;
-                    deduction += d;
-                    let drifted: Vec<String> = report["sources"]
-                        .as_array()
-                        .map(|a| {
-                            a.iter()
-                                .filter(|s| s["breaking"] == json!(true))
-                                .filter_map(|s| s["nodeId"].as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    findings.push(json!({
-                        "code": "schema_drift", "severity": "error", "deduction": d,
-                        "message": format!(
-                            "source(s) {:?} drifted from their declared schema (missing columns or type changes); run schema_drift for details",
-                            drifted
-                        )
-                    }));
-                }
-                drift_report = report;
-            }
-            None => {
-                findings.push(json!({
-                    "code": "drift_check_unavailable", "severity": "info", "deduction": 0,
-                    "message": "checkDrift requested but no DuckDB binary found (set DUCKLE_DUCKDB_BIN or pass 'duckdb')"
-                }));
-            }
-        }
-    }
-
-    let mut score = (100 - deduction).max(0);
-    // A pipeline that does not even compile cannot score as "fine".
-    if !compiles {
-        score = score.min(20);
-    }
-    let grade = match score {
-        s if s >= 90 => "A",
-        s if s >= 80 => "B",
-        s if s >= 70 => "C",
-        s if s >= 60 => "D",
-        _ => "F",
-    };
-
-    Ok(json!({
-        "ok": true,
-        "score": score,
-        "grade": grade,
-        "compiles": compiles,
-        "findings": findings,
-        "drift": drift_report,
-        "summary": format!("{score}/100 ({grade}) from {} finding(s)", findings.len()),
-    }))
-}
-
-/// Cheap, deterministic graph checks that do not require execution. Reads the
-/// raw pipeline JSON so it is independent of the typed engine structs.
-fn structural_risks(pipeline: &Value) -> Vec<Value> {
-    let mut risks: Vec<Value> = Vec::new();
-    let (nodes, edges) = match (
-        pipeline.get("nodes").and_then(|n| n.as_array()),
-        pipeline.get("edges").and_then(|e| e.as_array()),
-    ) {
-        (Some(n), Some(e)) => (n, e),
-        _ => return risks,
-    };
-
-    let str_at = |v: &Value, path: &[&str]| -> String {
-        let mut cur = v;
-        for p in path {
-            cur = match cur.get(p) {
-                Some(c) => c,
-                None => return String::new(),
+                None => v.clone(),
             };
-        }
-        cur.as_str().unwrap_or("").to_string()
-    };
-    let has_incoming =
-        |id: &str| edges.iter().any(|e| e.get("target").and_then(|v| v.as_str()) == Some(id));
-    let has_outgoing =
-        |id: &str| edges.iter().any(|e| e.get("source").and_then(|v| v.as_str()) == Some(id));
-
-    let mut sink_count = 0usize;
-    for n in nodes {
-        let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        if id.is_empty() {
-            continue;
-        }
-        let cid = str_at(n, &["data", "componentId"]);
-        let label = str_at(n, &["data", "label"]);
-        let is_source = cid.starts_with("src.");
-        let is_sink = cid.starts_with("snk.");
-        if is_sink {
-            sink_count += 1;
-        }
-
-        if cid.starts_with("xf.join") {
-            let props = n.get("data").and_then(|d| d.get("properties"));
-            let has_key = |k: &str| {
-                props
-                    .and_then(|p| p.get(k))
-                    .and_then(|v| v.as_str())
-                    .map(|s| !s.is_empty())
-                    .unwrap_or(false)
-            };
-            if !(has_key("leftKey") && has_key("rightKey")) {
-                risks.push(json!({
-                    "severity": "warning", "node": id, "label": label,
-                    "code": "join_without_keys",
-                    "message": "join has no leftKey/rightKey, which can fan out into a cross join"
-                }));
-            }
-        }
-
-        if is_sink && !has_incoming(id) {
-            risks.push(json!({
-                "severity": "error", "node": id, "label": label,
-                "code": "sink_without_input",
-                "message": "sink has no incoming edge, so it would write nothing"
-            }));
-        }
-
-        if !is_source && !is_sink && !has_incoming(id) && !has_outgoing(id) {
-            risks.push(json!({
-                "severity": "warning", "node": id, "label": label,
-                "code": "orphan_node",
-                "message": "node is not connected to the rest of the pipeline"
-            }));
+            let engine = DuckdbEngine::new(duckdb);
+            return Ok(duckle_duckdb_engine::trust::trust_report(&resolved, Some(&engine)));
         }
     }
-
-    if sink_count == 0 {
-        risks.push(json!({
-            "severity": "warning", "code": "no_sink",
-            "message": "pipeline has no sink, so no output is written"
-        }));
-    }
-
-    risks
+    Ok(duckle_duckdb_engine::trust::trust_report(&v, None))
 }
 
 fn t_verify_pipeline(args: &Value) -> Result<Value, String> {
@@ -663,75 +473,6 @@ fn t_verify_pipeline(args: &Value) -> Result<Value, String> {
         "lineage": lineage,
         "risks": risks,
     }))
-}
-
-/// Heuristic, name-based PII classification. Returns a category label when a
-/// column name looks like personal data, else None. Keywords are matched against
-/// the name with separators removed (so first_name, firstName and FIRSTNAME all
-/// hit "firstname"). Deliberately high-precision: these are SUGGESTIONS a human
-/// or agent reviews, not a proof, so we favour few false positives over recall.
-fn looks_like_pii(column: &str) -> Option<&'static str> {
-    let norm: String = column
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect();
-    // Ordered most-specific first; first match wins so emailAddress -> "email".
-    const PATTERNS: &[(&str, &str)] = &[
-        ("email", "email"),
-        ("ssn", "national_id"),
-        ("socialsecurity", "national_id"),
-        ("passport", "national_id"),
-        ("nationalid", "national_id"),
-        ("taxid", "national_id"),
-        ("dateofbirth", "date_of_birth"),
-        ("birthdate", "date_of_birth"),
-        ("birthday", "date_of_birth"),
-        ("firstname", "name"),
-        ("lastname", "name"),
-        ("fullname", "name"),
-        ("surname", "name"),
-        ("maidenname", "name"),
-        ("creditcard", "financial"),
-        ("cardnumber", "financial"),
-        ("iban", "financial"),
-        ("accountnumber", "financial"),
-        ("routingnumber", "financial"),
-        ("driverlicense", "license"),
-        ("driverslicense", "license"),
-        ("licensenumber", "license"),
-        ("ipaddress", "ip_address"),
-        ("streetaddress", "address"),
-        ("homeaddress", "address"),
-        ("postalcode", "address"),
-        ("zipcode", "address"),
-        ("phone", "phone"),
-        ("mobilenumber", "phone"),
-        ("telephone", "phone"),
-    ];
-    PATTERNS
-        .iter()
-        .find(|(kw, _)| norm.contains(kw))
-        .map(|(_, cat)| *cat)
-}
-
-/// Column names a node declares statically in its Schema panel (works without a
-/// DuckDB binary). Reads the raw `data.schema` array of `{ name }` entries.
-fn declared_columns(node: &Value) -> Vec<String> {
-    node.get("data")
-        .and_then(|d| d.get("schema"))
-        .and_then(|s| s.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| {
-                    c.get("name")
-                        .and_then(|n| n.as_str())
-                        .or_else(|| c.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn t_suggest_contracts(args: &Value) -> Result<Value, String> {
@@ -1785,6 +1526,14 @@ mod verify_tests {
         });
         let out = t_trust_report(&json!({ "pipeline": pipeline })).unwrap();
         assert_eq!(out["drift"], json!(null), "drift must stay null when checkDrift is off");
+    }
+
+    #[test]
+    fn trust_report_rejects_malformed_pipeline() {
+        // A structurally invalid pipeline is a tool error, not a low-scoring
+        // report, so callers can tell "broken input" from "risky pipeline".
+        let out = t_trust_report(&json!({ "pipeline": { "nodes": "not-an-array" } }));
+        assert!(out.is_err(), "expected Err for malformed pipeline, got {out:?}");
     }
 
     #[test]
