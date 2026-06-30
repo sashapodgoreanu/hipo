@@ -206,7 +206,11 @@ textarea:focus-visible {
     align-items: center;
     gap: 16px;
     height: var(--topbar-h);
-    padding: 0 0 0 20px;
+    /* Reserve room on the inline-end for the absolutely-pinned window controls
+       (3 x 46px) so flowing content never sits under them. */
+    padding-block: 0;
+    padding-inline-start: 20px;
+    padding-inline-end: 138px;
     background:
         linear-gradient(180deg, rgba(255, 122, 69, 0.025), transparent 60%),
         var(--bg-1);
@@ -220,8 +224,13 @@ textarea:focus-visible {
 /* Frameless window controls (folded into the topbar) ------------------- */
 .win-controls {
     display: flex;
-    align-self: stretch;
-    margin-left: 6px;
+    /* Pinned to the inline-end edge so the close button is NEVER pushed off by
+       a crowded topbar that overflows the window width (#root clips overflow, so
+       a flowed control would vanish - reported as the close X disappearing on
+       narrower / laptop-width screens). */
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
 }
 
 .win-ctl {
