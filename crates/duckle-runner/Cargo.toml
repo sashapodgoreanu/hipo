@@ -36,5 +36,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(all(not(target_os = "macos"), not(target_env = "musl")))'.dependencies]
 duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
 
+# On gnu Linux, additionally link unixODBC statically so the per-OS runner
+# bundled in the desktop app needs no system libodbc.so.2 at runtime (issue
+# #131). The musl runner is excluded above and has no teradata at all.
+[target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
+duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }
+
 [dev-dependencies]
 tempfile = "3"

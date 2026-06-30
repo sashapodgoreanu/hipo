@@ -25,3 +25,8 @@ serde_json = { workspace = true }
 # macOS the engine falls back to a clear "compiled without teradata" error.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
+
+# On Linux, additionally link unixODBC statically so the bundled binary needs no
+# system libodbc.so.2 at runtime (issue #131). Windows keeps odbc32.
+[target.'cfg(target_os = "linux")'.dependencies]
+duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }

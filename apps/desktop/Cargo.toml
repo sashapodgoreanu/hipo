@@ -84,3 +84,9 @@ update-selftest = []
 # macOS the engine falls back to a clear "compiled without teradata" error.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 duckle-duckdb-engine = { workspace = true, features = ["teradata"] }
+
+# On Linux, additionally link unixODBC statically so the shipped binary carries
+# the ODBC driver manager and launches without a system libodbc.so.2 (issue
+# #131). Windows keeps the always-present odbc32; macOS has no teradata at all.
+[target.'cfg(target_os = "linux")'.dependencies]
+duckle-duckdb-engine = { workspace = true, features = ["teradata-static"] }

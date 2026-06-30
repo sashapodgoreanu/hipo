@@ -14,6 +14,14 @@ on:
         description: 'Existing release tag to (re)upload binaries to. Builds from the branch this run is dispatched on; the tag itself is never moved. Leave empty on a normal tag push.'
         required: false
         default: ''
+      os_filter:
+        description: 'Limit the re-roll to one OS family. "all" builds every binary (default, and always used on a tag push); "linux" rebuilds and re-uploads only the two Linux binaries, leaving the macOS/Windows assets untouched.'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - linux
 
 jobs:
   # Single point that creates the draft release so the per-OS build
@@ -57,38 +65,34 @@ jobs:
           path: apps/desktop/bin/duckle-runner-linux-x64
           if-no-files-found: error
 
+  # Compute the build matrix so a workflow_dispatch can re-roll a single OS
+  # family (os_filter=linux) without rebuilding/clobbering the other assets. A
+  # normal tag push leaves os_filter unset and builds every binary.
+  #   macOS: both built on the macos-14 (Apple Silicon) runner. The Intel binary
+  #   is cross-compiled to x86_64-apple-darwin rather than run on a macos-13
+  #   runner: GitHub's Intel-mac runners are scarce / being deprecated and
+  #   routinely leave the job queued for hours, stalling the whole release.
+  plan:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        shell: bash
+        env:
+          OS_FILTER: ${{ github.event.inputs.os_filter }}
+        run: |
+          linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"}]'
+          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Duckle-macos-x64","target":"x86_64-apple-darwin"},{"os":"macos-14","binary":"duckle","asset":"Duckle-macos-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Duckle-windows-x64.exe"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Duckle-windows-arm64.exe"}]'
+          if [ "$OS_FILTER" = "linux" ]; then include="$linux"; else include="$all"; fi
+          echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
+
   build:
-    needs: [prepare-release, build-linux-runner]
+    needs: [prepare-release, build-linux-runner, plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Linux
-          - os: ubuntu-24.04
-            binary: duckle
-            asset: Duckle-linux-x64
-          - os: ubuntu-24.04-arm
-            binary: duckle
-            asset: Duckle-linux-arm64
-          # macOS - both built on the macos-14 (Apple Silicon) runner.
-          # The Intel binary is cross-compiled to x86_64-apple-darwin
-          # rather than run on a macos-13 runner: GitHub's Intel-mac
-          # runners are scarce / being deprecated and routinely leave
-          # the job queued for hours, stalling the whole release.
-          - os: macos-14
-            binary: duckle
-            asset: Duckle-macos-x64
-            target: x86_64-apple-darwin
-          - os: macos-14
-            binary: duckle
-            asset: Duckle-macos-arm64
-          # Windows
-          - os: windows-latest
-            binary: duckle.exe
-            asset: Duckle-windows-x64.exe
-          - os: windows-11-arm
-            binary: duckle.exe
-            asset: Duckle-windows-arm64.exe
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -127,7 +131,14 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
-            unixodbc-dev
+            unixodbc-dev libltdl-dev
+          # unixodbc-dev + libltdl-dev ship the static archives (libodbc.a,
+          # libodbcinst.a, libltdl.a) the Teradata connector links statically on
+          # Linux, so the shipped binary needs no libodbc.so.2 at runtime (#131).
+          # Point odbc-sys at those archives (compile-time bundling + final link)
+          # for this arch; redundant with .cargo/config.toml but robust if a
+          # RUSTFLAGS override ever shadows the config rustflags.
+          echo "ODBC_SYS_STATIC_PATH=/usr/lib/$(gcc -dumpmachine)" >> "$GITHUB_ENV"
 
       - name: Build duckle-runner + duckle-mcp (bundled into the app)
         shell: bash
@@ -217,6 +228,32 @@ jobs:
           # The duckle-runner is embedded into this binary at compile time
           # (no separate with-runner asset needed).
           cp "$src" "_release/${{ matrix.asset }}"
+
+      # Guard (issue #131): a shipped Linux binary must NOT carry a dynamic
+      # libodbc.so dependency, or it fails to launch on machines without
+      # unixODBC installed. The Teradata connector links unixODBC statically on
+      # Linux (engine `teradata-static`); this check fails the release loudly if
+      # that ever regresses, for the published asset and the two bundled gnu
+      # binaries embedded into it.
+      - name: Verify Linux binaries do not require libodbc.so
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          fail=0
+          for b in "_release/${{ matrix.asset }}" \
+                   apps/desktop/bin/duckle-runner \
+                   apps/desktop/bin/duckle-mcp; do
+            [ -f "$b" ] || { echo "skip (missing): $b"; continue; }
+            if readelf -d "$b" 2>/dev/null | grep -qi 'libodbc'; then
+              echo "FAIL: $b dynamically requires libodbc.so"
+              readelf -d "$b" 2>/dev/null | grep -i 'NEEDED' || true
+              fail=1
+            else
+              echo "ok: $b (no libodbc.so dependency)"
+            fi
+          done
+          [ "$fail" = 0 ] || { echo "::error::A Linux binary requires libodbc.so (issue #131 regression)"; exit 1; }
 
       - name: Upload to release
         shell: bash

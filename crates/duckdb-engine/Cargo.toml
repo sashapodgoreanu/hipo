@@ -76,6 +76,10 @@ oracle = { version = "0.6", optional = true }
 # Linux/macOS). Off by default so a plain engine build/test needs no ODBC; the
 # shipped binaries (desktop, runner, mcp) turn it on.
 odbc-api = { version = "28", optional = true }
+# Direct (optional) handle on odbc-api's ODBC FFI crate so the `teradata-static`
+# feature can flip it to static linking. Base entry carries no static features;
+# the Linux override below adds them (see that table + build.rs + issue #131).
+odbc-sys = { version = "0.31", optional = true }
 # Redis sync client. Tokio-async is optional and off; we use the blocking
 # Connection / Pipeline API to fit the per-stage CLI shell-out model.
 # Small dep (~300kb).
@@ -173,12 +177,25 @@ arrow-flight = { version = "53", features = ["tls"] }
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 prost = "0.13"
 
+# Linux-only: on top of the base odbc-sys above, request its `static` /
+# `static_ltdl` features so the Teradata ODBC driver manager (unixODBC) is
+# linked statically into the binary instead of as a runtime libodbc.so.2
+# dependency. Activated by the engine's `teradata-static` feature, which the
+# desktop/runner/mcp crates turn on for their Linux builds (issue #131).
+[target.'cfg(target_os = "linux")'.dependencies]
+odbc-sys = { version = "0.31", optional = true, features = ["static", "static_ltdl"] }
+
 [features]
 default = ["oracle"]
 oracle = ["dep:oracle"]
 # Teradata via ODBC (odbc-api). Off by default so a plain engine build/test
 # needs no ODBC driver manager; the shipped binaries enable it.
 teradata = ["dep:odbc-api"]
+# Linux self-contained ODBC: statically link the unixODBC driver manager so a
+# shipped Linux binary launches with no system libodbc.so.2 installed. Enabled
+# only on Linux (by the consuming crates' Linux target tables) alongside
+# `teradata`; needs unixodbc-dev + libltdl-dev present at build time (issue #131).
+teradata-static = ["dep:odbc-sys"]
 
 # Issue #4 repro harness: connects to a live Oracle, replays
 # run_oracle_source faithfully, and times each phase. Gated so a

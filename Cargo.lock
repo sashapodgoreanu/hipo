@@ -4061,6 +4061,7 @@ dependencies = [
  "mail-parser",
  "mongodb",
  "odbc-api",
+ "odbc-sys",
  "oracle",
  "parquet 53.4.0",
  "prost 0.13.5",
