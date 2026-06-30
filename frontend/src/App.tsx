@@ -1101,7 +1101,21 @@ export default function App() {
     );
 
     const handleSelectionChange = useCallback((params: OnSelectionChangeParams) => {
-        setSelectedId(params.nodes[0]?.id ?? null);
+        const sel = params.nodes[0] ?? null;
+        setSelectedId(sel?.id ?? null);
+        // Live mode: previewing whatever node you click makes the toggle feel
+        // alive (run up to it + animate). Skip sinks (a run to a sink writes and
+        // has no preview rows). Debounced so click-dragging a marquee selection
+        // does not fire a run per intermediate selection.
+        const componentId = (sel?.data as DuckleNodeData | undefined)?.componentId ?? '';
+        if (liveModeRef.current && sel && !componentId.startsWith('snk.')) {
+            if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+            const target = sel.id;
+            liveTimerRef.current = setTimeout(() => {
+                liveTimerRef.current = null;
+                triggerLivePreviewRef.current?.(target);
+            }, 250);
+        }
     }, []);
 
     const handleUpdateNode = useCallback(
@@ -1385,15 +1399,25 @@ export default function App() {
     }, [triggerLivePreview]);
 
     const handleToggleLive = useCallback(() => {
-        setLiveMode(v => {
-            const next = !v;
-            if (!next && liveTimerRef.current) {
-                clearTimeout(liveTimerRef.current);
+        const turningOn = !liveModeRef.current;
+        setLiveMode(turningOn);
+        if (liveTimerRef.current) {
+            clearTimeout(liveTimerRef.current);
+            liveTimerRef.current = null;
+        }
+        // Turning live mode on should DO something immediately, not wait for the
+        // next edit: preview the selected node right away (run up to it, with the
+        // usual node animation). Skip sinks - running to a sink writes and yields
+        // no preview rows. If nothing is selected, the next node you click or
+        // edit triggers the preview instead.
+        if (turningOn && selectedNode && !(selectedNode.data.componentId ?? '').startsWith('snk.')) {
+            const target = selectedNode.id;
+            liveTimerRef.current = setTimeout(() => {
                 liveTimerRef.current = null;
-            }
-            return next;
-        });
-    }, []);
+                triggerLivePreviewRef.current?.(target);
+            }, 50);
+        }
+    }, [selectedNode]);
 
     const handleStop = useCallback(() => {
         void cancelPipeline();

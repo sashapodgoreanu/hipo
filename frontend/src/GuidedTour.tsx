@@ -66,7 +66,7 @@ const ALL_STEPS: Step[] = [
     {
         sel: '[data-tour="live"]',
         title: 'Live preview',
-        body: 'Click this lightning toggle to turn on live preview. With it on, editing any node\'s settings automatically re-runs the pipeline up to that node and refreshes its Preview tab - so you see the resulting rows update as you tweak, without pressing Run each time. Open the edited node\'s Preview tab to watch it. It stays quiet while the pipeline has validation errors or a run is already in progress; toggle it off to edit without re-running.',
+        body: 'Click this lightning toggle to turn on live preview. With it on, selecting a node - or editing its settings - automatically runs the pipeline up to that node and fills its Preview tab, so you see the resulting rows without pressing Run. Open the node\'s Preview tab to watch it update as you tweak. It stays quiet while the pipeline has validation errors or a run is already going; toggle it off to stop.',
         placement: 'bottom',
     },
     {
