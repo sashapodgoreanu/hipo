@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Learn Duckle - the whole thing, fluidly</title>
+<meta name="description" content="A fluid, editorial tour of the whole of Duckle: every function, all 300+ components, the engine internals, the codebase, building simple and complex pipelines, the real use cases, and how to ship. Scroll and learn." />
+<meta name="keywords" content="learn Duckle, Duckle tutorial, DuckDB ETL tutorial, visual ETL guide, data pipeline tutorial, Duckle components, Duckle engine, Duckle codebase" />
+<meta property="og:title" content="Learn Duckle - the whole thing, fluidly" />
+<meta property="og:description" content="A fluid, editorial tour of the whole of Duckle: components, the engine, the codebase, complex pipelines, use cases, and shipping." />
+<meta property="og:image" content="https://duckle.org/assets/img/screens/pipeline-join.png" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://duckle.org/learn" />
+<meta property="og:site_name" content="Duckle" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Learn Duckle - the whole thing, fluidly" />
+<meta name="twitter:description" content="A fluid, editorial tour of the whole of Duckle. Components, engine, codebase, complex pipelines, use cases, shipping." />
+<meta name="twitter:image" content="https://duckle.org/assets/img/screens/pipeline-join.png" />
+<meta name="robots" content="index, follow" />
+<link rel="canonical" href="https://duckle.org/learn" />
+<meta name="theme-color" content="#07090f" />
+<link rel="icon" href="assets/img/duckle-mark.v4.svg" />
+<link rel="apple-touch-icon" href="assets/img/duckle-mark.v4.svg" />
+<link rel="manifest" href="site.webmanifest" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="assets/css/site.v13.css" />
+<link rel="stylesheet" href="assets/css/learn.css" />
+<script>(function(){try{var t=localStorage.getItem("duckle-theme")||"dark";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}document.documentElement.classList.add("js");})();</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "LearningResource",
+  "name": "Learn Duckle - the whole thing, fluidly",
+  "description": "A fluid, editorial tour of the whole of Duckle: components, the engine, the codebase, complex pipelines, use cases, and shipping.",
+  "url": "https://duckle.org/learn",
+  "learningResourceType": "Interactive tutorial",
+  "isAccessibleForFree": true,
+  "inLanguage": "en",
+  "about": { "@type": "SoftwareApplication", "name": "Duckle", "applicationCategory": "DeveloperApplication" },
+  "provider": { "@type": "Organization", "name": "Duckle by SlothFlowLabs", "url": "https://duckle.org/" }
+}
+</script>
+</head>
+<body class="learn">
+
+<div class="lx-bg"></div>
+<div class="lx-grain"></div>
+<div class="lx-progress"><i id="lxBar"></i></div>
+
+<a class="lx-brand" href="index.html"><img src="assets/img/duckle-mark.v4.svg" alt="" /><b>Duckle</b></a>
+<a class="lx-exit" href="index.html#download"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Get Duckle</a>
+
+<nav class="lx-dots" id="lxDots" aria-label="Chapters"></nav>
+
+<!-- ============================ HERO ============================ -->
+<section class="act hero" data-chapter="Start">
+  <div class="wrap-l">
+    <h1 class="reveal">Learn Duckle<span class="l2">the whole thing</span></h1>
+    <p class="lead reveal">Not a wall of docs. A tour that moves - one idea settles, the next rises to meet it. By the end you will understand every part: the canvas, the components, the engine, the codebase, and how to build and ship real pipelines.</p>
+    <div class="cue reveal"><span class="arw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></span> Scroll to begin</div>
+  </div>
+</section>
+
+<!-- ============================ 01 THE BIG IDEA ============================ -->
+<section class="act" data-chapter="The big idea">
+  <span class="chapno" aria-hidden="true">01</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">The big idea</p>
+    <h2 class="reveal">Your data tool runs<br /><span class="hl">on your machine.</span></h2>
+    <p class="lead reveal">Most ETL tools are heavy: a cluster, a control plane, a bill for compute you barely used. Duckle is the opposite - a desktop studio with <b>DuckDB running in-process</b>. The whole engine lives inside the app, so nothing leaves your laptop and there is no server to wait on.</p>
+    <ul class="beats reveal">
+      <li><b>The canvas is the program.</b> Boxes wired together - one reads, one reshapes, one writes. You watch the rows flow through.</li>
+      <li><b>It compiles to SQL you can read.</b> Every diagram becomes ordinary DuckDB SQL you can open, copy, and run yourself.</li>
+      <li><b>One file, one binary.</b> A pipeline is a single <code>.json</code>. Bundle it into a standalone executable and drop it on any server.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================ 02 ANATOMY ============================ -->
+<section class="act" data-chapter="Anatomy">
+  <span class="chapno" aria-hidden="true">02</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Anatomy of a pipeline</p>
+    <h2 class="reveal">Five families of nodes.</h2>
+    <p class="lead reveal">Learn these five and you can read any pipeline. Each box on the canvas belongs to one of them - and there are <b>300+ in all</b>.</p>
+    <div class="fams reveal">
+      <div class="fam">
+        <div class="ico" style="background:var(--kind-source)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/></svg></div>
+        <h4>Sources <span class="n">109</span></h4><p>Read data in - files, databases, warehouses, clouds, streams, APIs.</p>
+        <div class="ex"><code>src.csv</code><code>src.postgres</code></div>
+      </div>
+      <div class="fam">
+        <div class="ico" style="background:var(--kind-transform)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h6m6 0h6M9 6l-6 6 6 6m6-12 6 6-6 6"/></svg></div>
+        <h4>Transforms <span class="n">133</span></h4><p>Filter, join, aggregate, window, map columns, or run SQL and code.</p>
+        <div class="ex"><code>xf.map</code><code>code.sql</code></div>
+      </div>
+      <div class="fam">
+        <div class="ico" style="background:var(--kind-sink)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+        <h4>Sinks <span class="n">66</span></h4><p>Write results out, with upsert, merge and delete propagation.</p>
+        <div class="ex"><code>snk.parquet</code><code>snk.s3</code></div>
+      </div>
+      <div class="fam">
+        <div class="ico" style="background:var(--maya)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg></div>
+        <h4>Quality <span class="n">25</span></h4><p>Assert expectations, profile, mask, match and reconcile.</p>
+        <div class="ex"><code>qa.expect</code><code>qa.mask</code></div>
+      </div>
+      <div class="fam">
+        <div class="ico" style="background:var(--lemon)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/><path d="M18 15l3 3-3 3"/></svg></div>
+        <h4>Control + code <span class="n">26</span></h4><p>Loop, branch, retry, call sub-jobs; or run SQL, Python, JS and more.</p>
+        <div class="ex"><code>ctl.foreach</code><code>code.python</code></div>
+      </div>
+    </div>
+    <p class="small reveal">They connect through <b>ports</b>: a main output feeds a main input. A <b>reject</b> port catches rows that fail a check; <b>lookup</b> ports feed a join. Put it together and a pipeline is just a graph in a JSON file - diffable, reviewable, generatable.</p>
+  </div>
+</section>
+
+<!-- ============================ 03 SOURCES ============================ -->
+<section class="act" data-chapter="Sources">
+  <span class="chapno" aria-hidden="true">03</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Sources <b>&middot; 109</b></p>
+    <h2 class="reveal">Read from <span class="hl">almost anything.</span></h2>
+    <p class="lead reveal">Point a source at your data, click Autodetect, and Duckle reads the real column names and types for you. Files, databases, warehouses, clouds, streams, vectors, and the whole SaaS long tail.</p>
+    <div class="fig fig-pad reveal">
+      <div class="tokgroup"><h4>Files</h4><div class="tokset"><span class="tok s">csv</span><span class="tok s">tsv</span><span class="tok s">json</span><span class="tok s">jsonl</span><span class="tok s">parquet</span><span class="tok s">excel</span><span class="tok s">xml</span><span class="tok s">yaml</span><span class="tok s">toml</span><span class="tok s">avro</span><span class="tok s">orc</span><span class="tok s">fixedwidth</span></div></div>
+      <div class="tokgroup"><h4>Databases</h4><div class="tokset"><span class="tok s">postgres</span><span class="tok s">mysql</span><span class="tok s">mariadb</span><span class="tok s">sqlserver</span><span class="tok s">oracle</span><span class="tok s">db2</span><span class="tok s">sqlite</span><span class="tok s">duckdb</span><span class="tok s">cockroach</span><span class="tok s">clickhouse</span><span class="tok s">cassandra</span><span class="tok s">scylla</span><span class="tok s">mongodb</span><span class="tok s">couchdb</span><span class="tok s">redis</span><span class="tok s">jdbc</span><span class="tok s">adbc</span></div></div>
+      <div class="tokgroup"><h4>Warehouses &amp; lakehouse</h4><div class="tokset"><span class="tok s">snowflake</span><span class="tok s">bigquery</span><span class="tok s">databricks</span><span class="tok s">redshift</span><span class="tok s">synapse</span><span class="tok s">motherduck</span><span class="tok s">teradata</span><span class="tok s">ducklake</span><span class="tok s">iceberg</span><span class="tok s">delta</span><span class="tok s">quack</span><span class="tok s">gizmosql</span></div></div>
+      <div class="tokgroup"><h4>Cloud storage &amp; streaming</h4><div class="tokset"><span class="tok s">s3</span><span class="tok s">gcs</span><span class="tok s">azureblob</span><span class="tok s">minio</span><span class="tok s">r2</span><span class="tok s">b2</span><span class="tok s">kafka</span><span class="tok s">redpanda</span><span class="tok s">pulsar</span><span class="tok s">nats</span><span class="tok s">rabbit</span><span class="tok s">pubsub</span><span class="tok s">kinesis</span><span class="tok s">eventhubs</span></div></div>
+      <div class="tokgroup"><h4>Vectors, protocols &amp; SaaS</h4><div class="tokset"><span class="tok s">lancedb</span><span class="tok s">pinecone</span><span class="tok s">qdrant</span><span class="tok s">weaviate</span><span class="tok s">pgvector</span><span class="tok s">rest</span><span class="tok s">graphql</span><span class="tok s">grpc</span><span class="tok s">soap</span><span class="tok s">odata</span><span class="tok s">webhook</span><span class="tok s">git</span><span class="tok s">gsheets</span><span class="tok s">salesforce</span><span class="tok s">hubspot</span><span class="tok s">stripe</span><span class="tok s">shopify</span><span class="tok s">jira</span><span class="tok s">notion</span><span class="tok s">slack</span><span class="tok s">+ more</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 04 TRANSFORMS ============================ -->
+<section class="act" data-chapter="Transforms">
+  <span class="chapno" aria-hidden="true">04</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Transforms <b>&middot; 133</b></p>
+    <h2 class="reveal">Reshape and <span class="mv">enrich.</span></h2>
+    <p class="lead reveal">The common ones are point-and-click. When you want raw power, drop to SQL or code. Either way, it compiles to the same clean DuckDB SQL - and the star is the Visual Mapper, a typed, type-checked join you build by dragging.</p>
+    <div class="fig fig-pad reveal">
+      <div class="tokgroup"><h4>Shape rows &amp; columns</h4><div class="tokset"><span class="tok t">project</span><span class="tok t">rename</span><span class="tok t">addcol</span><span class="tok t">cast</span><span class="tok t">coalesce</span><span class="tok t">filter</span><span class="tok t">sort</span><span class="tok t">distinct</span><span class="tok t">sample</span><span class="tok t">rownum</span><span class="tok t">split</span><span class="tok t">fill_forward</span></div></div>
+      <div class="tokgroup"><h4>Joins &amp; the Visual Mapper</h4><div class="tokset"><span class="tok t">map</span><span class="tok t">join.inner</span><span class="tok t">join.left</span><span class="tok t">join.full</span><span class="tok t">join.cross</span><span class="tok t">join.spatial</span><span class="tok t">lookup</span><span class="tok t">semi</span><span class="tok t">anti</span></div></div>
+      <div class="tokgroup"><h4>Aggregate &amp; windows</h4><div class="tokset"><span class="tok t">groupby</span><span class="tok t">rollup</span><span class="tok t">cube</span><span class="tok t">pivot</span><span class="tok t">unpivot</span><span class="tok t">approx.quantile</span><span class="tok t">rank</span><span class="tok t">lag</span><span class="tok t">lead</span><span class="tok t">ntile</span><span class="tok t">sessionize</span></div></div>
+      <div class="tokgroup"><h4>Utility families - text, number, date, JSON, array, geo</h4><div class="tokset"><span class="tok t">text.replace</span><span class="tok t">text.similarity</span><span class="tok t">regex.extract</span><span class="tok t">num.round</span><span class="tok t">num.zscore</span><span class="tok t">dt.parse</span><span class="tok t">dt.trunc</span><span class="tok t">json.flatten</span><span class="tok t">arr.explode</span><span class="tok t">geo.distance</span><span class="tok t">hash</span><span class="tok t">uuid</span></div></div>
+      <div class="tokgroup"><h4>SQL, code, AI, CDC &amp; dbt</h4><div class="tokset"><span class="tok c">code.sql</span><span class="tok c">code.python</span><span class="tok c">code.javascript</span><span class="tok c">code.wasm</span><span class="tok t">ai.chunk</span><span class="tok t">ai.pii</span><span class="tok t">ai.embed</span><span class="tok t">ai.dedupe</span><span class="tok t">cdc.scd2</span><span class="tok t">incremental</span><span class="tok t">dbt</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 05 SINKS ============================ -->
+<section class="act" data-chapter="Sinks">
+  <span class="chapno" aria-hidden="true">05</span>
+  <div class="wrap-l">
+    <div class="split">
+      <div class="col-text">
+        <p class="eyebrow2 reveal">Sinks <b>&middot; 66</b></p>
+        <h2 class="reveal">Write <span class="hl">anywhere.</span></h2>
+        <p class="lead reveal">Almost every source has a matching sink, so what you can read from is usually what you can write to.</p>
+        <ul class="beats reveal">
+          <li><b>Append or replace</b> - the simple cases.</li>
+          <li><b>Upsert / merge</b> on a key, so re-running updates rows instead of duplicating them.</li>
+          <li><b>Delete propagation</b>, so rows removed upstream disappear downstream too - real change data capture.</li>
+        </ul>
+      </div>
+      <div class="fig fig-pad reveal">
+        <div class="tokgroup"><h4>Files &amp; databases</h4><div class="tokset"><span class="tok k">csv</span><span class="tok k">parquet</span><span class="tok k">json</span><span class="tok k">excel</span><span class="tok k">avro</span><span class="tok k">postgres</span><span class="tok k">mysql</span><span class="tok k">sqlserver</span><span class="tok k">oracle</span><span class="tok k">duckdb</span><span class="tok k">mongodb</span><span class="tok k">clickhouse</span></div></div>
+        <div class="tokgroup"><h4>Warehouses, lakehouse &amp; cloud</h4><div class="tokset"><span class="tok k">snowflake</span><span class="tok k">bigquery</span><span class="tok k">databricks</span><span class="tok k">redshift</span><span class="tok k">motherduck</span><span class="tok k">ducklake</span><span class="tok k">iceberg</span><span class="tok k">s3</span><span class="tok k">gcs</span><span class="tok k">azureblob</span><span class="tok k">minio</span></div></div>
+        <div class="tokgroup"><h4>Streaming, vector &amp; search</h4><div class="tokset"><span class="tok k">kafka</span><span class="tok k">pulsar</span><span class="tok k">nats</span><span class="tok k">pubsub</span><span class="tok k">lancedb</span><span class="tok k">pinecone</span><span class="tok k">qdrant</span><span class="tok k">pgvector</span><span class="tok k">elastic</span><span class="tok k">opensearch</span><span class="tok k">rest</span><span class="tok k">email</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 06 QUALITY & CONTROL ============================ -->
+<section class="act" data-chapter="Quality &amp; control">
+  <span class="chapno" aria-hidden="true">06</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Quality &amp; control-flow</p>
+    <h2 class="reveal">Trust it, then <span class="mv">orchestrate it.</span></h2>
+    <p class="lead reveal">Master-data tooling and orchestration without a second platform. Gate your data with expectations, clean and match it, then loop, branch and retry across pipelines.</p>
+    <div class="fig fig-pad reveal">
+      <div class="tokgroup"><h4>Quality - expect, profile, mask, match</h4><div class="tokset"><span class="tok q">expect</span><span class="tok q">notnull</span><span class="tok q">range</span><span class="tok q">unique</span><span class="tok q">contract</span><span class="tok q">freshness</span><span class="tok q">profile</span><span class="tok q">outlier</span><span class="tok q">standardize</span><span class="tok q">mask</span><span class="tok q">match</span><span class="tok q">survivor</span><span class="tok q">dedupe</span><span class="tok q">reconcile</span></div></div>
+      <div class="tokgroup"><h4>Control-flow - loop, branch, retry</h4><div class="tokset"><span class="tok c">foreach</span><span class="tok c">iterate</span><span class="tok c">runjob</span><span class="tok c">parallelize</span><span class="tok c">switch</span><span class="tok c">try</span><span class="tok c">retry</span><span class="tok c">die</span><span class="tok c">warn</span><span class="tok c">log</span><span class="tok c">wait</span><span class="tok c">throttle</span><span class="tok c">schedule</span><span class="tok c">checkpoint</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 07 CONNECTIONS ============================ -->
+<section class="act short" data-chapter="Connections">
+  <span class="chapno" aria-hidden="true">07</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Connections &amp; secrets</p>
+    <h2 class="reveal">Save it once.<br /><span class="hl">Never hardcoded.</span></h2>
+    <p class="lead reveal">Save a connection and node fields fill themselves from it - change a credential in one place and everything follows. Secrets and your git token are encrypted at rest with AES-256-GCM using a per-workspace key.</p>
+    <p class="body reveal">In exported pipelines and over MCP, secrets stay as <code>${ENV:KEY}</code> placeholders. Paths take runtime tokens too - <code>${workspace}</code>, <code>${date}</code>, <code>${timestamp}</code> - so one pipeline handles many days and folders.</p>
+  </div>
+</section>
+
+<!-- ============================ 08 THE ENGINE ============================ -->
+<section class="act" data-chapter="The engine">
+  <span class="chapno" aria-hidden="true">08</span>
+  <div class="wrap-l">
+    <div class="split rev">
+      <div class="col-text">
+        <p class="eyebrow2 reveal">The engine &middot; the magic</p>
+        <h2 class="reveal">Your graph becomes a <span class="mv">plan of stages.</span></h2>
+        <p class="lead reveal">When you press Run, the engine sorts your nodes in order and turns each into a stage - almost always a <code>CREATE OR REPLACE VIEW</code>. String them together and you have the whole program.</p>
+        <ul class="beats reveal">
+          <li><b>Views by default.</b> Lazy, so a later filter pushes down and only needed rows are read. Reused stages become real tables automatically.</li>
+          <li><b>External databases get ATTACHed</b> as <code>duckle_src</code> - the same SELECT whether you preview or run.</li>
+          <li><b>One session when it can.</b> A pure-SQL pipeline folds into a single DuckDB run; driver, HTTP, AI and code stages run on their own.</li>
+          <li><b>Reject ports</b> route failing rows to a separate relation, lazily, in one pass.</li>
+        </ul>
+      </div>
+      <div class="fig fig-pad reveal">
+        <div class="quiz" data-widget="quiz">
+          <div class="q">Why is a stage a lazy view, not a copied table, by default?</div>
+          <div class="opts">
+            <button class="opt" type="button"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg></span>Views look nicer in the UI</button>
+            <button class="opt" type="button" data-correct="1"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg></span>Lazy views push filters down, so DuckDB reads only what it needs</button>
+            <button class="opt" type="button"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg></span>DuckDB cannot create tables</button>
+          </div>
+          <div class="explain">Exactly. A lazy view lets a later <code>WHERE</code> or projection push into the source scan - nothing is copied, and only the needed rows are read. The engine materializes a table only when a stage is reused enough that copying pays off.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 09 THE CODEBASE ============================ -->
+<section class="act" data-chapter="The codebase">
+  <span class="chapno" aria-hidden="true">09</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Under the hood</p>
+    <h2 class="reveal">Seven pieces, <span class="hl">one engine.</span></h2>
+    <p class="lead reveal">A Rust workspace plus a React front end. Tap each piece - and notice how the engine sits at the center, shared by the desktop app, the runner, the CLI and the MCP server, so a pipeline runs identically everywhere.</p>
+    <div class="fig fig-pad reveal">
+      <div class="cbmap" data-widget="cbmap">
+        <div class="crates">
+          <button class="crate-btn" type="button" data-crate="engine"><span class="cdot"></span><code>duckdb-engine</code></button>
+          <button class="crate-btn" type="button" data-crate="metadata"><span class="cdot"></span><code>metadata</code></button>
+          <button class="crate-btn" type="button" data-crate="runner"><span class="cdot"></span><code>duckle-runner</code></button>
+          <button class="crate-btn" type="button" data-crate="mcp"><span class="cdot"></span><code>duckle-mcp</code></button>
+          <button class="crate-btn" type="button" data-crate="lance"><span class="cdot"></span><code>duckle-lance</code></button>
+          <button class="crate-btn" type="button" data-crate="desktop"><span class="cdot"></span><code>apps/desktop</code></button>
+          <button class="crate-btn" type="button" data-crate="frontend"><span class="cdot"></span><code>frontend</code></button>
+        </div>
+        <div class="crate-detail"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 10 BUILD IT ============================ -->
+<section class="act" data-chapter="Build it">
+  <span class="chapno" aria-hidden="true">10</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Your first pipeline</p>
+    <h2 class="reveal">Watch it take shape.<br />Then <span class="mv">read the SQL.</span></h2>
+    <p class="lead reveal">Read a CSV of orders, keep the paid ones, write Parquet. Three nodes - and the exact DuckDB SQL they compile to.</p>
+    <div class="fig fig-pad reveal" data-widget="canvas" data-done="Three nodes, one clear flow. That is a whole pipeline.">
+      <div class="lx-canvas" style="border-radius:12px;padding:26px 18px;"><div class="flow">
+        <div class="node" data-kind="source" data-cap="<b>1.</b> A source reads data in - here, a CSV of orders.">
+          <span class="port out"></span>
+          <div class="top"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></span><span class="k">Source</span></div>
+          <div class="nm">Orders CSV</div><div class="sub">src.csv</div>
+        </div>
+        <div class="wire"></div>
+        <div class="node" data-kind="transform" data-cap="<b>2.</b> A transform reshapes rows - this keeps only paid orders.">
+          <span class="port in"></span><span class="port out"></span>
+          <div class="top"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg></span><span class="k">Transform</span></div>
+          <div class="nm">Keep paid</div><div class="sub">xf.filter</div>
+        </div>
+        <div class="wire"></div>
+        <div class="node" data-kind="sink" data-cap="<b>3.</b> A sink writes the result - this one writes Parquet.">
+          <span class="port in"></span>
+          <div class="top"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></span><span class="k">Sink</span></div>
+          <div class="nm">Paid orders</div><div class="sub">snk.parquet</div>
+        </div>
+      </div></div>
+      <div class="canvas-cap"></div>
+      <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="mini-btn" type="button" data-act="replay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4"/></svg> Replay</button>
+      </div>
+      <div data-widget="compile" style="margin-top:12px;">
+        <button class="mini-btn accent" type="button" data-act="compile"><span class="lbl">Compile to DuckDB SQL</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button>
+        <div class="compile">
+          <div class="compile-head"><span class="dots"><i></i><i></i><i></i></span><span class="fname">orders_pipeline &#8594; DuckDB SQL</span></div>
+<pre><span class="cm">-- 1. read the source as a lazy view</span>
+<span class="kw">CREATE OR REPLACE VIEW</span> <span class="id">"orders_csv"</span> <span class="kw">AS</span>
+  <span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="fn">read_csv_auto</span>(<span class="st">'orders.csv'</span>, header<span class="kw">=</span><span class="kw">true</span>);
+
+<span class="cm">-- 2. the filter is just a WHERE</span>
+<span class="kw">CREATE OR REPLACE VIEW</span> <span class="id">"keep_paid"</span> <span class="kw">AS</span>
+  <span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="id">"orders_csv"</span> <span class="kw">WHERE</span> status <span class="kw">=</span> <span class="st">'paid'</span>;
+
+<span class="cm">-- 3. the sink is a COPY</span>
+<span class="kw">COPY</span> (<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="id">"keep_paid"</span>)
+  <span class="kw">TO</span> <span class="st">'out/paid.parquet'</span> (<span class="kw">FORMAT</span> parquet);</pre>
+        </div>
+      </div>
+    </div>
+    <p class="small reveal">Press Run and each node ticks green with a row count. A Preview tab shows the rows, a Console tab a line per node, a Plan tab that SQL. If something breaks, the failing node lights up red with the exact error.</p>
+  </div>
+</section>
+
+<!-- ============================ 11 COMPLEX PIPELINES ============================ -->
+<section class="act" data-chapter="Complex pipelines">
+  <span class="chapno" aria-hidden="true">11</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Building the hard ones</p>
+    <h2 class="reveal">Complex pipelines, <span class="hl">step by step.</span></h2>
+    <p class="lead reveal">The same nodes compose into the pipelines teams actually run. Four recipes, left to right.</p>
+
+    <div class="reveal" style="margin-top:26px;">
+      <p class="body" style="margin-bottom:10px;"><b>Join four systems in one pass</b> - no warehouse. Four sources into one Visual Mapper, filtered, fanned out to three sinks at once.</p>
+      <div class="recipe">
+        <div class="rstep" data-kind="source"><span class="rn">SOURCES</span><div class="rt">4 systems</div><code>csv + parquet + duckdb + sqlite</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">JOIN</span><div class="rt">Visual Map</div><code>xf.map - typed + filter</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">FAN OUT</span><div class="rt">Parallelize</div><code>ctl.parallelize</code></div>
+        <div class="rstep" data-kind="sink"><span class="rn">SINKS</span><div class="rt">3 at once</div><code>duckdb + parquet + csv</code></div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top:26px;">
+      <p class="body" style="margin-bottom:10px;"><b>A billion rows local, a rollup to the cloud.</b> Do the billion-row scan on your machine; send only the daily summary up, so the warehouse bills for kilobytes.</p>
+      <div class="recipe">
+        <div class="rstep" data-kind="source"><span class="rn">READ</span><div class="rt">1B orders</div><code>src.parquet + dims</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">ENRICH</span><div class="rt">2 Mappers</div><code>xf.map x2</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">SUMMARIZE</span><div class="rt">Aggregate</div><code>xf.groupby</code></div>
+        <div class="rstep" data-kind="sink"><span class="rn">UPSERT</span><div class="rt">Snowflake</div><code>snk.snowflake (merge)</code></div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top:26px;">
+      <p class="body" style="margin-bottom:10px;"><b>Mirror a change feed, exactly once.</b> Keep the latest change per key, enrich, MERGE into a table with deletes propagated. The watermark advances only on a fully successful run.</p>
+      <div class="recipe">
+        <div class="rstep" data-kind="source"><span class="rn">FEED</span><div class="rt">DuckLake CDC</div><code>src.ducklake.changes</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">LATEST</span><div class="rt">per key</div><code>xf.rank.filter</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">ENRICH</span><div class="rt">join</div><code>xf.map</code></div>
+        <div class="rstep" data-kind="sink"><span class="rn">MIRROR</span><div class="rt">MERGE + delete</div><code>snk.duckdb (upsert)</code></div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top:26px;">
+      <p class="body" style="margin-bottom:10px;"><b>Turn documents into searchable vectors.</b> Chain the AI transforms for a RAG index - three of the four steps need no API at all - and land vectors in pgvector.</p>
+      <div class="recipe">
+        <div class="rstep" data-kind="source"><span class="rn">READ</span><div class="rt">documents</div><code>src.lancedb / files</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">CHUNK</span><div class="rt">+ redact</div><code>ai.chunk &rarr; ai.pii</code></div>
+        <div class="rstep" data-kind="transform"><span class="rn">EMBED</span><div class="rt">+ dedupe</div><code>ai.embed &rarr; ai.dedupe</code></div>
+        <div class="rstep" data-kind="sink"><span class="rn">LAND</span><div class="rt">vector store</div><code>snk.pgvector</code></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 12 USE CASES ============================ -->
+<section class="act" data-chapter="Use cases">
+  <span class="chapno" aria-hidden="true">12</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Use cases</p>
+    <h2 class="reveal">Eight ways teams <span class="hl">use Duckle.</span></h2>
+    <p class="lead reveal">Every one is a real, verified pipeline on the Use cases page. And building your own is a short checklist: name the outcome, drop a source per system, model the middle, gate it with quality, choose the sink, schedule, ship.</p>
+    <div class="ucgrid reveal">
+      <div class="uccard"><span class="num">01</span><h4>Cross-system join</h4><p>Join four systems in one pass, no warehouse.</p></div>
+      <div class="uccard"><span class="num">02</span><h4>Visual transformation</h4><p>Map, join and derive columns without SQL.</p></div>
+      <div class="uccard"><span class="num">03</span><h4>Warehouse savings</h4><p>Crunch a billion rows locally, ship the rollup.</p></div>
+      <div class="uccard"><span class="num">04</span><h4>Change data capture</h4><p>Mirror a feed with upsert and delete propagation.</p></div>
+      <div class="uccard"><span class="num">05</span><h4>Incremental loading</h4><p>Load millions of rows, then only the new ones.</p></div>
+      <div class="uccard"><span class="num">06</span><h4>Local AI &amp; RAG</h4><p>Describe a pipeline, or prep data for AI, on device.</p></div>
+      <div class="uccard"><span class="num">07</span><h4>Agents over MCP</h4><p>Build and run validated pipelines from an LLM.</p></div>
+      <div class="uccard"><span class="num">08</span><h4>The DuckDB stack</h4><p>DuckDB + DuckLake + Quack in one pipeline.</p></div>
+    </div>
+    <div class="metrics reveal" style="margin-top:26px;">
+      <div class="metric"><b>1B rows</b><span>scanned locally, ~18s</span></div>
+      <div class="metric"><b>~1s</b><span>5M-row first load</span></div>
+      <div class="metric"><b>exactly-once</b><span>CDC state on success</span></div>
+      <div class="metric"><b>0 API keys</b><span>for the local assistant</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 13 SHIP IT ============================ -->
+<section class="act" data-chapter="Ship it">
+  <span class="chapno" aria-hidden="true">13</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Ship it</p>
+    <h2 class="reveal">Four ways to <span class="mv">put it to work.</span></h2>
+    <ul class="beats reveal">
+      <li><b>Run and schedule.</b> On demand, on an interval, or a full <code>cron</code> expression evaluated in your local time.</li>
+      <li><b>Headless runner and web console.</b> <code>duckle-runner</code> runs a file with no GUI; <code>duckle serve</code> hosts Operations, Pipelines, Runs and the scheduler.</li>
+      <li><b>Build a single binary.</b> Bundle the engine and your pipeline into one self-contained executable, secrets by env or passphrase.</li>
+      <li><b>Let an LLM build it.</b> The MCP server connects Claude in one click to list, create, validate, run and build - real, runnable pipelines.</li>
+    </ul>
+    <p class="body reveal">And <b>Duckie</b>, the local Qwen assistant, does the same on device - describe a pipeline and it streams one onto the canvas, prompts and data never leaving your machine. In-app git commits and pushes your workspace and watches CI.</p>
+  </div>
+</section>
+
+<!-- ============================ 14 TRUST ============================ -->
+<section class="act" data-chapter="Trust">
+  <span class="chapno" aria-hidden="true">14</span>
+  <div class="wrap-l">
+    <p class="eyebrow2 reveal">Trust &amp; the frontier</p>
+    <h2 class="reveal">Know exactly <span class="hl">what changed.</span></h2>
+    <ul class="beats reveal">
+      <li><b>Time travel and data diff.</b> Read a table as of a past snapshot on DuckLake, and diff two snapshots to see what changed between two points in time.</li>
+      <li><b>Column lineage and impact.</b> Trace any output column back to its sources, and see what breaks if you change it - before you change it.</li>
+      <li><b>Signed runs, drift and a trust score.</b> Every run signs into a reproducible <code>.ducklock</code>; schema-drift detection and a trust score flag when a source's shape moved.</li>
+      <li><b>Contracts and data branches.</b> Pin a source's expected shape, and test a change against real data on a branch before it touches the main copy.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================ FINALE ============================ -->
+<section class="act" data-chapter="Go build">
+  <div class="wrap-l finale">
+    <p class="eyebrow2 reveal" style="justify-content:center;">The finish line</p>
+    <h2 class="reveal">You've seen the <span class="hl">whole machine.</span></h2>
+    <p class="lead reveal">The canvas you draw, the engine that compiles it to SQL, the crates that run it, and every way to build and ship. The fastest way to make it stick is to open the app and drag your first source onto the canvas.</p>
+    <div class="cta reveal">
+      <a class="btn btn-primary btn-lg" href="index.html#download">Download Duckle</a>
+      <a class="btn btn-ghost btn-lg" href="use-cases.html">See the use cases</a>
+      <a class="btn btn-ghost btn-lg" href="docs/components.html">Browse all components</a>
+    </div>
+    <p class="small reveal" style="margin-inline:auto;">Prefer to poke at the source? It is all on <a class="inl" href="https://github.com/ducklelabs/duckle" target="_blank" rel="noopener">GitHub</a>.</p>
+  </div>
+</section>
+
+<script src="assets/js/learn.js"></script>
+</body>
+</html>
