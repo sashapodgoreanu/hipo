@@ -325,6 +325,11 @@ async fn run_pipeline(
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
+    // Resolve ${ENV:NAME} from the OS environment before running, so canvas runs
+    // see process env vars like the headless runner does (issue #137). The
+    // frontend already resolved ${workspace}/${context}/date builtins.
+    let mut pipeline = pipeline;
+    duckle_duckdb_engine::context::apply_env(&mut pipeline);
     let name = pipeline_name.clone();
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(&pipeline, None, name.as_deref(), |evt| {
@@ -366,6 +371,9 @@ async fn run_pipeline_partial(
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
+    // Resolve ${ENV:NAME} from the OS environment before running (issue #137).
+    let mut pipeline = pipeline;
+    duckle_duckdb_engine::context::apply_env(&mut pipeline);
     let target = target_node_id;
     let name = pipeline_name.clone();
     let joined = tokio::task::spawn_blocking(move || {
@@ -1339,18 +1347,32 @@ fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, St
         return Err("Open or create a workspace first".to_string());
     }
     let mut guard = WEB_PANEL.lock().map_err(|_| "panel lock poisoned".to_string())?;
-    // Reuse a still-running panel.
+    // Reuse a still-running panel - but only if it is actually accepting
+    // connections. A child that is alive yet not listening (still starting,
+    // wedged, or its port taken) would otherwise hand the browser a dead URL
+    // and surface as ERR_CONNECTION_REFUSED. Re-probe the port before trusting it.
     if let Some(p) = guard.as_mut() {
-        if matches!(p.child.try_wait(), Ok(None)) {
+        let alive = matches!(p.child.try_wait(), Ok(None));
+        let listening = std::net::TcpStream::connect(("127.0.0.1", p.port)).is_ok();
+        if alive && listening {
             return Ok(format!("http://127.0.0.1:{}", p.port));
         }
-        *guard = None; // previous server exited; start a fresh one
+        let _ = p.child.kill(); // exited or not listening; start a fresh one
+        *guard = None;
     }
 
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let duckdb = engine_manager::duckdb_path(&app_data);
     let runner = stage_panel_runner(&app_data)?;
     let port = pick_panel_port();
+
+    // Capture the runner's stderr to a log file so a failed `serve` start is
+    // diagnosable instead of vanishing into Stdio::null (root-cause of silent
+    // "did not start in time" reports).
+    let log_path = app_data.join("engines").join("panel").join("serve.log");
+    let stderr_sink = std::fs::File::create(&log_path)
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(|_| std::process::Stdio::null());
 
     let mut cmd = std::process::Command::new(&runner);
     cmd.arg("serve")
@@ -1362,7 +1384,7 @@ fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, St
         .arg(&workspace)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(stderr_sink);
     // Only pass --duckdb when the resolved binary exists; otherwise let the
     // runner fall back (env / sibling / PATH) instead of erroring on a missing
     // explicit path.
@@ -1388,7 +1410,21 @@ fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, St
     }
     *guard = Some(WebPanel { port, child });
     if !up {
-        return Err("web panel did not start in time".to_string());
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let tail: String = log
+            .trim()
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<Vec<char>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return Err(if tail.is_empty() {
+            "web panel did not start in time".to_string()
+        } else {
+            format!("web panel did not start in time. serve log:\n{}", tail)
+        });
     }
     Ok(format!("http://{}", addr))
 }

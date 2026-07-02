@@ -123,7 +123,7 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
     brokers: 'Bootstrap servers',
     url: 'Base URL',
     endpoint: 'Endpoint (MinIO / R2 / B2, blank for AWS)',
-    urlStyle: 'URL style (path or vhost)',
+    urlStyle: 'URL style',
 };
 
 const SECRET_FIELDS = new Set<keyof ConnectionPayload>(['password', 'secretKey', 'accountKey']);
@@ -230,6 +230,28 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                         {meta?.fields.map(field => {
                             const isSecret = SECRET_FIELDS.has(field);
                             const isPort = field === 'port';
+                            if (field === 'urlStyle') {
+                                // The values MUST match the S3 node's URL-style
+                                // option values ('' / 'path' / 'vhost') so picking
+                                // this saved connection on a node lands on a real
+                                // option instead of falling back to Default (#116).
+                                return (
+                                    <div className="modal-field" key={field}>
+                                        <label className="modal-field-label">
+                                            {FIELD_LABELS[field] ?? field}
+                                        </label>
+                                        <select
+                                            className="modal-input"
+                                            value={(values.urlStyle as string | undefined) ?? ''}
+                                            onChange={e => setField('urlStyle', e.target.value)}
+                                        >
+                                            <option value="">Default</option>
+                                            <option value="path">Path (MinIO / B2)</option>
+                                            <option value="vhost">Virtual host (R2 / AWS)</option>
+                                        </select>
+                                    </div>
+                                );
+                            }
                             return (
                                 <div className="modal-field" key={field}>
                                     <label className="modal-field-label">

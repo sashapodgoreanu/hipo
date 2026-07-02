@@ -24,8 +24,22 @@ use tokio::time;
 use tracing::warn;
 
 const SCHEDULES_FILE: &str = "schedules.json";
-const TICK_INTERVAL: Duration = Duration::from_secs(15);
+/// Default poll cadence for checking due schedules. Overridable via the
+/// DUCKLE_TICK_INTERVAL env var (whole seconds, must be > 0) so sub-15s
+/// real-time schedules can fire closer to their configured rate (issue #135).
+const DEFAULT_TICK_INTERVAL: Duration = Duration::from_secs(15);
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// Resolve the scheduler poll cadence: DUCKLE_TICK_INTERVAL (whole seconds)
+/// if set and greater than 0, otherwise the 15s default.
+fn tick_interval() -> Duration {
+    std::env::var("DUCKLE_TICK_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_TICK_INTERVAL)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -255,6 +269,9 @@ impl Scheduler {
         // Stamp the dynamic date/time builtins (${date}/${datetime}/...) at fire
         // time, so a recurring schedule writes a fresh-dated path on every run.
         duckle_duckdb_engine::context::apply_time_builtins(&mut pipeline);
+        // Resolve ${ENV:NAME} from the process environment so scheduled runs see
+        // OS env vars just like the headless runner does (issue #137).
+        duckle_duckdb_engine::context::apply_env(&mut pipeline);
         // A fresh per-run cancel scope so concurrent scheduled runs (and the
         // interactive run) don't share or reset each other's cancellation.
         let engine = self.engine.for_new_run();
@@ -297,7 +314,7 @@ impl Scheduler {
         // Cron / interval poller.
         let me = self.clone();
         tokio::spawn(async move {
-            let mut tick = time::interval(TICK_INTERVAL);
+            let mut tick = time::interval(tick_interval());
             tick.tick().await; // Skip the immediate tick.
             loop {
                 tick.tick().await;

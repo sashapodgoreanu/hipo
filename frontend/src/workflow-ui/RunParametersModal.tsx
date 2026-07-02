@@ -54,7 +54,7 @@ export default function RunParametersModal({ paramNames, pipelineName, onSubmit,
                 </div>
 
                 <div className="modal-body">
-                    <p style={{ margin: '0 0 12px', fontSize: 13, opacity: 0.8 }}>
+                    <p style={{ margin: '0 0 12px', fontSize: '1rem', opacity: 0.8 }}>
                         This pipeline references variables that no context provides. Set a value for
                         this run, or leave a field blank to keep the placeholder unresolved.
                     </p>
@@ -68,7 +68,7 @@ export default function RunParametersModal({ paramNames, pipelineName, onSubmit,
                         {paramNames.map((name, i) => (
                             <label
                                 key={name}
-                                style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
+                                style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '1rem' }}
                             >
                                 <span style={{ fontWeight: 600 }}>{name}</span>
                                 <input

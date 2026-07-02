@@ -376,7 +376,20 @@ export default function PropertiesPanel({
                         for (const k of keys) {
                             const v = payload[k];
                             if (v !== undefined && v !== '' && v !== null) {
-                                next[k] = v as string | number;
+                                if (k === 'urlStyle' && typeof v === 'string') {
+                                    // Normalize legacy free-text URL-style values
+                                    // ('Path', 'Path (MinIO / B2)', 'Virtual host')
+                                    // to the canonical node option value so the
+                                    // node select shows the right choice (#116).
+                                    const s = v.toLowerCase();
+                                    next.urlStyle = s.startsWith('path')
+                                        ? 'path'
+                                        : s.startsWith('vhost') || s.includes('virtual')
+                                          ? 'vhost'
+                                          : '';
+                                } else {
+                                    next[k] = v as string | number;
+                                }
                             }
                         }
                         // Snowflake components key the account identifier as
@@ -439,7 +452,7 @@ export default function PropertiesPanel({
                                         boxSizing: 'border-box',
                                     }}
                                 />
-                                <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-3)' }}>
+                                <p style={{ margin: '4px 0 0', fontSize: '0.8462rem', color: 'var(--text-3)' }}>
                                     {t('properties.sqlNameHelp', {
                                         defaultValue:
                                             'Reference this node by this name in Raw / Pure SQL nodes. Defaults to the node id.',

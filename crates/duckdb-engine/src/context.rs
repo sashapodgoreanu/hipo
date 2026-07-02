@@ -129,6 +129,31 @@ pub fn apply_time_builtins(doc: &mut PipelineDoc) {
     }
 }
 
+/// Resolve `${ENV:NAME}` placeholders from the process environment, in place.
+/// This is the run-time env pass shared by the desktop interactive run, the
+/// desktop scheduler, and the headless runner so a pipeline can reference OS
+/// environment variables (issue #137). An unset NAME is left verbatim, exactly
+/// like the other passes. The runner layers its own extra tiers (secrets.env /
+/// secrets.enc) on top of this process-env tier.
+pub fn apply_env(doc: &mut PipelineDoc) {
+    let re = match regex::Regex::new(r"\$\{ENV:([^}]+)\}") {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+    let replace = |s: &str| -> String {
+        re.replace_all(s, |caps: &regex::Captures| match std::env::var(caps[1].trim()) {
+            Ok(v) => v,
+            Err(_) => caps[0].to_string(),
+        })
+        .into_owned()
+    };
+    for node in &mut doc.nodes {
+        if let Some(props) = node.data.properties.as_mut() {
+            substitute_deep(props, &replace);
+        }
+    }
+}
+
 /// Resolve the portable workspace placeholders (`${workspace}` / `${projectroot}`),
 /// the date/time builtins, and any workspace context-file variables in every node
 /// property, in place. Used by the headless run paths (the CLI runner and the web

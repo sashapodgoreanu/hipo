@@ -106,7 +106,7 @@ function ProfileForm({
                     {avatar ? (
                         <img src={avatar} alt="" />
                     ) : (
-                        <span className="acct-avatar-initials" style={{ fontSize: 22 }}>
+                        <span className="acct-avatar-initials" style={{ fontSize: '1.6923rem' }}>
                             {username.trim() ? initials(username) : <ImagePlus size={20} />}
                         </span>
                     )}

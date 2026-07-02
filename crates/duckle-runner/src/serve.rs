@@ -34,6 +34,7 @@ struct ServeArgs {
     port: u16,
     workspace: PathBuf,
     duckdb: Option<PathBuf>,
+    tick_interval: Duration,
 }
 
 fn parse_serve_args() -> Result<ServeArgs, String> {
@@ -41,6 +42,7 @@ fn parse_serve_args() -> Result<ServeArgs, String> {
     let mut port: u16 = 8080;
     let mut workspace: Option<PathBuf> = None;
     let mut duckdb: Option<PathBuf> = None;
+    let mut tick_secs: Option<u64> = None;
     let mut it = std::env::args().skip(2);
     while let Some(arg) = it.next() {
         let mut take = |label: &str| it.next().ok_or_else(|| format!("{} needs a value", label));
@@ -53,15 +55,23 @@ fn parse_serve_args() -> Result<ServeArgs, String> {
             }
             "--workspace" => workspace = Some(PathBuf::from(take("--workspace")?)),
             "--duckdb" => duckdb = Some(PathBuf::from(take("--duckdb")?)),
+            "--tick-interval" => {
+                tick_secs = Some(
+                    take("--tick-interval")?
+                        .parse()
+                        .map_err(|_| "--tick-interval must be a number (seconds)".to_string())?,
+                )
+            }
             "-h" | "--help" => {
                 println!(
                     "duckle-runner serve - web management console\n\n\
-                     USAGE:\n    duckle-runner serve [--host <ip>] [--port <n>] [--workspace <dir>] [--duckdb <path>]\n\n\
+                     USAGE:\n    duckle-runner serve [--host <ip>] [--port <n>] [--workspace <dir>] [--duckdb <path>] [--tick-interval <secs>]\n\n\
                      OPTIONS:\n    \
-                     --host <ip>        Bind address (default 127.0.0.1; use 0.0.0.0 for remote access)\n    \
-                     --port <n>         Port (default 8080)\n    \
-                     --workspace <dir>  Workspace root holding pipelines, runs/, logs/ (default: current dir)\n    \
-                     --duckdb <path>    DuckDB CLI (default: DUCKLE_DUCKDB_BIN, sibling bin/duckdb, or PATH)\n\n\
+                     --host <ip>            Bind address (default 127.0.0.1; use 0.0.0.0 for remote access)\n    \
+                     --port <n>             Port (default 8080)\n    \
+                     --workspace <dir>      Workspace root holding pipelines, runs/, logs/ (default: current dir)\n    \
+                     --duckdb <path>        DuckDB CLI (default: DUCKLE_DUCKDB_BIN, sibling bin/duckdb, or PATH)\n    \
+                     --tick-interval <secs> Scheduler poll cadence in seconds (default 15; also DUCKLE_TICK_INTERVAL)\n\n\
                      No authentication. Bind to localhost or a trusted network."
                 );
                 std::process::exit(0);
@@ -70,7 +80,18 @@ fn parse_serve_args() -> Result<ServeArgs, String> {
         }
     }
     let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
-    Ok(ServeArgs { host, port, workspace, duckdb })
+    // Poll cadence: --tick-interval flag > DUCKLE_TICK_INTERVAL env > 15s default.
+    let tick_interval = Duration::from_secs(
+        tick_secs
+            .or_else(|| {
+                std::env::var("DUCKLE_TICK_INTERVAL")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
+            .filter(|n| *n > 0)
+            .unwrap_or(15),
+    );
+    Ok(ServeArgs { host, port, workspace, duckdb, tick_interval })
 }
 
 struct State {
@@ -79,6 +100,9 @@ struct State {
     /// Serializes pipeline execution: the shared workspace env vars and DuckDB
     /// process make concurrent runs unsafe, so manual + scheduled runs queue.
     run_lock: Mutex<()>,
+    /// Scheduler poll cadence (issue #135). Default 15s; overridable via
+    /// --tick-interval or DUCKLE_TICK_INTERVAL.
+    tick_interval: Duration,
 }
 
 pub fn run() -> Result<(), String> {
@@ -96,7 +120,12 @@ pub fn run() -> Result<(), String> {
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
 
-    let state = Arc::new(State { workspace: workspace.clone(), duckdb: duckdb.clone(), run_lock: Mutex::new(()) });
+    let state = Arc::new(State {
+        workspace: workspace.clone(),
+        duckdb: duckdb.clone(),
+        run_lock: Mutex::new(()),
+        tick_interval: args.tick_interval,
+    });
 
     spawn_scheduler(state.clone());
 
@@ -1187,7 +1216,7 @@ fn spawn_scheduler(state: Arc<State>) {
         let mut last_fired: HashMap<String, Instant> = HashMap::new();
         let mut cron_next: HashMap<String, chrono::DateTime<chrono::Local>> = HashMap::new();
         loop {
-            std::thread::sleep(Duration::from_secs(30));
+            std::thread::sleep(state.tick_interval);
             let scheds = load_schedules(&state);
             let obj = match scheds.as_object() {
                 Some(o) => o,

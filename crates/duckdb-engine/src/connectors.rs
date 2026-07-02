@@ -170,6 +170,45 @@ impl DuckdbEngine {
                 ))),
             }
         };
+        // When the user declares a form Content-Type header, encode each
+        // row as application/x-www-form-urlencoded instead of JSON, so
+        // snk.rest can POST to form-native APIs (Stripe, OAuth token
+        // endpoints, legacy webhooks). Nested values are JSON-stringified;
+        // nulls become empty strings.
+        fn percent_encode_form(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            for b in s.bytes() {
+                match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                        out.push(b as char)
+                    }
+                    b' ' => out.push_str("%20"),
+                    _ => out.push_str(&format!("%{:02X}", b)),
+                }
+            }
+            out
+        }
+        fn form_encode_row(row: &serde_json::Value) -> String {
+            let obj = match row.as_object() {
+                Some(o) => o,
+                None => return String::new(),
+            };
+            obj.iter()
+                .map(|(k, v)| {
+                    let val = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Null => String::new(),
+                        other => other.to_string(),
+                    };
+                    format!("{}={}", percent_encode_form(k), percent_encode_form(&val))
+                })
+                .collect::<Vec<_>>()
+                .join("&")
+        }
+        let form_encoded = spec.headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type")
+                && v.to_ascii_lowercase().contains("x-www-form-urlencoded")
+        });
         match spec.body_shape.as_str() {
             "batch" => {
                 // Wrap the rows array in {body_wrap: [...]} when set,
@@ -215,8 +254,15 @@ impl DuckdbEngine {
             _ => {
                 let mut sent = 0_usize;
                 for row in &rows {
-                    let body = serde_json::to_string(row).unwrap_or_else(|_| "{}".into());
-                    dispatch(body, "application/json")?;
+                    let (body, ct) = if form_encoded {
+                        (form_encode_row(row), "application/x-www-form-urlencoded")
+                    } else {
+                        (
+                            serde_json::to_string(row).unwrap_or_else(|_| "{}".into()),
+                            "application/json",
+                        )
+                    };
+                    dispatch(body, ct)?;
                     sent += 1;
                 }
                 Ok(format!("sent {} rows to {}", sent, spec.url))

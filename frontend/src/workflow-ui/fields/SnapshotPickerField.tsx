@@ -130,10 +130,10 @@ export function SnapshotPickerField({ field, value, onChange }: Props) {
                                       </div>
                                   ) : null}
                                   {error ? (
-                                      <div style={{ color: 'var(--danger, #ff4d6d)', fontSize: 12 }}>{error}</div>
+                                      <div style={{ color: 'var(--danger, #ff4d6d)', fontSize: '0.9231rem' }}>{error}</div>
                                   ) : null}
                                   {!loading && !error && snaps.length === 0 ? (
-                                      <div style={{ opacity: 0.7, fontSize: 12 }}>No snapshots found.</div>
+                                      <div style={{ opacity: 0.7, fontSize: '0.9231rem' }}>No snapshots found.</div>
                                   ) : null}
                                   {snaps.map((s, i) => (
                                       <button
@@ -148,7 +148,7 @@ export function SnapshotPickerField({ field, value, onChange }: Props) {
                                           <b style={{ fontVariantNumeric: 'tabular-nums' }}>
                                               v{String(s.snapshot_id)}
                                           </b>
-                                          <span style={{ opacity: 0.7, fontSize: 12 }}>
+                                          <span style={{ opacity: 0.7, fontSize: '0.9231rem' }}>
                                               {s.snapshot_time ? String(s.snapshot_time) : ''}
                                           </span>
                                       </button>

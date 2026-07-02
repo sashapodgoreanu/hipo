@@ -165,7 +165,7 @@ export function SettingsModal({
         color: 'inherit',
         boxSizing: 'border-box',
     };
-    const help: React.CSSProperties = { marginTop: 0, marginBottom: 8, fontSize: 12, opacity: 0.7 };
+    const help: React.CSSProperties = { marginTop: 0, marginBottom: 8, fontSize: '0.9231rem', opacity: 0.7 };
 
     const Section = ({ id, title, children }: { id: string; title: string; children: ReactNode }) => {
         const open = expanded.has(id);
@@ -204,12 +204,12 @@ export function SettingsModal({
                 </div>
                 <div className="modal-body">
                     {!workspace ? (
-                        <p style={{ fontSize: 12, color: 'var(--danger, #ff4d6d)', margin: '0 0 8px' }}>
+                        <p style={{ fontSize: '0.9231rem', color: 'var(--danger, #ff4d6d)', margin: '0 0 8px' }}>
                             Open a workspace first to save workspace settings.
                         </p>
                     ) : null}
                     {error ? (
-                        <p style={{ fontSize: 12, color: 'var(--danger, #ff4d6d)', margin: '0 0 8px' }}>
+                        <p style={{ fontSize: '0.9231rem', color: 'var(--danger, #ff4d6d)', margin: '0 0 8px' }}>
                             {error}
                         </p>
                     ) : null}
@@ -351,7 +351,7 @@ export function SettingsModal({
                     </Section>
 
                     <Section id="toolbar" title="Toolbar">
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={showDives} onChange={e => toggleDives(e.target.checked)} />
                             Show the Dives button (live data views &amp; dashboards) in the toolbar
                         </label>
