@@ -1411,6 +1411,7 @@ fn build_stage(
             mode: string_prop(&props, "mode").unwrap_or_else(|| "append".into()),
             batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000) as usize,
             trust_cert: props.get("trustCert").and_then(|v| v.as_bool()).unwrap_or(false),
+            encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
             upsert_keys: upsert_keys_from(&props),
             delete_column: delete_column_from(&props),
             delete_value: delete_value_from(&props),
@@ -3043,6 +3044,7 @@ fn build_stage(
             database,
             query,
             trust_cert: props.get("trustCert").and_then(|v| v.as_bool()).unwrap_or(false),
+            encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.clickhouse" {

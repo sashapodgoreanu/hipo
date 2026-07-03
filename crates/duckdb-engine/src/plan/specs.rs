@@ -1036,6 +1036,9 @@ pub struct SqlServerSinkSpec {
     /// If true, skip TLS cert verification - useful for self-signed
     /// dev servers. Production users leave this off.
     pub trust_cert: bool,
+    /// If false, disable TLS entirely (tiberius EncryptionLevel::NotSupported)
+    /// for legacy servers that cannot negotiate TLS 1.2+. Defaults to true.
+    pub encrypt: bool,
     /// Non-empty in "upsert" write mode: the key columns to MERGE on.
     /// Empty means plain INSERT (append / create).
     pub upsert_keys: Vec<String>,
@@ -1055,6 +1058,10 @@ pub struct SqlServerSourceSpec {
     pub database: String,
     pub query: String,
     pub trust_cert: bool,
+    /// If false, disable TLS entirely (tiberius EncryptionLevel::NotSupported)
+    /// for legacy servers (e.g. SQL Server 2014 and older) that cannot
+    /// negotiate the TLS 1.2+ that rustls requires. Defaults to true.
+    pub encrypt: bool,
 }
 
 /// snk.clickhouse: HTTP INSERT to a ClickHouse table.

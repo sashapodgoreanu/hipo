@@ -6543,6 +6543,14 @@ impl DuckdbEngine {
                 if spec.trust_cert {
                     config.trust_cert();
                 }
+                if !spec.encrypt {
+                    // #141: legacy servers (SQL Server 2014 and older) offer only
+                    // TLS 1.0/1.1, which rustls refuses outright (it supports 1.2+
+                    // only), so even trust_cert cannot get through the handshake.
+                    // NotSupported skips TLS entirely; the login travels
+                    // unencrypted, matching other tools' "encrypt = no".
+                    config.encryption(tiberius::EncryptionLevel::NotSupported);
+                }
                 let tcp = tokio::net::TcpStream::connect(config.get_addr())
                     .await
                     .map_err(|e| format!("connect: {}", e))?;
@@ -6674,6 +6682,14 @@ impl DuckdbEngine {
                 config.database(&spec.database);
                 if spec.trust_cert {
                     config.trust_cert();
+                }
+                if !spec.encrypt {
+                    // #141: legacy servers (SQL Server 2014 and older) offer only
+                    // TLS 1.0/1.1, which rustls refuses outright (it supports 1.2+
+                    // only), so even trust_cert cannot get through the handshake.
+                    // NotSupported skips TLS entirely; the login travels
+                    // unencrypted, matching other tools' "encrypt = no".
+                    config.encryption(tiberius::EncryptionLevel::NotSupported);
                 }
                 let tcp = tokio::net::TcpStream::connect(config.get_addr())
                     .await

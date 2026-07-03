@@ -1238,6 +1238,8 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
                     { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
                     { key: 'database', label: 'Database', kind: 'text', required: true },
                     { key: 'trustCert', label: 'Trust TLS cert (dev / self-signed)', kind: 'bool', defaultValue: false },
+                    { key: 'encrypt', label: 'Encrypt connection', kind: 'bool', defaultValue: true,
+                      description: 'On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted.' },
                 ],
             },
             {
@@ -1354,6 +1356,8 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                     { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
                     { key: 'database', label: 'Database', kind: 'text', required: true },
                     { key: 'trustCert', label: 'Trust TLS cert (dev / self-signed)', kind: 'bool', defaultValue: false },
+                    { key: 'encrypt', label: 'Encrypt connection', kind: 'bool', defaultValue: true,
+                      description: 'On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted.' },
                     { key: 'bulk', label: 'Bulk write (fast)', kind: 'bool', defaultValue: true,
                       description: 'Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s). Turn off to use the row-by-row driver (works fully offline; no extension fetch).' },
                 ],

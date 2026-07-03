@@ -2885,6 +2885,13 @@
                 "label": "Trust TLS cert (dev / self-signed)",
                 "kind": "bool",
                 "defaultValue": false
+              },
+              {
+                "key": "encrypt",
+                "label": "Encrypt connection",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted."
               }
             ]
           },
@@ -27890,6 +27897,13 @@
                 "label": "Trust TLS cert (dev / self-signed)",
                 "kind": "bool",
                 "defaultValue": false
+              },
+              {
+                "key": "encrypt",
+                "label": "Encrypt connection",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted."
               },
               {
                 "key": "bulk",
