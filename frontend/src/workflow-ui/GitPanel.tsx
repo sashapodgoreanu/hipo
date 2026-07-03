@@ -50,6 +50,7 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
 
     const [commitMsg, setCommitMsg] = useState('');
     const [remoteUrl, setRemoteUrl] = useState('');
+    const [editingRemote, setEditingRemote] = useState(false);
     const [newBranch, setNewBranch] = useState('');
     const [patPrompt, setPatPrompt] = useState(false);
     const [pat, setPat] = useState('');
@@ -121,6 +122,7 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
         run('remote', async () => {
             await workspaceGitRemoteSet(workspacePath, remoteUrl.trim());
             setRemoteUrl('');
+            setEditingRemote(false);
         }, 'Remote URL set');
     const handleBranchCreate = () =>
         newBranch.trim() &&
@@ -248,7 +250,7 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
 
                     {/* Remote */}
                     <Section title="Remote">
-                        {status.remote ? (
+                        {status.remote && !editingRemote ? (
                             <div className="git-panel-remote">
                                 <span className="git-panel-remote-icon" title={status.remote.provider}>
                                     {providerLabel(status.remote.provider) || <Globe size={12} />}
@@ -256,6 +258,16 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
                                 <span className="git-panel-remote-url" title={status.remote.url}>
                                     {status.remote.url}
                                 </span>
+                                <button
+                                    type="button"
+                                    className="git-panel-btn"
+                                    onClick={() => {
+                                        setRemoteUrl(status.remote!.url);
+                                        setEditingRemote(true);
+                                    }}
+                                >
+                                    Change
+                                </button>
                             </div>
                         ) : (
                             <div className="git-panel-row">
@@ -265,6 +277,7 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
                                     placeholder="https://github.com/you/repo.git"
                                     value={remoteUrl}
                                     onChange={e => setRemoteUrl(e.target.value)}
+                                    autoFocus={editingRemote}
                                 />
                                 <button
                                     type="button"
@@ -272,8 +285,20 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
                                     onClick={handleRemoteSet}
                                     disabled={!remoteUrl.trim() || busy === 'remote'}
                                 >
-                                    Set
+                                    {editingRemote ? 'Save' : 'Set'}
                                 </button>
+                                {editingRemote ? (
+                                    <button
+                                        type="button"
+                                        className="git-panel-btn"
+                                        onClick={() => {
+                                            setEditingRemote(false);
+                                            setRemoteUrl('');
+                                        }}
+                                    >
+                                        Cancel
+                                    </button>
+                                ) : null}
                             </div>
                         )}
                     </Section>

@@ -139,6 +139,9 @@ pub struct OracleSinkSpec {
     pub schema: Option<String>,
     pub table: String,
     pub batch_size: usize,
+    /// Write mode: "append"/"overwrite" (create + insert) or "truncate"
+    /// (TRUNCATE TABLE then insert). "upsert" is driven by upsert_keys.
+    pub mode: String,
     /// Non-empty in "upsert" write mode: the key columns to MERGE on.
     /// Empty means plain INSERT.
     pub upsert_keys: Vec<String>,
@@ -1027,6 +1030,9 @@ pub struct SqlServerSinkSpec {
     pub schema: String,
     pub table: String,
     pub batch_size: usize,
+    /// Write mode: "append"/"overwrite" (create + insert) or "truncate"
+    /// (TRUNCATE TABLE then insert). "upsert" is driven by upsert_keys.
+    pub mode: String,
     /// If true, skip TLS cert verification - useful for self-signed
     /// dev servers. Production users leave this off.
     pub trust_cert: bool,

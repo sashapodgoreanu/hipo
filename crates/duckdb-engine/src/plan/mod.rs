@@ -1313,6 +1313,7 @@ fn build_stage(
             schema: string_prop(&props, "schema").filter(|s| !s.is_empty()),
             table,
             batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000) as usize,
+            mode: string_prop(&props, "mode").unwrap_or_else(|| "append".into()),
             upsert_keys: upsert_keys_from(&props),
             delete_column: delete_column_from(&props),
             delete_value: delete_value_from(&props),
@@ -1407,6 +1408,7 @@ fn build_stage(
             database,
             schema: string_prop(&props, "schema").unwrap_or_else(|| "dbo".into()),
             table,
+            mode: string_prop(&props, "mode").unwrap_or_else(|| "append".into()),
             batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(1000) as usize,
             trust_cert: props.get("trustCert").and_then(|v| v.as_bool()).unwrap_or(false),
             upsert_keys: upsert_keys_from(&props),
@@ -3178,6 +3180,8 @@ fn build_stage(
             | "src.intercom"
             | "src.couchdb"
             | "src.odata"
+            | "src.sap"
+            | "src.sap.rfc"
             | "src.soap"
             | "src.asana"
             | "src.trello"
@@ -3200,10 +3204,37 @@ fn build_stage(
         let url = string_prop(&props, "url")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: url required", component_id)))?;
+        // SAP native aliases. src.sap = SAP OData (v2 classic Gateway or v4
+        // RAP); this covers OData services and CDS views published as OData.
+        // src.sap.rfc = an RFC-enabled function module exposed over SOAP
+        // (native HTTP + XML, no proprietary SAP NW RFC SDK). Binary RFC via
+        // the closed SDK is intentionally not shipped.
+        let is_sap_odata = component_id == "src.sap";
+        let is_soap = component_id == "src.soap" || component_id == "src.sap.rfc";
+        let sap_odata_v2 =
+            is_sap_odata && string_prop(&props, "odataVersion").as_deref() != Some("v4");
+        // SAP Gateway wants $format=json (OData v2 defaults to XML/Atom) and a
+        // sap-client mandate; append both to the URL when the user hasn't.
+        let url = if is_sap_odata {
+            let mut u = url;
+            if !u.contains("$format=") {
+                let sep = if u.contains('?') { '&' } else { '?' };
+                u = format!("{}{}$format=json", u, sep);
+            }
+            if let Some(client) = string_prop(&props, "sapClient").filter(|s| !s.is_empty()) {
+                if !u.contains("sap-client=") {
+                    let sep = if u.contains('?') { '&' } else { '?' };
+                    u = format!("{}{}sap-client={}", u, sep, client);
+                }
+            }
+            u
+        } else {
+            url
+        };
         let method = string_prop(&props, "method")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
-                if component_id == "src.soap" {
+                if is_soap {
                     "POST".into()
                 } else {
                     "GET".into()
@@ -3215,7 +3246,7 @@ fn build_stage(
         // SOAP needs a content-type and (often) a SOAPAction header.
         // Only set defaults if the user didn't already pass them via
         // the headers form.
-        if component_id == "src.soap" {
+        if is_soap {
             let has_ct = headers
                 .iter()
                 .any(|(k, _)| k.eq_ignore_ascii_case("Content-Type"));
@@ -3232,7 +3263,7 @@ fn build_stage(
             }
         }
         push_rest_auth(&mut headers, &props);
-        let response_format = if component_id == "src.soap"
+        let response_format = if is_soap
             || string_prop(&props, "responseFormat").as_deref() == Some("xml")
         {
             RestResponseFormat::Xml
@@ -3244,6 +3275,12 @@ fn build_stage(
             .unwrap_or_else(|| {
                 if component_id == "src.odata" {
                     "/value".into()
+                } else if is_sap_odata {
+                    if sap_odata_v2 {
+                        "/d/results".into()
+                    } else {
+                        "/value".into()
+                    }
                 } else {
                     String::new()
                 }
@@ -3251,7 +3288,7 @@ fn build_stage(
         let pagination_type = string_prop(&props, "paginationType")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
-                if component_id == "src.odata" {
+                if component_id == "src.odata" || is_sap_odata {
                     "nextUrl".into()
                 } else {
                     "none".into()
@@ -3298,6 +3335,12 @@ fn build_stage(
                     .unwrap_or_else(|| {
                         if component_id == "src.odata" {
                             "/@odata.nextLink".into()
+                        } else if is_sap_odata {
+                            if sap_odata_v2 {
+                                "/d/__next".into()
+                            } else {
+                                "/@odata.nextLink".into()
+                            }
                         } else {
                             "/next".into()
                         }

@@ -129,6 +129,7 @@ const upsertModeFields = (supportsMerge = false): Field[] => [
         options: [
             { label: 'Overwrite (create / append)', value: 'overwrite' },
             { label: 'Append (insert)', value: 'append' },
+            { label: 'Truncate + insert', value: 'truncate' },
             { label: 'Upsert (MERGE on key)', value: 'upsert' },
             // Merge is only offered for DuckDB-native targets (issue #39).
             ...(supportsMerge
@@ -2073,6 +2074,35 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
 
 function synthApiSource(comp: ComponentDef): ComponentManifest {
     return base(comp, [
+        ...(comp.id === 'src.sap'
+            ? [
+                  {
+                      label: 'SAP',
+                      fields: [
+                          {
+                              key: 'odataVersion',
+                              label: 'OData version',
+                              kind: 'select' as const,
+                              defaultValue: 'v2',
+                              options: [
+                                  { label: 'v2 (classic SAP Gateway)', value: 'v2' },
+                                  { label: 'v4 (RAP / newer S/4HANA)', value: 'v4' },
+                              ],
+                              description:
+                                  'v2 walks /d/results with __next paging; v4 walks /value with @odata.nextLink. Classic ECC and older S/4HANA Gateway services are usually v2.',
+                          },
+                          {
+                              key: 'sapClient',
+                              label: 'SAP client (mandate)',
+                              kind: 'text' as const,
+                              placeholder: '100',
+                              description:
+                                  'Appended as ?sap-client=NNN. Leave blank to use the system default client.',
+                          },
+                      ],
+                  },
+              ]
+            : []),
         {
             label: 'Request',
             fields: [

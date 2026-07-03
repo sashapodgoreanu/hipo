@@ -631,6 +631,14 @@ impl DuckdbEngine {
                 .map_err(|e| EngineError::Query(format!("oracle create table: {}", e)))?;
         }
 
+        // Truncate + insert write mode (#138): clear existing rows but keep the
+        // table (and its grants / indexes) before the plain-insert path. Only
+        // for non-upsert writes; upsert has its own MERGE path below.
+        if spec.upsert_keys.is_empty() && spec.mode == "truncate" {
+            conn.execute(&format!("TRUNCATE TABLE {}", qualified), &[])
+                .map_err(|e| EngineError::Query(format!("oracle truncate: {}", e)))?;
+        }
+
         // Commit periodically, not after every statement: a commit forces a
         // redo-log flush, so per-batch commits dominated large-load wall-clock.
         const COMMIT_EVERY: usize = 200_000;
@@ -6547,6 +6555,14 @@ impl DuckdbEngine {
                     .execute(create_sql.as_str(), &[])
                     .await
                     .map_err(|e| format!("create table: {}", e))?;
+                // Truncate + insert write mode (#138): clear rows, keep the
+                // table. Non-upsert only; upsert MERGEs below.
+                if !is_upsert && spec.mode == "truncate" {
+                    client
+                        .execute(format!("TRUNCATE TABLE {}", qualified).as_str(), &[])
+                        .await
+                        .map_err(|e| format!("truncate table: {}", e))?;
+                }
                 let mut total = 0_usize;
                 for chunk in rows.chunks(spec.batch_size) {
                     if cancel.load(Ordering::Relaxed) {
