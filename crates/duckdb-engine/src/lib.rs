@@ -2290,6 +2290,38 @@ impl JsonLinesWriter {
                 .replace('\'', "''")
         );
         let r = apply_duckdb_sql(bin, db, &sql);
+        // #140: read_json_auto assigns DuckDB's JSON logical type to any column
+        // whose NDJSON values mix scalar kinds across rows (a string in one row,
+        // a number in another). A JSON column keeps string values quoted
+        // ("hello", not hello), so writing the table on to Parquet / another
+        // sink leaks literal double-quotes into the text. Coerce every such
+        // column back to VARCHAR, unwrapping the JSON root (`->> '$'`) so the
+        // stored text matches the source. No-op when nothing was typed as JSON.
+        if r.is_ok() {
+            let json_cols = duckdb_query_json(
+                bin,
+                db,
+                &format!(
+                    "SELECT name FROM pragma_table_info('{}') WHERE type = 'JSON'",
+                    node_id.replace('\'', "''")
+                ),
+            );
+            let alters: Vec<String> = json_cols
+                .iter()
+                .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+                .map(|c| {
+                    let q = plan::quote_ident(c);
+                    format!(
+                        "ALTER TABLE {t} ALTER {q} TYPE VARCHAR USING ({q} ->> '$');",
+                        t = plan::quote_ident(node_id),
+                        q = q
+                    )
+                })
+                .collect();
+            if !alters.is_empty() {
+                let _ = apply_duckdb_sql(bin, db, &alters.join(" "));
+            }
+        }
         // Clean up the temp NDJSON file whether the load succeeded or failed
         // (DuckDB has already read it by now); otherwise duckle-rest-*.json
         // accumulate in the temp dir forever.
@@ -2414,6 +2446,32 @@ fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError>
         )));
     }
     Ok(())
+}
+
+/// Run a read-only query via the duckdb CLI in `-json` mode and return the
+/// parsed rows. Best-effort: any failure yields an empty vec (callers treat
+/// "no rows" as "nothing to do"). Used by finalize_into_table to discover
+/// JSON-typed columns.
+fn duckdb_query_json(bin: &Path, db: &Path, sql: &str) -> Vec<JsonValue> {
+    use std::process::Command;
+    let mut cmd = Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    match cmd
+        .arg(db.to_string_lossy().to_string())
+        .arg("-json")
+        .arg("-c")
+        .arg(sql)
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            serde_json::from_slice::<Vec<JsonValue>>(&o.stdout).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Snowflake SQL API request - shared by run_snowflake_source and
