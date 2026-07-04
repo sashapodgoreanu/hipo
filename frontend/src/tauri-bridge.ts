@@ -887,6 +887,25 @@ export async function settingsSetMemoryLimit(workspace: string, mb: number | nul
     await invoke('settings_set_memory_limit', { workspace, mb });
 }
 
+/** #143: read whether this workspace allows loading unsigned DuckDB extensions. */
+export async function settingsGetAllowUnsigned(workspace: string): Promise<boolean> {
+    if (!workspace) return false;
+    try {
+        return (await invoke<boolean>('settings_get_allow_unsigned', { workspace })) ?? false;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * #143: persist and immediately apply whether unsigned / community DuckDB
+ * extensions may be loaded. When on, the engine passes `-unsigned` to the DuckDB
+ * CLI (via DUCKLE_ALLOW_UNSIGNED_EXTENSIONS). Default off keeps signed-only.
+ */
+export async function settingsSetAllowUnsigned(workspace: string, allow: boolean): Promise<void> {
+    await invoke('settings_set_allow_unsigned', { workspace, allow });
+}
+
 // ---- Global context file (key/value file -> global ${context}) ---------
 
 /** Read the configured global-context file path (null = none). */

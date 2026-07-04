@@ -8,6 +8,8 @@ import {
     settingsSetAi,
     settingsGetMemoryLimit,
     settingsSetMemoryLimit,
+    settingsGetAllowUnsigned,
+    settingsSetAllowUnsigned,
     settingsGetContextFile,
     settingsSetContextFile,
 } from '../tauri-bridge';
@@ -41,6 +43,8 @@ export function SettingsModal({
     const [aiKey, setAiKey] = useState('');
     // #102: per-workspace total memory cap in MB (empty = engine default).
     const [memLimit, setMemLimit] = useState('');
+    // #143: allow loading unsigned / community DuckDB extensions (off by default).
+    const [allowUnsigned, setAllowUnsigned] = useState(false);
     // Global context file: a key/value file auto-merged into the global context.
     const [contextFile, setContextFile] = useState('');
     // Local UI pref: show/hide the top-bar Dives button.
@@ -67,8 +71,9 @@ export function SettingsModal({
             settingsGetAi(workspace),
             settingsGetMemoryLimit(workspace),
             settingsGetContextFile(workspace),
+            settingsGetAllowUnsigned(workspace),
         ])
-            .then(([p, ai, mem, ic]) => {
+            .then(([p, ai, mem, ic, unsigned]) => {
                 if (!alive) return;
                 setProxy(p ?? '');
                 setAiBaseUrl(ai.baseUrl ?? '');
@@ -76,6 +81,7 @@ export function SettingsModal({
                 setAiKey(ai.apiKey ?? '');
                 setMemLimit(mem != null ? String(mem) : '');
                 setContextFile(ic ?? '');
+                setAllowUnsigned(unsigned ?? false);
                 setLoaded(true);
             })
             .catch(e => {
@@ -103,6 +109,7 @@ export function SettingsModal({
             });
             const mb = parseInt(memLimit.trim(), 10);
             await settingsSetMemoryLimit(workspace, Number.isFinite(mb) && mb > 0 ? mb : null);
+            await settingsSetAllowUnsigned(workspace, allowUnsigned);
             await settingsSetContextFile(workspace, contextFile.trim() || null);
             setSaved(true);
             setTimeout(() => setSaved(false), 1500);
@@ -290,6 +297,24 @@ export function SettingsModal({
                             disabled={!loaded || !workspace}
                             style={aiInput}
                         />
+                    </Section>
+
+                    <Section id="unsigned" title="Unsigned extensions">
+                        <p style={help}>
+                            Allow loading unsigned or community DuckDB extensions (for example a custom{' '}
+                            <code>quack</code> build). When on, the engine starts DuckDB with{' '}
+                            <code>-unsigned</code>. Leave off unless you trust the extension: it turns off
+                            signature verification for every run in this workspace.
+                        </p>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={allowUnsigned}
+                                onChange={e => setAllowUnsigned(e.target.checked)}
+                                disabled={!loaded || !workspace}
+                            />
+                            Allow unsigned extensions
+                        </label>
                     </Section>
 
                     <Section id="context" title="Global context file">

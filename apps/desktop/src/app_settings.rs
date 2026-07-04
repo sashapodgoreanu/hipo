@@ -32,6 +32,10 @@ struct AppSettings {
     /// workspace, so ${KEY} resolves without wiring a node. Relative paths
     /// resolve against the workspace root.
     context_file: Option<String>,
+    /// #143: allow loading UNSIGNED / community DuckDB extensions (e.g. a custom
+    /// `quack` build). Applied as DUCKLE_ALLOW_UNSIGNED_EXTENSIONS, which makes the
+    /// engine pass `-unsigned` to the DuckDB CLI. None/false = signed-only (default).
+    allow_unsigned_extensions: Option<bool>,
 }
 
 /// The external-AI config returned to the Settings UI. camelCase for JS.
@@ -82,6 +86,10 @@ pub fn apply_for_workspace(workspace: &str) {
     if let Some(mb) = s.memory_limit_mb.filter(|m| *m > 0) {
         std::env::set_var("DUCKLE_MEMORY_LIMIT", format!("{}MB", mb));
     }
+    // #143: opt-in unsigned-extension loading for this workspace.
+    if s.allow_unsigned_extensions == Some(true) {
+        std::env::set_var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS", "1");
+    }
 }
 
 #[tauri::command]
@@ -129,6 +137,31 @@ pub fn settings_set_memory_limit(workspace: String, mb: Option<u32>) -> Result<(
     match mb {
         Some(m) => std::env::set_var("DUCKLE_MEMORY_LIMIT", format!("{}MB", m)),
         None => std::env::remove_var("DUCKLE_MEMORY_LIMIT"),
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn settings_get_allow_unsigned(workspace: String) -> bool {
+    if workspace.is_empty() {
+        return false;
+    }
+    load(Path::new(&workspace)).allow_unsigned_extensions == Some(true)
+}
+
+#[tauri::command]
+pub fn settings_set_allow_unsigned(workspace: String, allow: bool) -> Result<(), String> {
+    if workspace.is_empty() {
+        return Err("no workspace is open".into());
+    }
+    let mut s = load(Path::new(&workspace));
+    s.allow_unsigned_extensions = if allow { Some(true) } else { None };
+    store(Path::new(&workspace), &s)?;
+    // Apply immediately so the current session's runs use it without a relaunch.
+    if allow {
+        std::env::set_var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS", "1");
+    } else {
+        std::env::remove_var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS");
     }
     Ok(())
 }

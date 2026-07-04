@@ -193,6 +193,9 @@ impl DuckdbEngine {
         if json {
             cmd.arg("-json");
         }
+        if allow_unsigned_extensions() {
+            cmd.arg("-unsigned");
+        }
         cmd.arg("-bail").arg("-c").arg(sql);
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1569,8 +1572,11 @@ impl DuckdbEngine {
         }
 
         let mut cmd = std::process::Command::new(&self.bin);
-        cmd.arg(db_path)
-            .arg("-bail")
+        cmd.arg(db_path);
+        if allow_unsigned_extensions() {
+            cmd.arg("-unsigned");
+        }
+        cmd.arg("-bail")
             .stdin(Stdio::piped())
             // stdout MUST be piped, not null. On Windows the DuckDB
             // CLI suppresses stderr output entirely when stdout is
@@ -2432,8 +2438,11 @@ fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError>
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    cmd.arg(db.to_string_lossy().to_string());
+    if allow_unsigned_extensions() {
+        cmd.arg("-unsigned");
+    }
     let output = cmd
-        .arg(db.to_string_lossy().to_string())
         .arg("-c")
         .arg(sql)
         .output()
@@ -2448,6 +2457,18 @@ fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError>
     Ok(())
 }
 
+/// #143: opt-in gate to allow loading UNSIGNED / community DuckDB extensions
+/// (e.g. a custom `quack` build). DuckDB refuses unsigned extensions unless the
+/// CLI is started with `-unsigned`. `allow_unsigned_extensions` is a startup-only
+/// option and cannot be changed with `SET` once the database is running, so it
+/// has to be a process argument, not SQL. Default OFF preserves the signed-only
+/// security posture; set DUCKLE_ALLOW_UNSIGNED_EXTENSIONS=1 (or true/yes/on).
+fn allow_unsigned_extensions() -> bool {
+    std::env::var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 /// Run a read-only query via the duckdb CLI in `-json` mode and return the
 /// parsed rows. Best-effort: any failure yields an empty vec (callers treat
 /// "no rows" as "nothing to do"). Used by finalize_into_table to discover
@@ -2460,8 +2481,11 @@ fn duckdb_query_json(bin: &Path, db: &Path, sql: &str) -> Vec<JsonValue> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    cmd.arg(db.to_string_lossy().to_string());
+    if allow_unsigned_extensions() {
+        cmd.arg("-unsigned");
+    }
     match cmd
-        .arg(db.to_string_lossy().to_string())
         .arg("-json")
         .arg("-c")
         .arg(sql)
