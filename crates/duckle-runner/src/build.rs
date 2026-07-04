@@ -468,8 +468,12 @@ fn duckdb_platform(bin: &Path) -> Option<String> {
 pub fn run() -> Result<(), String> {
     let args = parse_build_args()?;
 
-    // 1. Resolve the pipeline.
-    let resolved = context::resolve_workspace(
+    // 1. Resolve the pipeline. Use the PORTABLE resolver (#145) so ${workspace}
+    // / ${projectroot} survive as placeholders in the embedded pipeline instead
+    // of being baked to this build host's paths; run_artifact re-resolves them on
+    // the run host (honoring a DUCKLE_WORKSPACE override), so one artifact runs
+    // on any machine or OS.
+    let resolved = context::resolve_workspace_portable(
         &args.workspace,
         &args.pipeline_id,
         args.context.as_deref(),

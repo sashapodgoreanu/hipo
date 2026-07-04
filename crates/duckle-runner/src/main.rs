@@ -539,9 +539,16 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "pipeline".into());
 
-    // Workspace = the extraction root; mirror run()'s env wiring.
-    std::env::set_var("DUCKLE_WORKSPACE", &root);
-    std::env::set_var("DUCKLE_LOG_DIR", root.join("logs"));
+    // #145: the run-host workspace. Honor an operator-supplied DUCKLE_WORKSPACE
+    // so ${workspace}-relative paths in a portable artifact point at the real
+    // data dir on this machine; fall back to the extraction root for a fully
+    // self-contained bundle. Mirror run()'s env wiring off the same root.
+    let ws_root = std::env::var_os("DUCKLE_WORKSPACE")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| root.clone());
+    std::env::set_var("DUCKLE_WORKSPACE", &ws_root);
+    std::env::set_var("DUCKLE_LOG_DIR", ws_root.join("logs"));
 
     // Resolve the operator-supplied secrets.env PER INVOCATION: next to the
     // artifact exe first, then CWD. It is read at its real location and never
@@ -586,8 +593,14 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
         eprintln!("duckle-runner: {e}");
         return ExitCode::from(2);
     }
+    // #145: the build ships ${workspace} / ${projectroot} / ${date} as
+    // placeholders (resolve_workspace_portable). Re-resolve them here against the
+    // run-host workspace, exactly as run() does for file-loaded pipelines, so a
+    // cross-OS artifact resolves correct paths instead of the build host's.
+    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    context::apply_workspace_context(&mut doc, &ws_root);
 
-    eprintln!("duckle-runner: {} (artifact, workspace {})", pipeline.display(), root.display());
+    eprintln!("duckle-runner: {} (artifact, workspace {})", pipeline.display(), ws_root.display());
     let engine = DuckdbEngine::new(duckdb);
     let result = engine.execute_pipeline_named(&doc, &name);
 

@@ -341,6 +341,7 @@ fn build_context_vars(
     workspace: &Path,
     repo: &[RepoItem],
     context: Option<&str>,
+    bake_workspace: bool,
 ) -> Result<(HashMap<String, String>, Vec<String>), String> {
     let mut vars: HashMap<String, String> = HashMap::new();
     let mut secret_values: Vec<String> = Vec::new();
@@ -351,9 +352,17 @@ fn build_context_vars(
     // first so an explicit context variable of the same name still wins.
     // Separators normalized to `/` for parity with the frontend builtinVars
     // (DuckDB accepts them on every platform).
-    let ws_root = workspace.to_string_lossy().replace('\\', "/");
-    vars.insert("workspace".to_string(), ws_root.clone());
-    vars.insert("projectroot".to_string(), ws_root);
+    //
+    // #145: when bake_workspace is false (the portable-artifact build path) we
+    // deliberately leave `${workspace}` / `${projectroot}` UNRESOLVED so they
+    // survive as placeholders in the embedded pipeline and get re-resolved on
+    // the run host. Baking them here would tie the artifact to the build host's
+    // filesystem. Normal execution (scheduler, by-id load) keeps baking.
+    if bake_workspace {
+        let ws_root = workspace.to_string_lossy().replace('\\', "/");
+        vars.insert("workspace".to_string(), ws_root.clone());
+        vars.insert("projectroot".to_string(), ws_root);
+    }
 
     for item in repo {
         if item.kind != "context" {
@@ -462,14 +471,38 @@ pub fn substitute_deep(value: &mut JsonValue, replace: &impl Fn(&str) -> String)
     }
 }
 
-/// Resolve a workspace pipeline for execution. See module docs.
+/// Resolve a workspace pipeline for execution. See module docs. `${workspace}`
+/// and `${projectroot}` are baked to this host's paths, so this is for running
+/// on the same machine (the by-id load, foreach children, the scheduler).
 pub fn resolve_workspace(
     workspace: &Path,
     pipeline_id: &str,
     context: Option<&str>,
 ) -> Result<Resolved, String> {
+    resolve_workspace_impl(workspace, pipeline_id, context, true)
+}
+
+/// Like [`resolve_workspace`] but leaves `${workspace}` / `${projectroot}` as
+/// placeholders (#145). Used when building a portable pipeline artifact: the
+/// placeholders survive into the embedded pipeline and are re-resolved on the
+/// run host, so one artifact runs on any machine or OS. Context vars, SQL
+/// routine inlining, secret capture, and child-pipeline rewrites still apply.
+pub fn resolve_workspace_portable(
+    workspace: &Path,
+    pipeline_id: &str,
+    context: Option<&str>,
+) -> Result<Resolved, String> {
+    resolve_workspace_impl(workspace, pipeline_id, context, false)
+}
+
+fn resolve_workspace_impl(
+    workspace: &Path,
+    pipeline_id: &str,
+    context: Option<&str>,
+    bake_workspace: bool,
+) -> Result<Resolved, String> {
     let repo = read_repo(workspace)?;
-    let (vars, secret_values) = build_context_vars(workspace, &repo, context)?;
+    let (vars, secret_values) = build_context_vars(workspace, &repo, context, bake_workspace)?;
     let sql_routines = build_sql_routines(workspace, &repo);
     let pipeline_paths = build_pipeline_paths(workspace, &repo);
 
@@ -567,7 +600,7 @@ pub fn resolve_workspace(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_workspace;
+    use super::{resolve_workspace, resolve_workspace_portable};
     use std::fs;
 
     fn write(path: &std::path::Path, content: &str) {
@@ -682,6 +715,31 @@ mod tests {
             props["alt"],
             serde_json::json!(format!("{}/out.parquet", root)),
             "${{projectroot}} alias must resolve to the workspace root"
+        );
+    }
+
+    #[test]
+    fn portable_build_keeps_workspace_placeholder() {
+        // #145: the portable-artifact build must NOT bake ${workspace} /
+        // ${projectroot} to the build host's path - they survive as placeholders
+        // for the run host to re-resolve. Other context vars still substitute.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(
+            &ws.join("pipelines/p1.json"),
+            r#"{"nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"CSV","componentId":"src.csv","properties":{"path":"${workspace}/data/in.csv","alt":"${projectroot}/out.parquet"}}}],"edges":[]}"#,
+        );
+        let resolved = resolve_workspace_portable(ws, "p1", None).unwrap();
+        let props = resolved.doc.nodes[0].data.properties.as_ref().unwrap();
+        assert_eq!(
+            props["path"],
+            serde_json::json!("${workspace}/data/in.csv"),
+            "portable build must leave ${{workspace}} unresolved"
+        );
+        assert_eq!(
+            props["alt"],
+            serde_json::json!("${projectroot}/out.parquet"),
+            "portable build must leave ${{projectroot}} unresolved"
         );
     }
 
