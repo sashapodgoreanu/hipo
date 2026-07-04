@@ -14,6 +14,17 @@ type Props = {
 
 const isDateLike = (t: string) => t === 'date' || t === 'timestamp';
 
+// #144: per-column error handling. "" inherits the node-level default; the
+// engine reads each entry's onError and falls back to the node setting.
+const ON_ERROR_OPTIONS: Array<{ label: string; value: string }> = [
+    { label: 'Default', value: '' },
+    { label: 'Set NULL', value: 'null' },
+    { label: 'Fail run', value: 'fail' },
+];
+
+// Column widths: column, type, format, on-error, remove.
+const CAST_GRID = { gridTemplateColumns: '1.3fr 1fr 1fr 0.9fr 28px' };
+
 export function CastsField({ value, onChange }: Props) {
     const { upstreamSchema } = useContext(FieldContext);
     const casts = value ?? [];
@@ -49,14 +60,15 @@ export function CastsField({ value, onChange }: Props) {
                 </div>
             ) : (
                 <div className="field-agg-table">
-                    <div className="field-agg-row field-agg-header">
+                    <div className="field-agg-row field-agg-header" style={CAST_GRID}>
                         <div>Column</div>
                         <div>Target type</div>
                         <div>Format</div>
+                        <div>On error</div>
                         <div />
                     </div>
                     {casts.map((c, i) => (
-                        <div className="field-agg-row" key={i}>
+                        <div className="field-agg-row" key={i} style={CAST_GRID}>
                             <select
                                 className="schema-input"
                                 value={c.column}
@@ -93,6 +105,20 @@ export function CastsField({ value, onChange }: Props) {
                                 title="strptime format for parsing strings into a date/timestamp. Only used for date/timestamp targets; blank = ISO auto-detect."
                                 spellCheck={false}
                             />
+                            <select
+                                className="schema-input"
+                                value={c.onError ?? ''}
+                                onChange={e =>
+                                    update(i, { onError: e.target.value || undefined })
+                                }
+                                title="How to handle a value in this column that cannot be converted. Default inherits the node-level On conversion error setting."
+                            >
+                                {ON_ERROR_OPTIONS.map(o => (
+                                    <option key={o.value} value={o.value}>
+                                        {o.label}
+                                    </option>
+                                ))}
+                            </select>
                             <button
                                 type="button"
                                 className="schema-remove"

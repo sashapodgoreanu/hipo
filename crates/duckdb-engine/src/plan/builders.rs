@@ -3235,6 +3235,15 @@ pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<Strin
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let target_lc = target.to_ascii_lowercase();
+        // #144: per-column error handling. An entry may override the node-level
+        // onError with its own; unset inherits the node default computed above.
+        // fail -> CAST (a bad value aborts and names the column via the SQL),
+        // null/reject -> TRY_CAST (bad cells become NULL).
+        let cast_fn = match c.get("onError").and_then(JsonValue::as_str) {
+            Some("fail") => "CAST",
+            Some("null") | Some("reject") => "TRY_CAST",
+            _ => cast_fn,
+        };
         if let (Some(fmt), true) = (fmt, target_lc == "date" || target_lc.starts_with("timestamp")) {
             replacements.push(cast_with_format(cast_fn, column, &target_lc, fmt));
         } else {

@@ -2644,9 +2644,10 @@ function synthFieldsTransform(comp: ComponentDef): ComponentManifest {
                     },
                     {
                         key: 'onError',
-                        label: 'On conversion error',
+                        label: 'Default on conversion error',
                         kind: 'select',
                         defaultValue: 'null',
+                        description: 'Applied to any column above whose On error is left at Default.',
                         options: [
                             { label: 'Set to NULL', value: 'null' },
                             { label: 'Reject row', value: 'reject' },

@@ -135,4 +135,7 @@ export type Cast = {
     targetType: string;
     /** strptime format, only meaningful for date/timestamp targets. */
     format?: string;
+    /** #144: per-column error handling. Unset inherits the node-level "On
+     * conversion error" default. "null" nulls bad cells, "fail" aborts the run. */
+    onError?: string;
 };
