@@ -1,5 +1,5 @@
 import { Component, useContext } from 'react';
-import type { Field, Aggregation } from './types';
+import type { Field, Aggregation, Cast } from './types';
 import {
     BoolField,
     IntegerField,
@@ -12,6 +12,7 @@ import { FilePathField } from './FilePathField';
 import { ExpressionField } from './ExpressionField';
 import { ColumnField, ColumnsField } from './ColumnField';
 import { AggregationsField } from './AggregationsField';
+import { CastsField } from './CastsField';
 import { KeyValueField } from './KeyValueField';
 import { FilterBuilderField } from './FilterBuilderField';
 import { ConnectionRefField } from './ConnectionRefField';
@@ -260,6 +261,10 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
         case 'aggregations':
             return (
                 <AggregationsField value={value as Aggregation[] | undefined} onChange={onChange} />
+            );
+        case 'casts':
+            return (
+                <CastsField value={value as Cast[] | undefined} onChange={onChange} />
             );
         case 'key-value':
             return (

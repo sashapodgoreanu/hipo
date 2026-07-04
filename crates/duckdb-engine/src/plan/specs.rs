@@ -859,6 +859,12 @@ pub struct AiEmbedSpec {
     pub api_key: String,
     pub base_url: String,
     pub batch_size: usize,
+    /// #142: custom request headers (e.g. gateway auth) applied before the
+    /// default Authorization/Content-Type. Empty = default OpenAI-compatible path.
+    pub headers: Vec<(String, String)>,
+    /// #142: override the request path (default `/v1/embeddings`) for custom
+    /// OpenAI-compatible gateways. None = default path.
+    pub endpoint_path: Option<String>,
 }
 
 /// code.wasm: per-row WASM transform. The user supplies bytes (via
@@ -958,6 +964,10 @@ pub struct AiLlmSpec {
     pub prompt_template: String,
     pub system_prompt: Option<String>,
     pub temperature: f64,
+    /// #142: custom request headers (gateway auth etc.) applied before defaults.
+    pub headers: Vec<(String, String)>,
+    /// #142: override the request path (default `/v1/chat/completions`).
+    pub endpoint_path: Option<String>,
 }
 
 /// xf.ai.classify: per-row LLM-backed classifier. Pins each row's
@@ -976,6 +986,10 @@ pub struct AiClassifySpec {
     pub model: String,
     pub api_key: String,
     pub base_url: String,
+    /// #142: custom request headers (gateway auth etc.) applied before defaults.
+    pub headers: Vec<(String, String)>,
+    /// #142: override the request path (default `/v1/chat/completions`).
+    pub endpoint_path: Option<String>,
 }
 
 /// xf.ai.dedupe: semantic dedupe via cosine similarity over a

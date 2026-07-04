@@ -92,9 +92,26 @@ function computeNodeSchema(
     }
 
     if (id === 'xf.cast') {
+        const up = upstream();
+        // #144: multi-column cast. Re-type every column listed in `casts`.
+        const casts = (props.casts ?? props.columns) as
+            | Array<{ column?: string; targetType?: string; type?: string }>
+            | undefined;
+        if (Array.isArray(casts) && casts.length > 0) {
+            const typeByCol = new Map<string, DataType>();
+            for (const c of casts) {
+                const name = (c?.column ?? '').trim();
+                const t = (c?.targetType ?? c?.type) as DataType | undefined;
+                if (name && t) typeByCol.set(name, t);
+            }
+            if (typeByCol.size === 0) return up;
+            return up.map(c =>
+                typeByCol.has(c.name) ? { ...c, type: typeByCol.get(c.name)! } : c,
+            );
+        }
+        // Legacy single-column cast.
         const col = props.column as string | undefined;
         const newType = props.targetType as DataType | undefined;
-        const up = upstream();
         if (!col || !newType) return up;
         return up.map(c => (c.name === col ? { ...c, type: newType } : c));
     }

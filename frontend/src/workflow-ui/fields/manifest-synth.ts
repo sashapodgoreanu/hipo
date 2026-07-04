@@ -2635,31 +2635,12 @@ function synthFieldsTransform(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Type conversion',
                 fields: [
-                    { key: 'column', label: 'Column', kind: 'column', required: true },
                     {
-                        key: 'targetType',
-                        label: 'Target type',
-                        kind: 'select',
-                        defaultValue: 'string',
-                        options: [
-                            { label: 'string', value: 'string' },
-                            { label: 'int32', value: 'int32' },
-                            { label: 'int64', value: 'int64' },
-                            { label: 'float32', value: 'float32' },
-                            { label: 'float64', value: 'float64' },
-                            { label: 'bool', value: 'bool' },
-                            { label: 'date', value: 'date' },
-                            { label: 'timestamp', value: 'timestamp' },
-                            { label: 'decimal', value: 'decimal' },
-                            { label: 'json', value: 'json' },
-                        ],
-                    },
-                    {
-                        key: 'format',
-                        label: 'Date/time format (optional)',
-                        kind: 'text',
-                        placeholder: 'e.g. %d/%m/%Y',
-                        description: 'strptime format for parsing a string into a date/timestamp (e.g. %d/%m/%Y or %Y.%m.%d %H:%M:%S). Leave blank for ISO auto-detect; only used for date/timestamp targets.',
+                        key: 'casts',
+                        label: 'Columns to convert',
+                        kind: 'casts',
+                        required: true,
+                        description: 'Convert one or more columns to a new type in a single node. Each row picks a column, a target type, and (for date/timestamp) an optional strptime parse format.',
                     },
                     {
                         key: 'onError',
@@ -4546,8 +4527,38 @@ const aiProviderField = (): Field => ({
         { label: 'Cohere', value: 'cohere' },
         { label: 'Hugging Face', value: 'huggingface' },
         { label: 'Local (Ollama)', value: 'ollama' },
+        { label: 'Custom (OpenAI-compatible)', value: 'custom' },
     ],
 });
+
+// #142: fields for pointing an AI transform at a custom OpenAI-compatible
+// endpoint (vLLM, LiteLLM, a private gateway, etc). All optional: blank keeps
+// the OpenAI default, so existing pipelines are unaffected.
+const aiCustomEndpointFields = (): Field[] => [
+    {
+        key: 'baseUrl',
+        label: 'Base URL',
+        kind: 'text',
+        placeholder: 'https://api.openai.com',
+        description:
+            'OpenAI-compatible API base. Set this for a Custom provider or self-hosted gateway (vLLM, LiteLLM, Ollama). Leave blank for OpenAI.',
+    },
+    {
+        key: 'endpointPath',
+        label: 'Endpoint path',
+        kind: 'text',
+        placeholder: '/v1/chat/completions',
+        description:
+            'Override only if your gateway uses a non-standard path. Blank uses this component default.',
+    },
+    {
+        key: 'headers',
+        label: 'Custom headers',
+        kind: 'key-value',
+        description:
+            'Extra request headers (e.g. a gateway token). A custom Authorization header overrides the API key.',
+    },
+];
 
 const distanceMetricField = (): Field => ({
     key: 'metric',
@@ -4938,6 +4949,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'embedding' },
                     { key: 'dimension', label: 'Dimensions', kind: 'integer', defaultValue: 1536 },
                     { key: 'batchSize', label: 'Batch size', kind: 'integer', defaultValue: 64 },
+                    ...aiCustomEndpointFields(),
                 ],
             },
         ], 'declared');
@@ -4950,6 +4962,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     aiProviderField(),
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
+                    ...aiCustomEndpointFields(),
                 ],
             },
             {
@@ -5031,6 +5044,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'label' },
+                    ...aiCustomEndpointFields(),
                 ],
             },
         ], 'declared');

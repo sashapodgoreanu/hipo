@@ -4468,6 +4468,40 @@ impl DuckdbEngine {
         ))
     }
 
+    /// #142: build an OpenAI-compatible request URL. A custom `endpoint_path`
+    /// is joined onto base_url (no double slashes); empty falls back to the
+    /// component default (e.g. "/v1/chat/completions"), keeping existing
+    /// pipelines byte-identical.
+    fn ai_endpoint(base_url: &str, endpoint_path: &Option<String>, default_path: &str) -> String {
+        let base = base_url.trim_end_matches('/');
+        match endpoint_path {
+            Some(p) if !p.trim().is_empty() => {
+                format!("{}/{}", base, p.trim().trim_start_matches('/'))
+            }
+            _ => format!("{}{}", base, default_path),
+        }
+    }
+
+    /// #142: apply the user's custom headers, then default `Authorization: Bearer`
+    /// and JSON `Content-Type` only when the custom headers did not already set
+    /// them (case-insensitive), so a custom gateway can override auth while
+    /// existing pipelines (no custom headers) behave exactly as before.
+    fn ai_post(endpoint: &str, headers: &[(String, String)], api_key: &str) -> ureq::Request {
+        let mut req = crate::tls::http_agent().post(endpoint);
+        let has = |name: &str| headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(name));
+        let (has_auth, has_ct) = (has("authorization"), has("content-type"));
+        for (k, v) in headers {
+            req = req.set(k, v);
+        }
+        if !has_auth {
+            req = req.set("Authorization", &format!("Bearer {}", api_key));
+        }
+        if !has_ct {
+            req = req.set("Content-Type", "application/json");
+        }
+        req
+    }
+
     /// xf.ai.embed: per-row embedding via an OpenAI-compatible API.
     /// Reads the upstream view, batches rows into groups of
     /// batch_size, sends the input_column text array to /v1/embeddings,
@@ -4492,7 +4526,7 @@ impl DuckdbEngine {
                 spec.node_id
             ));
         }
-        let endpoint = format!("{}/v1/embeddings", spec.base_url.trim_end_matches('/'));
+        let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/embeddings");
         let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
         for chunk in rows.chunks(spec.batch_size) {
             self.check_cancelled()?;
@@ -4512,9 +4546,7 @@ impl DuckdbEngine {
                 "model": spec.model,
                 "input": inputs,
             });
-            let resp = crate::tls::http_agent().post(&endpoint)
-                .set("Authorization", &format!("Bearer {}", spec.api_key))
-                .set("Content-Type", "application/json")
+            let resp = Self::ai_post(&endpoint, &spec.headers, &spec.api_key)
                 .send_string(&body.to_string());
             let response: JsonValue = match resp {
                 Ok(r) => r
@@ -5499,7 +5531,7 @@ impl DuckdbEngine {
             materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
             return Ok(format!("ai.classify: 0 upstream rows -> {}", spec.node_id));
         }
-        let endpoint = format!("{}/v1/chat/completions", spec.base_url.trim_end_matches('/'));
+        let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
         let cat_list = spec.categories.join(", ");
         let system_prompt = format!(
             "You are a strict classifier. Pick exactly one of these categories: {}. \
@@ -5522,9 +5554,7 @@ impl DuckdbEngine {
                     {"role": "user", "content": text},
                 ],
             });
-            let resp = crate::tls::http_agent().post(&endpoint)
-                .set("Authorization", &format!("Bearer {}", spec.api_key))
-                .set("Content-Type", "application/json")
+            let resp = Self::ai_post(&endpoint, &spec.headers, &spec.api_key)
                 .send_string(&body.to_string());
             let response: JsonValue = match resp {
                 Ok(r) => r
@@ -5588,7 +5618,7 @@ impl DuckdbEngine {
             materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
             return Ok(format!("ai.llm: 0 upstream rows -> {}", spec.node_id));
         }
-        let endpoint = format!("{}/v1/chat/completions", spec.base_url.trim_end_matches('/'));
+        let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
         let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
         for row in rows.iter() {
             self.check_cancelled()?;
@@ -5610,9 +5640,7 @@ impl DuckdbEngine {
                 "messages": messages,
                 "temperature": spec.temperature,
             });
-            let resp = crate::tls::http_agent().post(&endpoint)
-                .set("Authorization", &format!("Bearer {}", spec.api_key))
-                .set("Content-Type", "application/json")
+            let resp = Self::ai_post(&endpoint, &spec.headers, &spec.api_key)
                 .send_string(&body.to_string());
             let response: JsonValue = match resp {
                 Ok(r) => r

@@ -3684,6 +3684,8 @@ fn build_stage(
             base_url: string_prop(&props, "baseUrl")
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "https://api.openai.com".into()),
+            headers: headers_from_props(&props),
+            endpoint_path: string_prop(&props, "endpointPath").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "xf.ai.llm" {
@@ -3717,6 +3719,8 @@ fn build_stage(
                 .get("temperature")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0),
+            headers: headers_from_props(&props),
+            endpoint_path: string_prop(&props, "endpointPath").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "xf.ai.embed" {
@@ -3751,6 +3755,8 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(100) as usize,
+            headers: headers_from_props(&props),
+            endpoint_path: string_prop(&props, "endpointPath").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::View, None)
     } else if matches!(component_id, "code.sql" | "code.sqltemplate")

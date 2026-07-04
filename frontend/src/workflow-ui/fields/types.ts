@@ -16,6 +16,7 @@ export type FieldKind =
     | 'column'
     | 'columns'
     | 'aggregations'
+    | 'casts'
     | 'key-value'
     | 'connection-ref'
     | 'routine-ref'
@@ -110,4 +111,28 @@ export type Aggregation = {
     column: string;
     func: AggregationFunction;
     output: string;
+};
+
+// #144: multi-column Cast / Convert. Each row targets one column; the engine's
+// build_cast reads `casts: [{ column, targetType, format? }]`. Type values match
+// the single-column Cast select so downstream schema resolution and the engine's
+// duckle_type_to_duckdb map both stay in sync.
+export const CAST_TYPES: SelectOption[] = [
+    { label: 'string', value: 'string' },
+    { label: 'int32', value: 'int32' },
+    { label: 'int64', value: 'int64' },
+    { label: 'float32', value: 'float32' },
+    { label: 'float64', value: 'float64' },
+    { label: 'bool', value: 'bool' },
+    { label: 'date', value: 'date' },
+    { label: 'timestamp', value: 'timestamp' },
+    { label: 'decimal', value: 'decimal' },
+    { label: 'json', value: 'json' },
+];
+
+export type Cast = {
+    column: string;
+    targetType: string;
+    /** strptime format, only meaningful for date/timestamp targets. */
+    format?: string;
 };
