@@ -41,7 +41,7 @@
 **Get started**
 
 - [What is Duckle?](#what-is-duckle)
-- [What's new in v0.5.3](#whats-new-in-v053)
+- [What's new in v0.5.4](#whats-new-in-v054)
 - [Quickstart (60 s)](#quickstart-60-seconds)
 - [Download / Install](#download--install)
 - [Build from source](#build-from-source)
@@ -121,27 +121,21 @@ Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 ---
 
-## What's new in v0.5.3
+## What's new in v0.5.4
 
-A trust and review layer for your pipelines, column lineage end to end, new enterprise connectors, and a faster editor loop.
+SAP connectivity, a faster dbt loop, custom AI gateways, and a batch of reliability fixes from reported issues.
 
-- **Signed, reproducible run manifests (`.ducklock`).** A run records a signed manifest that pins source input hashes, the per-node outcome, and the resolved column lineage - so any run is verifiable and reproducible after the fact.
-- **Schema-drift detection + a Trust score.** Duckle flags when an upstream source's columns or types change since the last signed run, and surfaces a trust score in both the desktop and web editor with a live drift toggle. `duckle review` gates a change as review-ready and fails on drift.
-- **`duckle review` + data branches.** Review a pipeline change from the CLI - including a live data diff (`--data`) - and branch a DuckDB database file so you can test changes in isolation.
-- **Pre-flight data contracts.** Declare expectations a source must meet and have them checked before the run touches anything.
-- **Column lineage, end to end.** Trace any output column back through transforms and sinks to the source columns it came from, with a downstream impact view for change-impact analysis.
-- **Teradata source + sink (#122).** Read and write Teradata over ODBC (Windows / Linux).
-- **MinIO / Cloudflare R2 / Backblaze B2 sinks + S3 endpoint config (#116).** Write to any S3-compatible object store via endpoint + URL-style settings.
-- **Live preview.** Toggle live preview, then selecting or editing a node runs the pipeline up to it and fills its Preview tab - no full Run needed.
-- **Run parameters (#127).** Value a pipeline's `${...}` variables per run, prompted in the editor and from the web dashboard.
-- **Workspace initialisation + sample pipelines.** A brand-new workspace is seeded with runnable sample pipelines and their generated data, and first-run setup provisions dbt Fusion alongside DuckDB.
-- **Custom SQL on DuckLake / attached sources (#117).** Free-form SQL now resolves against an attached catalog's own schemas.
-- **MCP review tools.** New tools any LLM can call: `diff_pipelines`, `pipeline_impact` (blast radius), `suggest_contracts`, `trust_report`, `pipeline_lineage` and `verify_pipeline`.
-- **`duckle run` headless subcommand (#124).**
+- **Native SAP sources.** `src.sap` reads SAP OData v2 / v4 and CDS services, and `src.sap.rfc` calls classic RFC-enabled function modules over SOAP - so SAP data lands in a pipeline without separate middleware.
+- **Custom OpenAI-compatible AI endpoints (#142).** `xf.ai.llm`, `xf.ai.classify`, and `xf.ai.embed` gain a "Custom" provider with an optional base URL, endpoint path, and extra headers, to reach any OpenAI-compatible gateway.
+- **Multi-column Cast with per-column error handling (#144).** One Cast node converts many columns at once, each with its own target type, format, and on-error behaviour (inherit, set NULL, or fail the run).
+- **Faster xf.dbt loop (#146).** When a dbt node sits behind upstream stages, Duckle warms dbt's project parse in the background while those stages run, so `dbt run` reuses a warm cache instead of paying a cold parse.
+- **Portable pipeline artifacts across operating systems (#145).** A single-file artifact built on one OS keeps its `${workspace}` placeholder and re-resolves it on the run host, so a Windows-built artifact runs correctly on Linux and vice versa.
+- **SQL Server Encrypt toggle for legacy servers (#141)** to disable TLS for older instances, plus a Parquet fix so JSON-typed text columns are no longer written with literal quotes (#140), and truncate-and-insert write mode for Oracle / SQL Server (#138).
+- **Opt-in unsigned DuckDB extension loading (#143)**, an editable workspace git remote (#139), environment variables resolved consistently in canvas and scheduled runs (#137), scheduler interval fixes (#135), form-encoded `snk.rest` bodies, and global editor font scaling.
 
-Fixes: schema-qualified DuckLake CDC and auto-created file-DB sink directories; a 15-fix connector correctness + streaming pass; the web API now returns 404 (not a null 200) for unknown commands (#119); window controls stay reachable on narrow screens; plus the usual polish.
+Fixes: see the release notes for the full list.
 
-Full notes: see the [v0.5.3 release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.3).
+Full notes: see the [v0.5.4 release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.4).
 
 ---
 
@@ -434,7 +428,7 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.3):
+Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.4):
 
 | OS | Asset | How to run |
 |---|---|---|
