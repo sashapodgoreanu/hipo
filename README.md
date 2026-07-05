@@ -988,6 +988,7 @@ A few patterns that consistently produce sub-second runs at small / medium data 
 | **Use `ctl.checkpoint` for long-running pipelines** | A checkpoint stage writes a Parquet snapshot to a path you choose, so a future run can resume from there with `src.parquet`. |
 | **Disable `xf.debug.log` in prod** | Logging rows is per-row I/O; fine for dev, costly at scale. |
 | **Sort once at the end, not in the middle** | `xf.sort` is a global sort; doing it once before the sink avoids re-sorting downstream. |
+| **Put an `xf.dbt` node behind its upstream, not first** | When a dbt node has upstream stages, Duckle warms dbt's project parse in the background while those stages run, so `dbt run` reuses a warm cache instead of paying a cold parse. Set `DUCKLE_DBT_PREWARM=0` to disable. |
 
 ---
 

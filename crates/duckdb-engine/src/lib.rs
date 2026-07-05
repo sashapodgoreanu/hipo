@@ -643,6 +643,37 @@ impl DuckdbEngine {
             return r;
         }
 
+        // #146: dbt's dominant cost is parsing the project, not running the
+        // model. For a dbt stage that sits behind upstream work, start
+        // `dbt parse` now so it overlaps with those stages; the stage joins the
+        // handle (in its dispatch below) before running, so `dbt run` reuses a
+        // warm partial-parse cache instead of paying a cold parse. The parse
+        // writes only the project's target/ dir (never the run database), and
+        // the join keeps it from racing the stage's own dbt process. A leading
+        // dbt stage has nothing to overlap, so it is skipped. Best-effort: a
+        // missing or failing dbt just means the stage parses itself, as before.
+        // Opt-out escape hatch (default on): DUCKLE_DBT_PREWARM=0 disables it.
+        let dbt_prewarm_enabled =
+            std::env::var("DUCKLE_DBT_PREWARM").as_deref() != Ok("0");
+        let mut dbt_prewarm: std::collections::HashMap<String, std::thread::JoinHandle<()>> =
+            std::collections::HashMap::new();
+        for (i, st) in compiled.stages.iter().enumerate() {
+            if i == 0 || !dbt_prewarm_enabled {
+                continue;
+            }
+            if let Some(RuntimeSpec::Dbt(spec)) = st.runtime.as_ref() {
+                let spec = spec.clone();
+                let db = db_path.clone();
+                let cancel = self.cancel.clone();
+                dbt_prewarm.insert(
+                    st.node_id.clone(),
+                    std::thread::spawn(move || {
+                        crate::connectors::prewarm_dbt(&cancel, &db, &spec);
+                    }),
+                );
+            }
+        }
+
         for stage in &compiled.stages {
             if self.cancel.load(Ordering::Relaxed) {
                 was_cancelled = true;
@@ -1080,7 +1111,15 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::RabbitSource(spec)) => self.run_rabbit_source(&db_path, spec),
                     Some(RuntimeSpec::GitSource(spec)) => self.run_git_source(&db_path, spec),
                     Some(RuntimeSpec::Shell(spec)) => self.run_shell(&db_path, spec),
-                    Some(RuntimeSpec::Dbt(spec)) => self.run_dbt(&db_path, spec),
+                    Some(RuntimeSpec::Dbt(spec)) => {
+                        // Wait for the #146 pre-warm parse (started before the
+                        // loop) so the run reuses its warm cache and the two dbt
+                        // processes never write target/ at the same time.
+                        if let Some(h) = dbt_prewarm.remove(&stage.node_id) {
+                            let _ = h.join();
+                        }
+                        self.run_dbt(&db_path, spec)
+                    }
                     Some(RuntimeSpec::FtpSource(spec)) => self.run_ftp_source(&db_path, spec),
                     Some(RuntimeSpec::SftpSource(spec)) => self.run_sftp_source(&db_path, spec),
                     Some(RuntimeSpec::FtpSink(spec)) => self.run_ftp_sink(&db_path, spec),
