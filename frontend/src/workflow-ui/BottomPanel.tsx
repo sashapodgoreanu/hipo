@@ -386,7 +386,7 @@ function PreviewTable({
                         {preview.rows.map((r, i) => (
                             <tr key={i}>
                                 {preview.columns.map(c => (
-                                    <td key={c.name}>
+                                    <td key={c.name} title={formatCell(r[c.name])}>
                                         {formatCell(r[c.name])}
                                     </td>
                                 ))}

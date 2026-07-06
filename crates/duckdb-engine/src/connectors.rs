@@ -1717,6 +1717,17 @@ impl DuckdbEngine {
                 .flatten()
                 .map(|u| JsonValue::String(u.to_string()))
                 .unwrap_or(JsonValue::Null),
+            // XML: tiberius decodes it to ColumnData::Xml, which the &str
+            // accessor does NOT match, so an xml column used to fall through to
+            // the catch-all below and always read back NULL (#141 follow-up:
+            // "some columns show empty/null"). Read it through the dedicated
+            // XmlData accessor and emit its serialized text.
+            ColumnType::Xml => row
+                .try_get::<&tiberius::xml::XmlData, _>(i)
+                .ok()
+                .flatten()
+                .map(|x| JsonValue::String(x.to_string()))
+                .unwrap_or(JsonValue::Null),
             // Everything else (NVarchar / Char / NText / SsVariant / etc):
             // string path. Tiberius' &str accessor handles N* types via
             // UTF-16 -> UTF-8 internally.

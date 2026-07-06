@@ -2416,8 +2416,16 @@ impl JsonLinesWriter {
             .map_err(|e| EngineError::Query(format!("rest source: flush tmp file: {}", e)))?;
         // Drop the buffer (closes file handle) before DuckDB reads it.
         drop(self.writer);
+        // sample_size=-1 makes read_json_auto scan every row for type
+        // inference instead of only the first ~20480. Without it, a column
+        // that is null across the sample window (typed JSON, then recovered by
+        // the #140 ALTER below) or whose first conflicting value appears past
+        // the window (which HARD-ABORTS the whole load) mis-detects; scanning
+        // all rows types late-null columns as VARCHAR directly and never
+        // aborts on a late type conflict. The pass is over an already-on-disk
+        // local NDJSON, so the cost is a linear read (issue #141 follow-up).
         let sql = format!(
-            "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_json_auto('{}', format='newline_delimited')",
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_json_auto('{}', format='newline_delimited', sample_size=-1)",
             plan::quote_ident(node_id),
             self.path
                 .display()
