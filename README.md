@@ -28,6 +28,8 @@
 
 <a href="https://discord.gg/VbSVt7Etx"><img src="docs/assets/discord-cta-v2.svg" alt="Join the Duckle community on Discord" width="340"/></a>
 
+<p><sub><a href="https://github.com/slothflowlabs/duckle/stargazers"><b>Star Duckle</b></a> if it looks useful. It genuinely helps other data engineers find the project.</sub></p>
+
 </div>
 
 ---
