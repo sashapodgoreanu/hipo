@@ -11,21 +11,44 @@ type AutodetectPayload = {
 };
 
 /**
- * Call into the Rust `autodetect_schema` Tauri command when running
- * under Tauri. Returns `null` in browser mode or on failure, so the
- * caller can fall back to a mock.
+ * Autodetect a source's real schema. Under Tauri this calls the desktop
+ * `autodetect_schema` command; in the web editor (`duckle serve`) it POSTs to
+ * the runner's /api/inspect, which drives the SAME engine.inspect - so the web
+ * editor gets real detection too, not a fabricated schema (issue #148, web
+ * parity). Returns `null` only in a pure browser preview with no backend, so
+ * the caller can show an illustrative sample instead.
+ *
+ * The engine is authoritative in both modes: a failure THROWS with the real
+ * reason (bad credentials, unreachable host, unsupported source) so the caller
+ * can surface it in the Schema tab, rather than masking it as a fabricated
+ * col_1/col_2/col_3 schema.
  */
 export async function tauriAutodetect(
     format: string,
     options: Record<string, unknown>,
 ): Promise<AutodetectPayload | null> {
-    if (!isTauri()) return null;
-    try {
-        return await invoke<AutodetectPayload>('autodetect_schema', { format, options });
-    } catch (err) {
-        console.warn('Tauri autodetect failed for ' + format, err);
-        return null;
+    if (isTauri()) {
+        try {
+            return await invoke<AutodetectPayload>('autodetect_schema', { format, options });
+        } catch (err) {
+            const message =
+                typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+            throw new Error(message);
+        }
     }
+    if (isWebBackend()) {
+        const res = await fetch('/api/inspect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ format, options }),
+        });
+        if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            throw new Error(detail.trim() || `autodetect failed: HTTP ${res.status}`);
+        }
+        return (await res.json()) as AutodetectPayload;
+    }
+    return null;
 }
 
 // ---- Pipeline execution ------------------------------------------------

@@ -1089,6 +1089,7 @@ fn build_stage(
             body_wrap: Some("variables".into()),
             body_extras: vec![("query".into(), serde_json::Value::String(mutation))],
             bulk_action: None,
+            text_template: None,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.webhook" || component_id == "snk.rest" {
@@ -1105,17 +1106,36 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "POST".into())
             .to_uppercase();
-        // Prefer bodyShape (engine-native), fall back to batchMode
+        // #147: a "text" body type renders each row through a template and
+        // newline-joins them into one raw body (InfluxDB Line Protocol / QuestDB
+        // /write and other line-oriented endpoints). Otherwise the JSON / form
+        // shapes apply, keyed on bodyShape (engine-native) then batchMode
         // (form-native): 'one' -> per-row, 'array' -> batched.
-        let body_shape = string_prop(&props, "bodyShape")
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                string_prop(&props, "batchMode").map(|m| match m.as_str() {
-                    "array" => "batch".into(),
-                    _ => "row".into(),
+        let body_type = string_prop(&props, "bodyType").unwrap_or_default();
+        let text_template = if body_type == "text" {
+            Some(string_prop(&props, "bodyTemplate").unwrap_or_default())
+        } else {
+            None
+        };
+        let body_shape = if body_type == "text" {
+            "text".to_string()
+        } else {
+            string_prop(&props, "bodyShape")
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    string_prop(&props, "batchMode").map(|m| match m.as_str() {
+                        "array" => "batch".into(),
+                        _ => "row".into(),
+                    })
                 })
-            })
-            .unwrap_or_else(|| if component_id == "snk.webhook" { "row".into() } else { "batch".into() });
+                .unwrap_or_else(|| {
+                    if component_id == "snk.webhook" {
+                        "row".into()
+                    } else {
+                        "batch".into()
+                    }
+                })
+        };
         let mut headers = headers_from_props(&props);
         // Translate the form's authType + authToken into a header so
         // the executor doesn't need to know about auth shapes.
@@ -1130,6 +1150,7 @@ fn build_stage(
             body_wrap,
             body_extras: Vec::new(),
             bulk_action: None,
+            text_template,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.pinecone" {
@@ -1156,6 +1177,7 @@ fn build_stage(
             body_wrap: Some("vectors".into()),
             body_extras: Vec::new(),
             bulk_action: None,
+            text_template: None,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.qdrant" {
@@ -1189,6 +1211,7 @@ fn build_stage(
             body_wrap: Some("points".into()),
             body_extras: Vec::new(),
             bulk_action: None,
+            text_template: None,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.weaviate" {
@@ -1215,6 +1238,7 @@ fn build_stage(
             body_wrap: Some("objects".into()),
             body_extras: Vec::new(),
             bulk_action: None,
+            text_template: None,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.milvus" {
@@ -1247,6 +1271,7 @@ fn build_stage(
                 serde_json::Value::String(collection),
             )],
             bulk_action: None,
+            text_template: None,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.databricks" {
@@ -1586,6 +1611,7 @@ fn build_stage(
             body_wrap: None,
             body_extras: Vec::new(),
             bulk_action: Some(action_line),
+            text_template: None,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.email" {

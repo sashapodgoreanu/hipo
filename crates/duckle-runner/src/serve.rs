@@ -288,6 +288,9 @@ fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
     if req.method == "POST" && req.path == "/api/run_stream" {
         return run_stream(&mut stream, state, &req.body);
     }
+    if req.method == "POST" && req.path == "/api/inspect" {
+        return inspect_schema(&mut stream, state, &req.body);
+    }
     // Static frontend: map the URL path into the dist dir; unknown non-asset
     // paths fall back to index.html (SPA routing).
     serve_static(&mut stream, state, &req.path)
@@ -545,6 +548,32 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
         .map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Web-editor autodetect (issue #148). The browser cannot read the server's
+/// sources, so schema inspection routes here and drives the SAME engine.inspect
+/// the desktop `autodetect_schema` command uses: real driver reads, ${ENV:...}
+/// resolved engine-side, and honest errors. Without this the web editor could
+/// only fall back to a fabricated col_1/col_2/col_3 schema. The response shape
+/// ({ columns, sampleRows }) matches the desktop InspectionPayload exactly.
+fn inspect_schema(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
+    let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("");
+    if format.is_empty() {
+        return respond_err(stream, "400 Bad Request", "inspect: missing format");
+    }
+    let options = args
+        .get("options")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let engine = DuckdbEngine::new(state.duckdb.clone());
+    match engine.inspect(format, options) {
+        Ok(insp) => respond_json(
+            stream,
+            &serde_json::json!({ "columns": insp.schema, "sampleRows": insp.sample_rows }),
+        ),
+        Err(e) => respond_err(stream, "422 Unprocessable Entity", &e.to_string()),
+    }
 }
 
 fn serve_static(stream: &mut TcpStream, state: &WebState, url_path: &str) -> Result<(), String> {

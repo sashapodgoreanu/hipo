@@ -154,6 +154,27 @@ pub fn apply_env(doc: &mut PipelineDoc) {
     }
 }
 
+/// Resolve `${ENV:NAME}` placeholders in a single node's options in place, the
+/// value-level counterpart to [`apply_env`]. The inspect / autodetect path works
+/// on one node's options rather than a whole document, and without this pass a
+/// host or password stored as `${ENV:...}` reached the ATTACH verbatim, the
+/// connection failed, and autodetect fell back to a fake schema (issue #148).
+/// An unset NAME is left verbatim, exactly like the run-time pass.
+pub fn apply_env_to_value(value: &mut JsonValue) {
+    let re = match regex::Regex::new(r"\$\{ENV:([^}]+)\}") {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+    let replace = |s: &str| -> String {
+        re.replace_all(s, |caps: &regex::Captures| match std::env::var(caps[1].trim()) {
+            Ok(v) => v,
+            Err(_) => caps[0].to_string(),
+        })
+        .into_owned()
+    };
+    substitute_deep(value, &replace);
+}
+
 /// Resolve the portable workspace placeholders (`${workspace}` / `${projectroot}`),
 /// the date/time builtins, and any workspace context-file variables in every node
 /// property, in place. Used by the headless run paths (the CLI runner and the web

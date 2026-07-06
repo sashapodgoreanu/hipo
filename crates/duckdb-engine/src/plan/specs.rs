@@ -1370,6 +1370,13 @@ pub struct WebhookSpec {
     /// NDJSON bulk only: the action line emitted before each row.
     /// E.g. `{"index":{"_index":"docs"}}` for Elasticsearch bulk.
     pub bulk_action: Option<String>,
+    /// Plain-text / raw body (issue #147): when body_shape == "text" each row is
+    /// rendered through this template (`${column}` placeholders) and the rows
+    /// are newline-joined into one request body, sent as text/plain unless the
+    /// user set a Content-Type header. Enables InfluxDB Line Protocol writes
+    /// (QuestDB /write, InfluxDB) and other line-oriented endpoints. None for
+    /// the JSON / form / bulk shapes.
+    pub text_template: Option<String>,
 }
 
 #[derive(Debug, Clone)]

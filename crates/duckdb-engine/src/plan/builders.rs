@@ -37,6 +37,10 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
         "s3" | "gcs" | "azureblob" | "http" | "https" => {
             return build_cloud_source(format, props, None).ok()
         }
+        // MinIO / R2 / B2 are S3-compatible; the endpoint lives in the SECRET,
+        // so inspect reads them through the s3 scheme exactly as build_view_sql
+        // does at run time (they ran but autodetect returned None before).
+        "minio" | "r2" | "b2" => return build_cloud_source("s3", props, None).ok(),
         // ATTACH-based relational sources. The catalog is ATTACHed as duckle_src
         // by the inspect prelude (source_prelude), so the SELECT is identical to
         // the run path. Without this arm, autodetect returned None and the UI
@@ -48,6 +52,59 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
         }
         _ => return None,
     })
+}
+
+/// Wrap a source query as a derived table with a dialect-appropriate row cap,
+/// so autodetect pulls a small sample instead of the whole source (issue #148).
+/// The cap affects only how much a driver fetches, never the resulting schema.
+pub(crate) fn cap_preview_query(format: &str, query: &str, n: usize) -> String {
+    let inner = query.trim().trim_end_matches(';');
+    match format {
+        // Oracle predates FETCH FIRST on older releases; ROWNUM is universal.
+        "oracle" => format!("SELECT * FROM ({}) WHERE ROWNUM <= {}", inner, n),
+        "sqlserver" | "synapse" | "teradata" => {
+            format!("SELECT TOP {} * FROM ({}) q", n, inner)
+        }
+        _ => format!("SELECT * FROM ({}) LIMIT {}", inner, n),
+    }
+}
+
+/// Build a capped preview SELECT for a driver / API source from its props, so
+/// autodetect fetches a small sample. Prefers a user-supplied query / sql;
+/// otherwise reconstructs the connector's own `SELECT * FROM <table>` (matching
+/// its dialect quoting) and caps that. Returns None when there is nothing to cap
+/// (no query and no tableName) - the connector then reads unchanged, which is
+/// still correct, just uncapped. The connectors all prefer `query` over
+/// `tableName`, so setting `query` from this is what applies the cap.
+pub(crate) fn preview_source_query(format: &str, props: &JsonValue, n: usize) -> Option<String> {
+    for key in ["query", "sql"] {
+        if let Some(q) = props.get(key).and_then(|v| v.as_str()) {
+            if !q.trim().is_empty() {
+                return Some(cap_preview_query(format, q, n));
+            }
+        }
+    }
+    let table = props
+        .get("tableName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+    let schema = props
+        .get("schema")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    // Match each connector's own qualification (see the src.* arms in compile()).
+    let qualified = match format {
+        "sqlserver" | "synapse" => format!("[{}].[{}]", schema.unwrap_or("dbo"), table),
+        "oracle" => match schema {
+            Some(s) => format!("\"{}\".\"{}\"", s, table),
+            None => format!("\"{}\"", table),
+        },
+        _ => match schema {
+            Some(s) => format!("{}.{}", s, table),
+            None => table.to_string(),
+        },
+    };
+    Some(cap_preview_query(format, &format!("SELECT * FROM {}", qualified), n))
 }
 
 pub(crate) fn missing_input(node: &PipelineNode, port: &str) -> EngineError {

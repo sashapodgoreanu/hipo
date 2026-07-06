@@ -29,34 +29,22 @@ function placeholderAutodetect(format?: string): (
     props: Record<string, unknown>,
 ) => Promise<AutodetectResult> {
     return async (props: Record<string, unknown>) => {
-        // If we know the format and the node has a location set, try the real
-        // Rust autodetect command via Tauri; fall back to a placeholder.
-        // Different connectors carry "where to look" under different keys
-        // (file path, DuckDB/DuckLake database/catalog, a URL, or a host), so
-        // accept any of them - keying only on `path` skipped embedded and
-        // network sources entirely (issue #18).
+        // Always ask the real Rust engine when we know the format. The engine
+        // decides what "where to look" means per connector (path, database,
+        // catalog, host, account, endpoint, ...); gating on a fixed set of
+        // location prop names here silently excluded connectors whose key was
+        // not in the list (oracle `connect`, clickhouse `endpoint`, bigquery
+        // `project`, ...) and dropped them to a fake schema (issue #148).
+        // tauriAutodetect throws on a desktop engine failure so the caller can
+        // surface the real reason; it returns null only in the web editor.
         if (format) {
-            const stringy = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
-            const hasLocation =
-                stringy(props.path) ||
-                stringy(props.database) ||
-                stringy(props.catalog) ||
-                stringy(props.url) ||
-                stringy(props.host);
-            if (hasLocation) {
-                const real = await tauriAutodetect(format, props);
-                if (real) return { columns: real.columns, sampleRows: real.sampleRows };
-            }
+            const real = await tauriAutodetect(format, props);
+            if (real) return { columns: real.columns, sampleRows: real.sampleRows };
         }
-        await new Promise(r => setTimeout(r, 250));
-        return {
-            columns: [
-                { name: 'col_1', type: 'string', nullable: true },
-                { name: 'col_2', type: 'int64', nullable: true },
-                { name: 'col_3', type: 'timestamp', nullable: true },
-            ],
-            sampleRows: [],
-        };
+        // No desktop engine (web editor) or unknown format: return an empty
+        // schema so the user declares columns manually. Never fabricate
+        // col_1/col_2/col_3 - that fake schema is what issue #148 reported.
+        return { columns: [], sampleRows: [] };
     };
 }
 
@@ -2263,6 +2251,28 @@ function synthApiSink(comp: ComponentDef): ComponentManifest {
                             { label: 'One request per row', value: 'one' },
                             { label: 'Batch into array', value: 'array' },
                         ],
+                    },
+                    {
+                        key: 'bodyType',
+                        label: 'Body type',
+                        kind: 'select',
+                        defaultValue: 'json',
+                        options: [
+                            { label: 'JSON', value: 'json' },
+                            { label: 'Plain text / raw', value: 'text' },
+                        ],
+                        description:
+                            'JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB).',
+                    },
+                    {
+                        key: 'bodyTemplate',
+                        label: 'Body template',
+                        kind: 'expression',
+                        rows: 4,
+                        placeholder:
+                            'weather,location=${location} temperature=${temperature} ${timestamp}',
+                        description:
+                            'Used when Body type is Plain text. Each row becomes one line; ${column} placeholders are filled from that row. Set a Content-Type header (default text/plain) if the endpoint needs one.',
                     },
                 ],
             },

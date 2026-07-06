@@ -10958,3 +10958,81 @@ fn engine_query_returns_columns_and_rows() {
     assert_eq!(r.columns[0].name, "region");
     assert_eq!(r.rows.len(), 2, "rows: {:?}", r.rows);
 }
+
+// ---------------------------------------------------------------------------
+// #148: driver-source autodetect (inspect) returns the REAL schema, never a
+// fabricated col_1/col_2/col_3 placeholder, and fails honestly when it can't
+// read the source.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inspect_driver_source_returns_real_schema() {
+    // src.xml, like the DB drivers (oracle/sqlserver/clickhouse/...), has no
+    // plain SELECT in source_select_for_format, so inspect() routes it through
+    // inspect_driver_source: run the real reader into a throwaway parquet and
+    // read that parquet's schema. The columns must be the real ones.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let xml = r#"<?xml version="1.0"?>
+<library>
+  <book><id>1</id><title>Dune</title></book>
+  <book><id>2</id><title>Neuromancer</title></book>
+</library>"#;
+    let xml_path = write_file(tmp.path(), "lib.xml", xml);
+
+    let insp = engine
+        .inspect("xml", json!({ "path": xml_path, "rowPath": "library/book" }))
+        .expect("driver inspect should succeed on a readable source");
+    let names: Vec<String> = insp.schema.iter().map(|c| c.name.clone()).collect();
+    assert!(!names.is_empty(), "driver inspect returned no columns");
+    assert!(
+        !names.iter().any(|n| n.starts_with("col_")),
+        "must not fabricate col_N placeholders: {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|n| n == "id") && names.iter().any(|n| n == "title"),
+        "expected real columns id/title, got {:?}",
+        names
+    );
+}
+
+#[test]
+fn inspect_driver_source_fails_honestly() {
+    // When the driver cannot read the source, inspect returns an error rather
+    // than papering over the failure with a fake schema (#148).
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = out_path(tmp.path(), "does-not-exist.xml");
+    let r = engine.inspect("xml", json!({ "path": missing, "rowPath": "library/book" }));
+    assert!(r.is_err(), "expected an honest error, got {:?}", r.ok());
+}
+
+#[test]
+fn inspect_parquet_regression_still_selects() {
+    // Regression: the existing SELECT-based inspect path (formats present in
+    // source_select_for_format) is unaffected by the driver-inspect addition.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alpha\n2,beta\n");
+    let pq = out_path(tmp.path(), "out.parquet");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.parquet", json!({ "path": pq })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "setup parquet write failed: {:?}", r.error);
+
+    let insp = engine
+        .inspect("parquet", json!({ "path": pq }))
+        .expect("parquet inspect");
+    let names: Vec<String> = insp.schema.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(
+        names,
+        vec!["id".to_string(), "name".to_string()],
+        "got {:?}",
+        names
+    );
+}

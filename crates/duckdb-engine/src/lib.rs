@@ -305,9 +305,19 @@ impl DuckdbEngine {
     /// Inspect a source for its schema and a small preview. `format` is
     /// the string the frontend ships (`"csv"`, `"parquet"`, `"s3"`, ...).
     pub fn inspect(&self, format: &str, options: JsonValue) -> Result<Inspection, EngineError> {
-        let select = plan::source_select_for_format(format, &options).ok_or_else(|| {
-            EngineError::Unsupported(format!("Format '{}' is not supported", format))
-        })?;
+        // Resolve ${ENV:NAME} secrets from the environment exactly as the run
+        // path does (context::apply_env). Without this a host or password stored
+        // as ${ENV:...} reaches the ATTACH verbatim, the connection fails, and
+        // autodetect falls back to a fake schema (issue #148).
+        let mut options = options;
+        crate::context::apply_env_to_value(&mut options);
+        let select = match plan::source_select_for_format(format, &options) {
+            Some(select) => select,
+            // No plain SELECT for this format: it is a driver / API source that
+            // only produces rows at run time. Inspect it by running the same
+            // driver with a capped query into a throwaway DB (issue #148).
+            None => return self.inspect_driver_source(format, &options),
+        };
         let prelude = self.source_prelude(format, &options);
 
         let describe_sql = format!("{}DESCRIBE {};", prelude, select);
@@ -321,6 +331,75 @@ impl DuckdbEngine {
             schema,
             sample_rows: rows,
         })
+    }
+
+    /// Inspect a driver / API source (oracle, sqlserver, clickhouse, snowflake,
+    /// databricks, teradata, cassandra, lancedb, xml, qvd, ...) that produces
+    /// rows only at run time and so has no plain SELECT in
+    /// `source_select_for_format`. Run the SAME driver the run path uses through
+    /// a tiny synthetic `source -> parquet` pipeline with a capped sample, then
+    /// read that parquet's real schema. The schema is therefore exactly what a
+    /// run produces; a driver or connection failure returns the honest error,
+    /// never a fabricated col_1/col_2/col_3 schema (issue #148).
+    fn inspect_driver_source(
+        &self,
+        format: &str,
+        options: &JsonValue,
+    ) -> Result<Inspection, EngineError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static INSPECT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+        let component_id = format!("src.{}", format);
+        // Cap the driver fetch where we can; correctness does not depend on it.
+        let mut src_props = options.clone();
+        if let Some(capped) = plan::preview_source_query(format, &src_props, PREVIEW_ROW_LIMIT) {
+            if let Some(obj) = src_props.as_object_mut() {
+                obj.insert("query".to_string(), JsonValue::String(capped));
+            }
+        }
+        // Unique temp parquet for this probe (no wall-clock / rng in engine code;
+        // pid + a process-local counter is unique enough).
+        let unique = format!(
+            "{}_{}",
+            std::process::id(),
+            INSPECT_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let out = std::env::temp_dir().join(format!("duckle_inspect_{}.parquet", unique));
+        let out_str = out.to_string_lossy().replace('\\', "/");
+
+        let doc_json = serde_json::json!({
+            "nodes": [
+                { "id": "duckle_inspect_src", "position": { "x": 0, "y": 0 },
+                  "data": { "label": "inspect", "componentId": component_id,
+                            "properties": src_props } },
+                { "id": "duckle_inspect_out", "position": { "x": 220, "y": 0 },
+                  "data": { "label": "inspect_out", "componentId": "snk.parquet",
+                            "properties": { "path": out_str } } }
+            ],
+            "edges": [
+                { "id": "duckle_inspect_edge", "source": "duckle_inspect_src",
+                  "target": "duckle_inspect_out", "sourceHandle": "main",
+                  "targetHandle": "main", "data": { "connectionType": "main" } }
+            ]
+        });
+        let doc: PipelineDoc = serde_json::from_value(doc_json)
+            .map_err(|e| EngineError::Query(format!("autodetect: build probe pipeline: {}", e)))?;
+
+        let result = self.execute_pipeline(&doc);
+        if result.status != "ok" {
+            let _ = std::fs::remove_file(&out);
+            let msg = result
+                .nodes
+                .get("duckle_inspect_src")
+                .and_then(|n| n.error.clone())
+                .or_else(|| result.nodes.values().find_map(|n| n.error.clone()))
+                .unwrap_or_else(|| format!("autodetect failed for src.{}", format));
+            return Err(EngineError::Query(msg));
+        }
+        // The parquet carries the real schema the driver returned.
+        let inspection = self.inspect("parquet", serde_json::json!({ "path": out_str }));
+        let _ = std::fs::remove_file(&out);
+        inspection
     }
 
     /// Column-level lineage for a single SQL query: which source columns feed
@@ -427,6 +506,17 @@ impl DuckdbEngine {
         }
         if format == "azureblob" {
             p.push_str("INSTALL azure; LOAD azure; ");
+        }
+        // Extension-backed file formats need the same LOAD the run path emits
+        // (attach_prelude, builders.rs), or the inspect DESCRIBE / sample fails
+        // on a cold CLI that has not autoloaded the reader.
+        match format {
+            "avro" => p.push_str("LOAD avro; "),
+            "excel" => p.push_str("LOAD excel; "),
+            "iceberg" => p.push_str("LOAD iceberg; "),
+            "delta" => p.push_str("LOAD delta; "),
+            "spatial" => p.push_str("INSTALL spatial; LOAD spatial; "),
+            _ => {}
         }
         if format == "duckdb" {
             if let Some(db) = options.get("database").and_then(JsonValue::as_str) {

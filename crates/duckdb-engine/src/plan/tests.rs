@@ -1777,6 +1777,84 @@
     }
 
     #[test]
+    fn cap_preview_query_wraps_per_dialect() {
+        // #148: inspect caps a driver fetch with the dialect's own row limit.
+        let q = "SELECT * FROM orders";
+        assert_eq!(
+            cap_preview_query("oracle", q, 100),
+            "SELECT * FROM (SELECT * FROM orders) WHERE ROWNUM <= 100"
+        );
+        assert_eq!(
+            cap_preview_query("sqlserver", q, 100),
+            "SELECT TOP 100 * FROM (SELECT * FROM orders) q"
+        );
+        assert_eq!(
+            cap_preview_query("teradata", q, 50),
+            "SELECT TOP 50 * FROM (SELECT * FROM orders) q"
+        );
+        assert_eq!(
+            cap_preview_query("clickhouse", q, 100),
+            "SELECT * FROM (SELECT * FROM orders) LIMIT 100"
+        );
+        // A trailing semicolon must not break the derived-table wrap.
+        assert_eq!(
+            cap_preview_query("snowflake", "SELECT 1;", 10),
+            "SELECT * FROM (SELECT 1) LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn preview_source_query_prefers_query_then_table() {
+        // #148: a user query is capped directly.
+        let with_q = preview_source_query(
+            "sqlserver",
+            &serde_json::json!({ "query": "SELECT a FROM t" }),
+            100,
+        )
+        .unwrap();
+        assert_eq!(with_q, "SELECT TOP 100 * FROM (SELECT a FROM t) q");
+        // Table-only rebuilds SELECT * FROM <table> with the dialect's quoting.
+        let ss = preview_source_query(
+            "sqlserver",
+            &serde_json::json!({ "tableName": "orders", "schema": "sales" }),
+            100,
+        )
+        .unwrap();
+        assert_eq!(ss, "SELECT TOP 100 * FROM (SELECT * FROM [sales].[orders]) q");
+        let ora =
+            preview_source_query("oracle", &serde_json::json!({ "tableName": "ORDERS" }), 100)
+                .unwrap();
+        assert_eq!(
+            ora,
+            "SELECT * FROM (SELECT * FROM \"ORDERS\") WHERE ROWNUM <= 100"
+        );
+        // Nothing to cap: no query and no tableName.
+        assert!(preview_source_query(
+            "clickhouse",
+            &serde_json::json!({ "endpoint": "http://x" }),
+            100
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn text_template_renders_row_placeholders() {
+        // #147: ${column} placeholders are filled from the row; missing keys and
+        // nulls become empty; numbers keep their JSON form (no quotes).
+        let row = serde_json::json!({ "location": "us", "temp": 21.5, "note": null });
+        let line = crate::connectors::render_text_template(
+            "weather,location=${location} temperature=${temp} ${note}",
+            &row,
+        );
+        assert_eq!(line, "weather,location=us temperature=21.5 ");
+        // An unknown placeholder yields empty, not the literal placeholder.
+        assert_eq!(
+            crate::connectors::render_text_template("x=${nope}", &row),
+            "x="
+        );
+    }
+
+    #[test]
     fn pure_sql_runs_verbatim_without_create_wrapper() {
         // #102 follow-up: pureSql=true emits the body verbatim - no `WITH input`
         // and no `CREATE OR REPLACE ... AS` wrapper - and the stage is flagged

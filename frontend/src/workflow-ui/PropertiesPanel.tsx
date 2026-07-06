@@ -120,6 +120,7 @@ export default function PropertiesPanel({
     const { t } = useTranslation();
     const [tab, setTab] = useState<TabId>('basic');
     const [autodetecting, setAutodetecting] = useState(false);
+    const [detectError, setDetectError] = useState<string | null>(null);
     const nameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -265,6 +266,7 @@ export default function PropertiesPanel({
     const runAutodetect = async () => {
         if (!manifest?.autodetect) return;
         setAutodetecting(true);
+        setDetectError(null);
         try {
             // Resolve ${context} variables the same way the run path does, so a
             // context-bound value (e.g. a Path set to ${DUCKLE_PATH}) is
@@ -272,6 +274,8 @@ export default function PropertiesPanel({
             // the engine and fails with "No files found that match the pattern
             // ${DUCKLE_PATH}" - the path's contents (including spaces) are
             // irrelevant; it is the unsubstituted placeholder that breaks.
+            // ${ENV:...} secrets are resolved engine-side (the browser has no OS
+            // env access), mirroring the run path (issue #148).
             const vars = { ...builtinVars(workspacePath), ...buildContextVars(repoItems) };
             const resolvedProps = substituteDeep(data.properties ?? {}, vars) as Record<string, unknown>;
             const result = await manifest.autodetect(resolvedProps);
@@ -279,6 +283,17 @@ export default function PropertiesPanel({
                 schema: result.columns,
                 sampleRows: result.sampleRows,
             });
+            // The engine reached the source but returned no columns: flag it
+            // rather than leaving a silent (and previously fabricated) schema.
+            if (result.columns.length === 0) {
+                setDetectError(
+                    'No columns detected. Check the connection details, or declare the schema manually below.',
+                );
+            }
+        } catch (err) {
+            // Surface the real reason (bad credentials, unreachable host,
+            // unsupported source) instead of writing a fabricated schema (#148).
+            setDetectError(err instanceof Error ? err.message : String(err));
         } finally {
             setAutodetecting(false);
         }
@@ -546,6 +561,20 @@ export default function PropertiesPanel({
                                     <span className="schema-autodetect-hint">
                                         {t('properties.autodetectHelp')}
                                     </span>
+                                </div>
+                            ) : null}
+                            {manifest?.schemaSource === 'autodetect' && detectError ? (
+                                <div
+                                    className="schema-autodetect-error"
+                                    role="alert"
+                                    style={{
+                                        color: 'var(--color-error, #d64545)',
+                                        marginTop: 6,
+                                        fontSize: '0.85em',
+                                        whiteSpace: 'pre-wrap',
+                                    }}
+                                >
+                                    {detectError}
                                 </div>
                             ) : null}
                             {manifest?.schemaSource === 'declared' ? (

@@ -53,25 +53,16 @@ function realOrMockAutodetect(
     mockRows: Record<string, unknown>[] = [],
 ): AutodetectFn {
     return async (props: Record<string, unknown>) => {
-        // Different connectors carry the "where to look" key under
-        // different names. Treat any non-empty location as a signal to
-        // hit the real Rust path.
-        const hasLocation =
-            stringy(props.path) ||
-            stringy(props.database) ||
-            stringy(props.url) ||
-            stringy(props.host);
-        if (hasLocation) {
-            const real = await tauriAutodetect(format, props);
-            if (real) return { columns: real.columns, sampleRows: real.sampleRows };
-        }
+        // Always ask the real Rust engine on the desktop; it decides what the
+        // location is per connector. tauriAutodetect throws on a desktop engine
+        // failure (surfaced by the caller) and returns null only in the web
+        // editor, where we show the illustrative sample below. Gating on a
+        // fixed set of location names silently excluded connectors (issue #148).
+        const real = await tauriAutodetect(format, props);
+        if (real) return { columns: real.columns, sampleRows: real.sampleRows };
         await new Promise(r => setTimeout(r, 250));
         return { columns: mockColumns, sampleRows: mockRows };
     };
-}
-
-function stringy(v: unknown): boolean {
-    return typeof v === 'string' && v.trim().length > 0;
 }
 
 export const MANIFESTS: Record<string, ComponentManifest> = {

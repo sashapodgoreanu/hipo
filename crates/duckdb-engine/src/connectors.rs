@@ -8,6 +8,30 @@
 
 use crate::*;
 
+/// Render one row into a line for a text / raw HTTP body (issue #147),
+/// substituting `${column}` placeholders with the row's values. Missing keys and
+/// JSON nulls become empty strings; strings are inserted verbatim; other values
+/// (numbers, bools, nested) use their compact JSON form. Used for InfluxDB Line
+/// Protocol writes (QuestDB /write) and other line-oriented endpoints.
+pub(crate) fn render_text_template(template: &str, row: &serde_json::Value) -> String {
+    use std::sync::OnceLock;
+    static RE: OnceLock<Result<regex::Regex, regex::Error>> = OnceLock::new();
+    let re = match RE.get_or_init(|| regex::Regex::new(r"\$\{([^}]+)\}")) {
+        Ok(re) => re,
+        Err(_) => return template.to_string(),
+    };
+    let obj = row.as_object();
+    re.replace_all(template, |caps: &regex::Captures| {
+        let key = caps[1].trim();
+        match obj.and_then(|o| o.get(key)) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Null) | None => String::new(),
+            Some(other) => other.to_string(),
+        }
+    })
+    .into_owned()
+}
+
 impl DuckdbEngine {
     /// Relational-DB upsert. DuckDB's ATTACH doesn't propagate the
     /// target's UNIQUE / PRIMARY KEY constraints, so a native DuckDB
@@ -250,6 +274,23 @@ impl DuckdbEngine {
                 }
                 dispatch(body, "application/x-ndjson")?;
                 Ok(format!("bulk-indexed {} docs to {}", rows.len(), spec.url))
+            }
+            "text" => {
+                // #147: render each row through the template (${column}
+                // placeholders) and newline-join into one raw body. Sent as
+                // text/plain unless the user set a Content-Type header (the
+                // dispatch closure lets a user header win). This is the shape
+                // InfluxDB Line Protocol endpoints (QuestDB /write) expect.
+                let template = spec.text_template.as_deref().unwrap_or("");
+                let mut body = String::new();
+                for (i, row) in rows.iter().enumerate() {
+                    if i > 0 {
+                        body.push('\n');
+                    }
+                    body.push_str(&render_text_template(template, row));
+                }
+                dispatch(body, "text/plain")?;
+                Ok(format!("sent {} rows to {}", rows.len(), spec.url))
             }
             _ => {
                 let mut sent = 0_usize;

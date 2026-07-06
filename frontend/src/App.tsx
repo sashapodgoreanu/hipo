@@ -1647,22 +1647,29 @@ export default function App() {
             // so downstream nodes inherit immediately. The mock returns sample
             // columns; real autodetect lands when the runtime can read files.
             if (manifest?.autodetect) {
-                void manifest.autodetect(newNode.data.properties ?? {}).then(result => {
-                    setNodes(ns =>
-                        ns.map(n =>
-                            n.id === id
-                                ? {
-                                      ...n,
-                                      data: {
-                                          ...n.data,
-                                          schema: result.columns,
-                                          sampleRows: result.sampleRows,
-                                      },
-                                  }
-                                : n,
-                        ),
-                    );
-                });
+                manifest
+                    .autodetect(newNode.data.properties ?? {})
+                    .then(result => {
+                        setNodes(ns =>
+                            ns.map(n =>
+                                n.id === id
+                                    ? {
+                                          ...n,
+                                          data: {
+                                              ...n.data,
+                                              schema: result.columns,
+                                              sampleRows: result.sampleRows,
+                                          },
+                                      }
+                                    : n,
+                            ),
+                        );
+                    })
+                    .catch(() => {
+                        // Best-effort on add; a freshly added node often has
+                        // unresolved / empty props. The Schema tab's Autodetect
+                        // surfaces the real error instead (issue #148).
+                    });
             }
         },
         [setNodes, markDirty],
@@ -1730,23 +1737,30 @@ export default function App() {
                 case 'autodetect': {
                     const manifest = getManifest(node.data.componentId);
                     if (!manifest?.autodetect) return;
-                    void manifest.autodetect(node.data.properties ?? {}).then(result => {
-                        setNodes(ns =>
-                            ns.map(n =>
-                                n.id === nodeId
-                                    ? {
-                                          ...n,
-                                          data: {
-                                              ...n.data,
-                                              schema: result.columns,
-                                              sampleRows: result.sampleRows,
-                                          },
-                                      }
-                                    : n,
-                            ),
-                        );
-                        markDirty();
-                    });
+                    manifest
+                        .autodetect(node.data.properties ?? {})
+                        .then(result => {
+                            setNodes(ns =>
+                                ns.map(n =>
+                                    n.id === nodeId
+                                        ? {
+                                              ...n,
+                                              data: {
+                                                  ...n.data,
+                                                  schema: result.columns,
+                                                  sampleRows: result.sampleRows,
+                                              },
+                                          }
+                                        : n,
+                                ),
+                            );
+                            markDirty();
+                        })
+                        .catch(err => {
+                            // Open the node's Schema tab to run Autodetect there,
+                            // where the real error is shown (issue #148).
+                            console.warn('autodetect failed', err);
+                        });
                     break;
                 }
 
