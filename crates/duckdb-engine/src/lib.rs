@@ -313,9 +313,21 @@ impl DuckdbEngine {
         crate::context::apply_env_to_value(&mut options);
         let select = match plan::source_select_for_format(format, &options) {
             Some(select) => select,
-            // No plain SELECT for this format: it is a driver / API source that
-            // only produces rows at run time. Inspect it by running the same
-            // driver with a capped query into a throwaway DB (issue #148).
+            // An ATTACH-relational source (postgres/mysql/...) has a SELECT
+            // builder; None here means its connection props are incomplete, not
+            // that it is a driver source, so report it unsupported rather than
+            // spawning a probe that would try to connect (this keeps
+            // schema-drift's hermetic "not introspectable" classification).
+            None if plan::is_attach_relational_format(format) => {
+                return Err(EngineError::Unsupported(format!(
+                    "Format '{}' is not supported",
+                    format
+                )))
+            }
+            // No plain SELECT at all: a driver / API source (oracle, sqlserver,
+            // clickhouse, ...) that only produces rows at run time. Inspect it by
+            // running the same driver with a capped query into a throwaway DB
+            // (issue #148).
             None => return self.inspect_driver_source(format, &options),
         };
         let prelude = self.source_prelude(format, &options);
@@ -536,18 +548,7 @@ impl DuckdbEngine {
         // duckle_src before the inspect DESCRIBE / sample SELECT can resolve the
         // table, exactly as the run path does (#129: Postgres autodetect
         // returned col_1/col_2/col_3 because no arm attached the catalog).
-        if matches!(
-            format,
-            "postgres"
-                | "cockroach"
-                | "mysql"
-                | "mariadb"
-                | "redshift"
-                | "pgvector"
-                | "motherduck"
-                | "bigquery"
-                | "quack"
-        ) {
+        if plan::is_attach_relational_format(format) {
             p.push_str(&plan::attach_prelude(&format!("src.{format}"), options));
         }
         p

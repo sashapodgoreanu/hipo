@@ -54,6 +54,29 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
     })
 }
 
+/// ATTACH-relational source formats (postgres/mysql wire families plus the
+/// extension-ATTACH warehouses) that have a real SELECT builder. When
+/// `source_select_for_format` returns None for one of these it means the
+/// connection props were incomplete (the SELECT builder errored), NOT that it
+/// is a driver source, so inspect reports it as unsupported instead of running
+/// a driver probe that would try to connect (issue #148 follow-up). Kept in one
+/// place so it cannot drift from the relational arm of source_select_for_format
+/// and the ATTACH block of source_prelude.
+pub(crate) fn is_attach_relational_format(format: &str) -> bool {
+    matches!(
+        format,
+        "postgres"
+            | "cockroach"
+            | "mysql"
+            | "mariadb"
+            | "redshift"
+            | "pgvector"
+            | "motherduck"
+            | "bigquery"
+            | "quack"
+    )
+}
+
 /// Wrap a source query as a derived table with a dialect-appropriate row cap,
 /// so autodetect pulls a small sample instead of the whole source (issue #148).
 /// The cap affects only how much a driver fetches, never the resulting schema.
