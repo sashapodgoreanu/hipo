@@ -892,22 +892,48 @@ fn staged_linux_stub() -> Result<PathBuf, String> {
     stage_stub_bytes(EMBEDDED_RUNNER_LINUX, "", "linux-")
 }
 
-/// Stage `bytes` to a temp file keyed by `tag` + byte length, returning the
-/// path. Caching by size means repeated builds reuse the same already-on-disk
-/// (already AV-scanned) file instead of rewriting and immediately executing a
-/// fresh exe every time. Writes to a unique sibling then renames into place so
-/// a concurrent build never sees a half-written stub.
+/// Inflate a zstd-compressed embedded sidecar (runner / mcp / lance). An absent
+/// sidecar is embedded as 0 bytes by build.rs, which stays empty here so the
+/// `EMBEDDED_*.is_empty()` "not bundled" gates keep working without inflating.
+fn inflate_embedded(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    if compressed.is_empty() {
+        return Ok(Vec::new());
+    }
+    zstd::decode_all(compressed).map_err(|e| format!("decompress bundled binary: {}", e))
+}
+
+/// Like write_if_changed, but the source is a zstd-compressed embedded sidecar.
+/// A tiny per-build stamp file lets an already-staged binary skip inflation
+/// entirely (the common case once a feature has been used), so the ~0.1-0.3s
+/// inflate is paid at most once per app version.
+fn write_embedded_if_changed(dest: &std::path::Path, compressed: &[u8]) -> Result<(), String> {
+    let stamp = dest.with_extension("stamp");
+    let want = env!("DUCKLE_BUILD_EPOCH");
+    if dest.exists() {
+        if let Ok(have) = std::fs::read_to_string(&stamp) {
+            if have.trim() == want {
+                return Ok(());
+            }
+        }
+    }
+    let raw = inflate_embedded(compressed)?;
+    write_if_changed(dest, &raw)?;
+    let _ = std::fs::write(&stamp, want);
+    Ok(())
+}
+
+/// Stage a zstd-compressed embedded sidecar to a temp file keyed by `tag` +
+/// COMPRESSED length (unique per build), returning the path. An already-staged
+/// (and AV-scanned) stub with that name is reused as-is, so inflation is paid at
+/// most once per build. Writes to a unique sibling then renames into place so a
+/// concurrent build never sees a half-written stub.
 fn stage_stub_bytes(bytes: &[u8], suffix: &str, tag: &str) -> Result<PathBuf, String> {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("duckle-stub-{}{}{}", tag, bytes.len(), suffix));
-    let correct = |p: &std::path::Path| {
-        std::fs::metadata(p)
-            .map(|m| m.len() as usize == bytes.len())
-            .unwrap_or(false)
-    };
-    if correct(&path) {
+    if path.exists() {
         return Ok(path);
     }
+    let real = inflate_embedded(bytes)?;
     let tmp = dir.join(format!(
         "duckle-stub-{}{}-{}{}",
         tag,
@@ -915,7 +941,7 @@ fn stage_stub_bytes(bytes: &[u8], suffix: &str, tag: &str) -> Result<PathBuf, St
         std::process::id(),
         suffix
     ));
-    std::fs::write(&tmp, bytes).map_err(|e| format!("write stub: {}", e))?;
+    std::fs::write(&tmp, &real).map_err(|e| format!("write stub: {}", e))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -925,8 +951,8 @@ fn stage_stub_bytes(bytes: &[u8], suffix: &str, tag: &str) -> Result<PathBuf, St
     match std::fs::rename(&tmp, &path) {
         Ok(()) => Ok(path),
         // Windows rename fails if the destination exists; if another build
-        // already staged a correct copy, use it.
-        Err(_) if correct(&path) => {
+        // already staged this stub, use it.
+        Err(_) if path.exists() => {
             let _ = std::fs::remove_file(&tmp);
             Ok(path)
         }
@@ -1229,9 +1255,9 @@ fn stage_mcp(app_data: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     let mcp = dir.join(format!("duckle-mcp{suffix}"));
-    write_if_changed(&mcp, EMBEDDED_MCP)?;
+    write_embedded_if_changed(&mcp, EMBEDDED_MCP)?;
     let runner = dir.join(format!("duckle-runner{suffix}"));
-    write_if_changed(&runner, EMBEDDED_RUNNER)?;
+    write_embedded_if_changed(&runner, EMBEDDED_RUNNER)?;
     Ok((mcp, runner))
 }
 
@@ -1290,7 +1316,7 @@ fn run_embedded_runner(
     let _ = std::fs::create_dir_all(&dir);
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     let runner = dir.join(format!("duckle-runner{suffix}"));
-    if let Err(e) = write_if_changed(&runner, EMBEDDED_RUNNER) {
+    if let Err(e) = write_embedded_if_changed(&runner, EMBEDDED_RUNNER) {
         eprintln!("{label}: {e}");
         std::process::exit(1);
     }
@@ -1324,7 +1350,7 @@ fn stage_panel_runner(app_data: &std::path::Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     let runner = dir.join(format!("duckle-runner{suffix}"));
-    write_if_changed(&runner, EMBEDDED_RUNNER)?;
+    write_embedded_if_changed(&runner, EMBEDDED_RUNNER)?;
     Ok(runner)
 }
 

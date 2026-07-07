@@ -4033,6 +4033,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "zip",
+ "zstd 0.13.3",
 ]
 
 [[package]]

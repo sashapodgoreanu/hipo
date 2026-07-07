@@ -18,6 +18,10 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { workspace = true }
+# Compress the embedded sidecar binaries (runner / mcp / lance / linux-runner)
+# at build time so they ship ~60% smaller inside the desktop binary; the app
+# inflates them on first use (see inflate_embedded in lib.rs).
+zstd = "0.13"
 
 [dependencies]
 tauri = { workspace = true }
@@ -65,6 +69,9 @@ tempfile = "3.10"
 # Embeds the bundled starter-workspace (sample pipelines + data generator)
 # into the binary so a brand-new workspace can be seeded offline at first run.
 include_dir = "0.7"
+# Inflate the zstd-compressed embedded sidecars (runner / mcp / lance) when
+# staging them to disk on first use. Compressed at build time by build.rs.
+zstd = "0.13"
 
 [features]
 # Required for release builds. Without this feature, tauri-codegen

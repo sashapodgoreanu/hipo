@@ -28,6 +28,29 @@ fn main() {
     tauri_build::build()
 }
 
+/// zstd-compress `src` into `dst` so the embedded sidecar ships small; the app
+/// inflates it on first use (inflate_embedded in lib.rs). Level 19 favors ratio
+/// (decompression speed is level-independent). Panics on IO/compress error so a
+/// broken embed fails the build loudly rather than shipping a corrupt sidecar.
+fn compress_to(src: &std::path::Path, dst: &std::path::Path) {
+    // build.rs re-runs on every build (to restamp the epoch), so skip recompressing
+    // ~135MB of sidecars when the output is already newer than the source. A changed
+    // sidecar re-triggers via its rerun-if-changed and is newer than dst, so it
+    // recompresses; a clean build has no dst and compresses.
+    if let (Ok(sm), Ok(dm)) = (
+        src.metadata().and_then(|m| m.modified()),
+        dst.metadata().and_then(|m| m.modified()),
+    ) {
+        if dm >= sm {
+            return;
+        }
+    }
+    let raw = std::fs::read(src).unwrap_or_else(|e| panic!("read {}: {}", src.display(), e));
+    let comp = zstd::encode_all(std::io::Cursor::new(&raw), 19)
+        .unwrap_or_else(|e| panic!("zstd compress {}: {}", src.display(), e));
+    std::fs::write(dst, &comp).unwrap_or_else(|e| panic!("write {}: {}", dst.display(), e));
+}
+
 /// Locate a prebuilt `duckle-lance` (the LanceDB sidecar) and expose its bytes
 /// via include_bytes!(env!("DUCKLE_EMBEDDED_LANCE")). OPTIONAL, and deliberately
 /// NOT built here: lancedb needs protoc + pulls DataFusion, so the desktop build
@@ -47,8 +70,7 @@ fn embed_lance() {
     let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
     let dst = std::path::Path::new(&out_dir).join("embedded-lance.bin");
     if staged.exists() {
-        std::fs::copy(&staged, &dst)
-            .unwrap_or_else(|e| panic!("copy {} -> {}: {}", staged.display(), dst.display(), e));
+        compress_to(&staged, &dst);
     } else {
         std::fs::write(&dst, [])
             .unwrap_or_else(|e| panic!("write empty embedded-lance: {}", e));
@@ -89,8 +111,7 @@ fn embed_mcp() {
     let dst = std::path::Path::new(&out_dir).join("embedded-mcp.bin");
     match source {
         Some(src) => {
-            std::fs::copy(&src, &dst)
-                .unwrap_or_else(|e| panic!("copy {} -> {}: {}", src.display(), dst.display(), e));
+            compress_to(&src, &dst);
             println!("cargo:rerun-if-changed={}", src.display());
         }
         None => {
@@ -129,9 +150,7 @@ fn embed_runner_linux() {
         .join("duckle-runner-linux-x64");
     let dst = std::path::Path::new(&out_dir).join("embedded-runner-linux.bin");
     if staged.exists() {
-        std::fs::copy(&staged, &dst).unwrap_or_else(|e| {
-            panic!("copy {} -> {}: {}", staged.display(), dst.display(), e)
-        });
+        compress_to(&staged, &dst);
     } else {
         std::fs::write(&dst, [])
             .unwrap_or_else(|e| panic!("write empty embedded-runner-linux: {}", e));
@@ -180,9 +199,7 @@ fn embed_runner() {
     };
 
     let dst = std::path::Path::new(&out_dir).join("embedded-runner.bin");
-    std::fs::copy(&source, &dst).unwrap_or_else(|e| {
-        panic!("copy {} -> {}: {}", source.display(), dst.display(), e)
-    });
+    compress_to(&source, &dst);
 
     println!("cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER={}", dst.display());
     println!(
