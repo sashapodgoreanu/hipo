@@ -3908,33 +3908,53 @@ pub(crate) fn parse_key_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Collect join key pairs from either the legacy `leftKey`/`rightKey` text
+/// fields (single or comma-separated composite) OR the UI's `multipleKeys`
+/// table (`[{key: left, value: right}, ...]`), merged and deduped. The
+/// `multipleKeys` table was previously written by the frontend but never read
+/// here, so multi-column joins silently collapsed to a single key and produced
+/// cross-paired rows (issue #152). A blank right side defaults to the left
+/// column name so same-named keys take the clean `USING(...)` path.
+pub(crate) fn join_key_pairs(props: &JsonValue) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut lefts = parse_key_list(props.get("leftKey").and_then(JsonValue::as_str).unwrap_or(""));
+    let mut rights =
+        parse_key_list(props.get("rightKey").and_then(JsonValue::as_str).unwrap_or(""));
+    if lefts.len() != rights.len() {
+        return Err(format!(
+            "join: leftKey and rightKey must have the same number of columns (got {} vs {})",
+            lefts.len(),
+            rights.len()
+        ));
+    }
+    if let Some(arr) = props.get("multipleKeys").and_then(JsonValue::as_array) {
+        for entry in arr {
+            let l = entry.get("key").and_then(JsonValue::as_str).unwrap_or("").trim();
+            if l.is_empty() {
+                continue;
+            }
+            let r = entry.get("value").and_then(JsonValue::as_str).unwrap_or("").trim();
+            let r = if r.is_empty() { l } else { r };
+            // Skip a pair already contributed by leftKey/rightKey or an
+            // earlier table row so USING/ON does not list a column twice.
+            if lefts.iter().zip(rights.iter()).any(|(a, b)| a == l && b == r) {
+                continue;
+            }
+            lefts.push(l.to_string());
+            rights.push(r.to_string());
+        }
+    }
+    if lefts.is_empty() {
+        return Err("join: a join key is required (set Left/Right key or the multi-column key table)".into());
+    }
+    Ok((lefts, rights))
+}
+
 pub(crate) fn build_join(inputs: &NodeInputs, props: &JsonValue, kind: &str) -> Result<String, String> {
     let left = inputs.main().ok_or_else(|| "join: missing main input".to_string())?;
     let right = inputs
         .first_lookup()
         .ok_or_else(|| "join: missing lookup input".to_string())?;
-    let left_keys = parse_key_list(
-        props
-            .get("leftKey")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| "join: leftKey property required".to_string())?,
-    );
-    let right_keys = parse_key_list(
-        props
-            .get("rightKey")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| "join: rightKey property required".to_string())?,
-    );
-    if left_keys.is_empty() || right_keys.is_empty() {
-        return Err("join: leftKey and rightKey cannot be empty".into());
-    }
-    if left_keys.len() != right_keys.len() {
-        return Err(format!(
-            "join: leftKey and rightKey must have the same number of columns (got {} vs {})",
-            left_keys.len(),
-            right_keys.len()
-        ));
-    }
+    let (left_keys, right_keys) = join_key_pairs(props)?;
     // The form's joinType, if set, overrides the component-id default so
     // changing it in the UI actually takes effect.
     let kind = match string_prop(props, "joinType").as_deref() {
@@ -4299,6 +4319,11 @@ pub(crate) fn data_type_to_duckdb_sql(t: &duckle_metadata::DataType) -> &'static
         D::Decimal => "DECIMAL",
         D::Json => "JSON",
         D::Binary => "BLOB",
+        // A column declared geometry casts to native GEOMETRY so the typed-cast
+        // read paths (CSV/Excel all_varchar + cast wrapper) keep it spatial
+        // instead of coercing to VARCHAR (issue #151). Relies on the existing
+        // spatial extension auto-load (#82/#83).
+        D::Geometry => "GEOMETRY",
     }
 }
 
@@ -7617,6 +7642,7 @@ pub(crate) fn duckle_type_to_duckdb(t: &str) -> String {
         "decimal" => "DECIMAL(18,4)".into(),
         "json" => "JSON".into(),
         "binary" | "blob" => "BLOB".into(),
+        "geometry" => "GEOMETRY".into(),
         other => other.to_uppercase(),
     }
 }

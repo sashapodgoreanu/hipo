@@ -20,6 +20,31 @@ function findPaletteEntry(componentId: string): PaletteEntry | null {
             }
         }
     }
+    // Back-compat: the four basic join types were consolidated into a single
+    // 'xf.join' palette node (#153). Pipelines saved with the old per-type ids
+    // still resolve here - keeping their properties panel, ports and subtitle
+    // working - and the id suffix seeds the joinType dropdown, while the engine
+    // still routes the old componentId. Cross/spatial/lookup/semi/anti stay as
+    // real palette entries and are matched by the loop above.
+    const legacyJoin = /^xf\.join\.(inner|left|right|full)$/.exec(componentId);
+    if (legacyJoin) {
+        const label: Record<string, string> = {
+            inner: 'Inner Join',
+            left: 'Left Join',
+            right: 'Right Join',
+            full: 'Full Outer Join',
+        };
+        return {
+            categoryId: 'transforms',
+            groupId: 'xf.join',
+            comp: {
+                id: componentId,
+                label: label[legacyJoin[1]] ?? 'Join',
+                kind: 'transform',
+                availability: 'available',
+            },
+        };
+    }
     return null;
 }
 
@@ -417,20 +442,29 @@ export function portsForComponent(comp: ComponentDef): NodePorts {
         };
     }
 
-    // Filter rows: main input, pass output, filtered output, reject output
+    // Filter rows: main input, pass output, single reject output.
+    // Previously declared two outputs ('filter'/label "reject" and
+    // 'reject'/label "errors") that both resolve to the same <node>__reject
+    // relation in the engine (plan/graph.rs output_table_ref), so they were
+    // duplicates with swapped labels - the orange non-italic one being the
+    // giveaway (issue #120). Collapsed to the single canonical REJECT_OUT
+    // (id 'reject', red, italic). The engine still maps the old 'filter'
+    // handle to __reject, so already-saved pipelines keep running headlessly.
     if (id === 'xf.filter') {
         return {
             inputs: [MAIN_IN],
-            outputs: [
-                { id: 'main', label: 'pass', type: 'main' },
-                { id: 'filter', label: 'reject', type: 'filter' },
-                { id: 'reject', label: 'errors', type: 'reject', optional: true },
-            ],
+            outputs: [{ id: 'main', label: 'pass', type: 'main' }, REJECT_OUT],
         };
     }
 
     // Joins: driving + lookup inputs, matched + unmatched outputs
-    if (id.startsWith('xf.join.') || id === 'xf.lookup' || id === 'xf.semi' || id === 'xf.anti') {
+    if (
+        id === 'xf.join' ||
+        id.startsWith('xf.join.') ||
+        id === 'xf.lookup' ||
+        id === 'xf.semi' ||
+        id === 'xf.anti'
+    ) {
         return {
             inputs: [
                 { id: 'main', label: 'driving', type: 'main' },
@@ -2980,14 +3014,41 @@ function synthJoinTransform(comp: ComponentDef): ComponentManifest {
             },
         ], 'declared');
     }
-    const joinType = comp.id.split('.').pop() ?? 'inner';
+    // The consolidated 'xf.join' node (#153) drives its kind purely from the
+    // joinType dropdown, so it defaults to INNER; the legacy per-type ids
+    // (xf.join.left, xf.semi, ...) still seed the dropdown from their suffix.
+    const joinType = comp.id === 'xf.join' ? 'inner' : (comp.id.split('.').pop() ?? 'inner');
+    // The plain Join node only implements inner/left/right/full via joinType;
+    // cross/semi/anti are distinct shapes kept as their own palette nodes, so
+    // only offer them on those legacy ids (avoids the misleading no-op options
+    // the reporter flagged in #153).
+    const joinTypeOptions =
+        comp.id === 'xf.join'
+            ? [
+                  { label: 'INNER', value: 'inner' },
+                  { label: 'LEFT', value: 'left' },
+                  { label: 'RIGHT', value: 'right' },
+                  { label: 'FULL OUTER', value: 'full' },
+              ]
+            : [
+                  { label: 'INNER', value: 'inner' },
+                  { label: 'LEFT', value: 'left' },
+                  { label: 'RIGHT', value: 'right' },
+                  { label: 'FULL OUTER', value: 'full' },
+                  { label: 'CROSS', value: 'cross' },
+                  { label: 'SEMI', value: 'semi' },
+                  { label: 'ANTI', value: 'anti' },
+              ];
     return base(comp, [
         {
             label: 'Join keys',
             fields: [
-                { key: 'leftKey', label: 'Left key', kind: 'text', required: true, placeholder: 'orders.customer_id' },
-                { key: 'rightKey', label: 'Right key', kind: 'text', required: true, placeholder: 'customers.id' },
-                { key: 'multipleKeys', label: 'Multi-column key (left,right pairs)', kind: 'key-value' },
+                // leftKey/rightKey are optional: a join can be keyed entirely by
+                // the multi-column table below (issue #152). The engine requires
+                // at least one key from either source at run time.
+                { key: 'leftKey', label: 'Left key', kind: 'text', required: false, placeholder: 'orders.customer_id' },
+                { key: 'rightKey', label: 'Right key', kind: 'text', required: false, placeholder: 'customers.id' },
+                { key: 'multipleKeys', label: 'Multi-column key (left/right pairs)', kind: 'key-value' },
             ],
         },
         {
@@ -2998,15 +3059,7 @@ function synthJoinTransform(comp: ComponentDef): ComponentManifest {
                     label: 'Type',
                     kind: 'select',
                     defaultValue: joinType,
-                    options: [
-                        { label: 'INNER', value: 'inner' },
-                        { label: 'LEFT', value: 'left' },
-                        { label: 'RIGHT', value: 'right' },
-                        { label: 'FULL OUTER', value: 'full' },
-                        { label: 'CROSS', value: 'cross' },
-                        { label: 'SEMI', value: 'semi' },
-                        { label: 'ANTI', value: 'anti' },
-                    ],
+                    options: joinTypeOptions,
                 },
                 {
                     key: 'sendUnmatchedToReject',

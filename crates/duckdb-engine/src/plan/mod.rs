@@ -4087,6 +4087,27 @@ fn build_stage(
                 reject_body
             ));
         }
+        // #154: emit the user "SQL name" (alias) into the COMPILED plan, not only
+        // as the view the executor injects at run time, so it shows in Plan view /
+        // SQL export and downstream nodes can reference it in every execution path.
+        // Edge wiring still keys off node.id; this is just an extra alias view over
+        // the node-id relation. Uniqueness / no-shadow is enforced up front (alias
+        // validation above), so it cannot clash with a real relation. The executor
+        // still injects the same view for runtime-source stages whose Stage.sql it
+        // ignores; CREATE OR REPLACE makes the overlap idempotent.
+        if let Some(alias) = node
+            .data
+            .alias
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty() && *a != node.id)
+        {
+            sql.push_str(&format!(
+                "; CREATE OR REPLACE VIEW {} AS SELECT * FROM {}",
+                quote_ident(alias),
+                quote_ident(&node.id)
+            ));
+        }
         (sql, StageKind::View, None)
     };
     // Collapse the at-most-one set runtime spec into a single enum. Each

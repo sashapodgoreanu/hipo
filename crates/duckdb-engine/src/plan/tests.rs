@@ -2677,6 +2677,65 @@
     }
 
     #[test]
+    fn join_multiple_keys_table_is_honored() {
+        // #152: keys entered in the multi-column key table (multipleKeys) must
+        // drive the join, not be silently dropped for a single key. Uses the
+        // consolidated bare `xf.join` id with joinType, and no leftKey/rightKey.
+        let p = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"l","position":{"x":0,"y":0},"data":{
+                  "label":"CSV L","componentId":"src.csv",
+                  "properties":{"path":"/tmp/l.csv","hasHeader":true}}},
+                {"id":"r","position":{"x":0,"y":0},"data":{
+                  "label":"CSV R","componentId":"src.csv",
+                  "properties":{"path":"/tmp/r.csv","hasHeader":true}}},
+                {"id":"j","position":{"x":0,"y":0},"data":{
+                  "label":"Join","componentId":"xf.join",
+                  "properties":{"joinType":"inner","leftKey":"","rightKey":"",
+                    "multipleKeys":[{"key":"customer_id","value":"customer_id"},{"key":"order_date","value":"order_date"}]}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{
+                  "label":"CSV out","componentId":"snk.csv",
+                  "properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges": [
+                {"id":"e1","source":"l","target":"j","data":{"connectionType":"main"}},
+                {"id":"e2","source":"r","target":"j","targetHandle":"lookup","data":{"connectionType":"lookup"}},
+                {"id":"e3","source":"j","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile(&p).unwrap();
+        let join_sql = compiled.stages.iter().find(|s| s.node_id == "j").unwrap().sql.as_str();
+        assert!(
+            join_sql.contains("USING (\"customer_id\", \"order_date\")"),
+            "multipleKeys not honored (expected both keys in the join): {}",
+            join_sql
+        );
+    }
+
+    #[test]
+    fn node_alias_emitted_into_compiled_plan() {
+        // #154: the "SQL name" alias must appear in the COMPILED stage SQL (so it
+        // shows in Plan view / SQL export and works in every execution path), not
+        // only as a view the executor injects at run time.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"n_123","position":{"x":0,"y":0},"data":{"label":"Orders","alias":"orders","componentId":"src.csv","properties":{"path":"/tmp/o.csv","hasHeader":true}}}
+              ],
+              "edges":[]
+            }"#,
+        );
+        let stage = compile(&doc).unwrap().stages.into_iter().find(|s| s.node_id == "n_123").unwrap();
+        assert!(
+            stage.sql.contains("CREATE OR REPLACE VIEW \"orders\" AS SELECT * FROM \"n_123\""),
+            "alias view missing from compiled plan: {}",
+            stage.sql
+        );
+    }
+
+    #[test]
     fn semi_join_uses_exists_not_in() {
         // Anti-join was silently dropping all rows when the right side
         // had any NULL key, because `x NOT IN (subq with NULL)` evaluates

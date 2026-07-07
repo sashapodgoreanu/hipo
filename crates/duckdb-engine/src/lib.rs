@@ -185,6 +185,14 @@ impl DuckdbEngine {
         match db {
             Some(p) => {
                 cmd.arg(p);
+                // The throwaway run-db (this is always the temp duckle_run_*.duckdb;
+                // user .duckdb files are ATTACHed via SQL, never opened here as the
+                // main db). Open it at storage v1.5.0 - our bundled DuckDB's native
+                // version - so GEOMETRY CRS/SRID metadata persists when one stage's
+                // CLI process materializes a geometry table and a later stage's
+                // process re-reads it. The pre-v1.5.0 default silently drops the CRS,
+                // which made snk.spatial -> ESRI Shapefile emit no .prj (issue #150).
+                cmd.arg("-storage-version").arg("v1.5.0");
             }
             None => {
                 cmd.arg(":memory:");
@@ -1745,6 +1753,9 @@ impl DuckdbEngine {
 
         let mut cmd = std::process::Command::new(&self.bin);
         cmd.arg(db_path);
+        // Same as run(): open the throwaway run-db at v1.5.0 so GEOMETRY CRS
+        // survives the batched session too (issue #150).
+        cmd.arg("-storage-version").arg("v1.5.0");
         if allow_unsigned_extensions() {
             cmd.arg("-unsigned");
         }
@@ -3577,6 +3588,11 @@ fn map_duckdb_type(t: &str) -> DataType {
         | "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => DataType::Timestamp,
         "JSON" | "MAP" | "STRUCT" | "LIST" | "ARRAY" => DataType::Json,
         "BLOB" | "VARBINARY" => DataType::Binary,
+        // DuckDB 1.5 made GEOMETRY a core type; DESCRIBE reports it plain or
+        // parameterized ("geometry", "geometry('epsg:4326')"), both normalized to
+        // GEOMETRY by the split('(') above. Surface it as a first-class geometry
+        // type instead of falling through to string (issue #151).
+        "GEOMETRY" => DataType::Geometry,
         _ => DataType::String,
     }
 }

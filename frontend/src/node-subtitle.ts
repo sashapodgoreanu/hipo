@@ -81,6 +81,7 @@ export function deriveNodeSubtitle(
             const outs = arr((p.mapper as { outputs?: unknown[] } | undefined)?.outputs);
             return outs.length ? `${outs.length} output col${outs.length === 1 ? '' : 's'}` : undefined;
         }
+        case 'xf.join':
         case 'xf.join.inner':
         case 'xf.join.left':
         case 'xf.join.right':
@@ -90,7 +91,12 @@ export function deriveNodeSubtitle(
         case 'xf.anti': {
             const lk = str(p.leftKey);
             const rk = str(p.rightKey);
-            return lk && rk ? `${lk} = ${rk}` : lk ? `on ${lk}` : undefined;
+            const keys = lk && rk ? `${lk} = ${rk}` : lk ? `on ${lk}` : undefined;
+            // The consolidated Join node's label stays "Join"; surface the
+            // chosen type here so the display follows the Type dropdown (#153).
+            const jt = str(p.joinType);
+            if (jt && keys) return `${jt} · ${keys}`;
+            return keys ?? (jt || undefined);
         }
         case 'code.sql':
         case 'code.sqltemplate':

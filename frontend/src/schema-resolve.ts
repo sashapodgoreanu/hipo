@@ -175,6 +175,7 @@ function computeNodeSchema(
     }
 
     if (
+        id === 'xf.join' ||
         id?.startsWith('xf.join.') ||
         id === 'xf.lookup' ||
         id === 'xf.semi' ||

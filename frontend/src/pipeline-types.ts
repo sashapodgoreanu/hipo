@@ -10,7 +10,8 @@ export type DataType =
     | 'time'
     | 'decimal'
     | 'json'
-    | 'binary';
+    | 'binary'
+    | 'geometry';
 
 export const DATA_TYPES: DataType[] = [
     'string',
@@ -25,6 +26,7 @@ export const DATA_TYPES: DataType[] = [
     'decimal',
     'json',
     'binary',
+    'geometry',
 ];
 
 export type Column = {

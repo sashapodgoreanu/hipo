@@ -28,6 +28,9 @@ pub enum DataType {
     Decimal,
     Json,
     Binary,
+    /// DuckDB 1.5 native GEOMETRY (spatial) type. serde snake_case serializes
+    /// this to "geometry", matching the frontend DataType token (issue #151).
+    Geometry,
 }
 
 impl DataType {
@@ -46,6 +49,7 @@ impl DataType {
             DataType::Decimal => "decimal",
             DataType::Json => "json",
             DataType::Binary => "binary",
+            DataType::Geometry => "geometry",
         }
     }
 }

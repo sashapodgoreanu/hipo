@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 361,
+  "componentCount": 358,
   "components": [
     {
       "id": "src.csv",
@@ -12785,13 +12785,8 @@
             "type": "main"
           },
           {
-            "id": "filter",
-            "label": "reject",
-            "type": "filter"
-          },
-          {
             "id": "reject",
-            "label": "errors",
+            "label": "reject",
             "type": "reject",
             "optional": true
           }
@@ -12832,13 +12827,8 @@
               "type": "main"
             },
             {
-              "id": "filter",
-              "label": "reject",
-              "type": "filter"
-            },
-            {
               "id": "reject",
-              "label": "errors",
+              "label": "reject",
               "type": "reject",
               "optional": true
             }
@@ -14266,11 +14256,11 @@
       }
     },
     {
-      "id": "xf.join.inner",
-      "label": "Inner Join",
+      "id": "xf.join",
+      "label": "Join",
       "kind": "transform",
       "availability": "available",
-      "summary": "",
+      "summary": "Inner / left / right / full outer join, chosen by the Type dropdown",
       "ports": {
         "inputs": [
           {
@@ -14299,10 +14289,10 @@
         ]
       },
       "manifest": {
-        "id": "xf.join.inner",
+        "id": "xf.join",
         "kind": "transform",
-        "label": "Inner Join",
-        "description": "Transforms data with Inner Join.",
+        "label": "Join",
+        "description": "Inner / left / right / full outer join, chosen by the Type dropdown",
         "schemaSource": "declared",
         "sections": [
           {
@@ -14312,19 +14302,19 @@
                 "key": "leftKey",
                 "label": "Left key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "orders.customer_id"
               },
               {
                 "key": "rightKey",
                 "label": "Right key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "customers.id"
               },
               {
                 "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
+                "label": "Multi-column key (left/right pairs)",
                 "kind": "key-value"
               }
             ]
@@ -14353,441 +14343,6 @@
                   {
                     "label": "FULL OUTER",
                     "value": "full"
-                  },
-                  {
-                    "label": "CROSS",
-                    "value": "cross"
-                  },
-                  {
-                    "label": "SEMI",
-                    "value": "semi"
-                  },
-                  {
-                    "label": "ANTI",
-                    "value": "anti"
-                  }
-                ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
-              }
-            ]
-          }
-        ],
-        "ports": {
-          "inputs": [
-            {
-              "id": "main",
-              "label": "driving",
-              "type": "main"
-            },
-            {
-              "id": "lookup",
-              "label": "lookup",
-              "type": "lookup"
-            }
-          ],
-          "outputs": [
-            {
-              "id": "main",
-              "label": "matched",
-              "type": "main"
-            },
-            {
-              "id": "reject",
-              "label": "unmatched",
-              "type": "reject",
-              "optional": true
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "xf.join.left",
-      "label": "Left Join",
-      "kind": "transform",
-      "availability": "available",
-      "summary": "",
-      "ports": {
-        "inputs": [
-          {
-            "id": "main",
-            "label": "driving",
-            "type": "main"
-          },
-          {
-            "id": "lookup",
-            "label": "lookup",
-            "type": "lookup"
-          }
-        ],
-        "outputs": [
-          {
-            "id": "main",
-            "label": "matched",
-            "type": "main"
-          },
-          {
-            "id": "reject",
-            "label": "unmatched",
-            "type": "reject",
-            "optional": true
-          }
-        ]
-      },
-      "manifest": {
-        "id": "xf.join.left",
-        "kind": "transform",
-        "label": "Left Join",
-        "description": "Transforms data with Left Join.",
-        "schemaSource": "declared",
-        "sections": [
-          {
-            "label": "Join keys",
-            "fields": [
-              {
-                "key": "leftKey",
-                "label": "Left key",
-                "kind": "text",
-                "required": true,
-                "placeholder": "orders.customer_id"
-              },
-              {
-                "key": "rightKey",
-                "label": "Right key",
-                "kind": "text",
-                "required": true,
-                "placeholder": "customers.id"
-              },
-              {
-                "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
-                "kind": "key-value"
-              }
-            ]
-          },
-          {
-            "label": "Join type",
-            "fields": [
-              {
-                "key": "joinType",
-                "label": "Type",
-                "kind": "select",
-                "defaultValue": "left",
-                "options": [
-                  {
-                    "label": "INNER",
-                    "value": "inner"
-                  },
-                  {
-                    "label": "LEFT",
-                    "value": "left"
-                  },
-                  {
-                    "label": "RIGHT",
-                    "value": "right"
-                  },
-                  {
-                    "label": "FULL OUTER",
-                    "value": "full"
-                  },
-                  {
-                    "label": "CROSS",
-                    "value": "cross"
-                  },
-                  {
-                    "label": "SEMI",
-                    "value": "semi"
-                  },
-                  {
-                    "label": "ANTI",
-                    "value": "anti"
-                  }
-                ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
-              }
-            ]
-          }
-        ],
-        "ports": {
-          "inputs": [
-            {
-              "id": "main",
-              "label": "driving",
-              "type": "main"
-            },
-            {
-              "id": "lookup",
-              "label": "lookup",
-              "type": "lookup"
-            }
-          ],
-          "outputs": [
-            {
-              "id": "main",
-              "label": "matched",
-              "type": "main"
-            },
-            {
-              "id": "reject",
-              "label": "unmatched",
-              "type": "reject",
-              "optional": true
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "xf.join.right",
-      "label": "Right Join",
-      "kind": "transform",
-      "availability": "available",
-      "summary": "",
-      "ports": {
-        "inputs": [
-          {
-            "id": "main",
-            "label": "driving",
-            "type": "main"
-          },
-          {
-            "id": "lookup",
-            "label": "lookup",
-            "type": "lookup"
-          }
-        ],
-        "outputs": [
-          {
-            "id": "main",
-            "label": "matched",
-            "type": "main"
-          },
-          {
-            "id": "reject",
-            "label": "unmatched",
-            "type": "reject",
-            "optional": true
-          }
-        ]
-      },
-      "manifest": {
-        "id": "xf.join.right",
-        "kind": "transform",
-        "label": "Right Join",
-        "description": "Transforms data with Right Join.",
-        "schemaSource": "declared",
-        "sections": [
-          {
-            "label": "Join keys",
-            "fields": [
-              {
-                "key": "leftKey",
-                "label": "Left key",
-                "kind": "text",
-                "required": true,
-                "placeholder": "orders.customer_id"
-              },
-              {
-                "key": "rightKey",
-                "label": "Right key",
-                "kind": "text",
-                "required": true,
-                "placeholder": "customers.id"
-              },
-              {
-                "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
-                "kind": "key-value"
-              }
-            ]
-          },
-          {
-            "label": "Join type",
-            "fields": [
-              {
-                "key": "joinType",
-                "label": "Type",
-                "kind": "select",
-                "defaultValue": "right",
-                "options": [
-                  {
-                    "label": "INNER",
-                    "value": "inner"
-                  },
-                  {
-                    "label": "LEFT",
-                    "value": "left"
-                  },
-                  {
-                    "label": "RIGHT",
-                    "value": "right"
-                  },
-                  {
-                    "label": "FULL OUTER",
-                    "value": "full"
-                  },
-                  {
-                    "label": "CROSS",
-                    "value": "cross"
-                  },
-                  {
-                    "label": "SEMI",
-                    "value": "semi"
-                  },
-                  {
-                    "label": "ANTI",
-                    "value": "anti"
-                  }
-                ]
-              },
-              {
-                "key": "sendUnmatchedToReject",
-                "label": "Send unmatched to reject port",
-                "kind": "bool",
-                "defaultValue": false
-              }
-            ]
-          }
-        ],
-        "ports": {
-          "inputs": [
-            {
-              "id": "main",
-              "label": "driving",
-              "type": "main"
-            },
-            {
-              "id": "lookup",
-              "label": "lookup",
-              "type": "lookup"
-            }
-          ],
-          "outputs": [
-            {
-              "id": "main",
-              "label": "matched",
-              "type": "main"
-            },
-            {
-              "id": "reject",
-              "label": "unmatched",
-              "type": "reject",
-              "optional": true
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "xf.join.full",
-      "label": "Full Outer Join",
-      "kind": "transform",
-      "availability": "available",
-      "summary": "",
-      "ports": {
-        "inputs": [
-          {
-            "id": "main",
-            "label": "driving",
-            "type": "main"
-          },
-          {
-            "id": "lookup",
-            "label": "lookup",
-            "type": "lookup"
-          }
-        ],
-        "outputs": [
-          {
-            "id": "main",
-            "label": "matched",
-            "type": "main"
-          },
-          {
-            "id": "reject",
-            "label": "unmatched",
-            "type": "reject",
-            "optional": true
-          }
-        ]
-      },
-      "manifest": {
-        "id": "xf.join.full",
-        "kind": "transform",
-        "label": "Full Outer Join",
-        "description": "Transforms data with Full Outer Join.",
-        "schemaSource": "declared",
-        "sections": [
-          {
-            "label": "Join keys",
-            "fields": [
-              {
-                "key": "leftKey",
-                "label": "Left key",
-                "kind": "text",
-                "required": true,
-                "placeholder": "orders.customer_id"
-              },
-              {
-                "key": "rightKey",
-                "label": "Right key",
-                "kind": "text",
-                "required": true,
-                "placeholder": "customers.id"
-              },
-              {
-                "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
-                "kind": "key-value"
-              }
-            ]
-          },
-          {
-            "label": "Join type",
-            "fields": [
-              {
-                "key": "joinType",
-                "label": "Type",
-                "kind": "select",
-                "defaultValue": "full",
-                "options": [
-                  {
-                    "label": "INNER",
-                    "value": "inner"
-                  },
-                  {
-                    "label": "LEFT",
-                    "value": "left"
-                  },
-                  {
-                    "label": "RIGHT",
-                    "value": "right"
-                  },
-                  {
-                    "label": "FULL OUTER",
-                    "value": "full"
-                  },
-                  {
-                    "label": "CROSS",
-                    "value": "cross"
-                  },
-                  {
-                    "label": "SEMI",
-                    "value": "semi"
-                  },
-                  {
-                    "label": "ANTI",
-                    "value": "anti"
                   }
                 ]
               },
@@ -14876,19 +14431,19 @@
                 "key": "leftKey",
                 "label": "Left key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "orders.customer_id"
               },
               {
                 "key": "rightKey",
                 "label": "Right key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "customers.id"
               },
               {
                 "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
+                "label": "Multi-column key (left/right pairs)",
                 "kind": "key-value"
               }
             ]
@@ -15158,19 +14713,19 @@
                 "key": "leftKey",
                 "label": "Left key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "orders.customer_id"
               },
               {
                 "key": "rightKey",
                 "label": "Right key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "customers.id"
               },
               {
                 "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
+                "label": "Multi-column key (left/right pairs)",
                 "kind": "key-value"
               }
             ]
@@ -15299,19 +14854,19 @@
                 "key": "leftKey",
                 "label": "Left key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "orders.customer_id"
               },
               {
                 "key": "rightKey",
                 "label": "Right key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "customers.id"
               },
               {
                 "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
+                "label": "Multi-column key (left/right pairs)",
                 "kind": "key-value"
               }
             ]
@@ -15440,19 +14995,19 @@
                 "key": "leftKey",
                 "label": "Left key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "orders.customer_id"
               },
               {
                 "key": "rightKey",
                 "label": "Right key",
                 "kind": "text",
-                "required": true,
+                "required": false,
                 "placeholder": "customers.id"
               },
               {
                 "key": "multipleKeys",
-                "label": "Multi-column key (left,right pairs)",
+                "label": "Multi-column key (left/right pairs)",
                 "kind": "key-value"
               }
             ]
@@ -23508,7 +23063,7 @@
             "label": "Embeddings",
             "fields": [
               {
-                "key": "textColumn",
+                "key": "inputColumn",
                 "label": "Text column",
                 "kind": "column",
                 "required": true
@@ -23730,14 +23285,14 @@
             "label": "Prompt",
             "fields": [
               {
-                "key": "prompt",
+                "key": "promptTemplate",
                 "label": "Prompt template",
                 "kind": "textarea",
                 "rows": 6,
                 "monospace": true,
                 "required": true,
-                "placeholder": "Clean and normalize this address:\n{{address}}",
-                "description": "Reference columns with {{column_name}}."
+                "placeholder": "Clean and normalize this address:\n{address}",
+                "description": "Reference columns with {column_name}."
               },
               {
                 "key": "outputColumn",
@@ -23824,7 +23379,7 @@
             "label": "Chunking",
             "fields": [
               {
-                "key": "textColumn",
+                "key": "inputColumn",
                 "label": "Text column",
                 "kind": "column",
                 "required": true
@@ -24039,13 +23594,13 @@
             "label": "Classify",
             "fields": [
               {
-                "key": "textColumn",
+                "key": "inputColumn",
                 "label": "Text column",
                 "kind": "column",
                 "required": true
               },
               {
-                "key": "labels",
+                "key": "categories",
                 "label": "Labels",
                 "kind": "text",
                 "required": true,
@@ -32070,6 +31625,31 @@
                     "value": "array"
                   }
                 ]
+              },
+              {
+                "key": "bodyType",
+                "label": "Body type",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "Plain text / raw",
+                    "value": "text"
+                  }
+                ],
+                "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
+              },
+              {
+                "key": "bodyTemplate",
+                "label": "Body template",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "weather,location=${location} temperature=${temperature} ${timestamp}",
+                "description": "Used when Body type is Plain text. Each row becomes one line; ${column} placeholders are filled from that row. Set a Content-Type header (default text/plain) if the endpoint needs one."
               }
             ]
           },
@@ -32196,6 +31776,31 @@
                     "value": "array"
                   }
                 ]
+              },
+              {
+                "key": "bodyType",
+                "label": "Body type",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "Plain text / raw",
+                    "value": "text"
+                  }
+                ],
+                "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
+              },
+              {
+                "key": "bodyTemplate",
+                "label": "Body template",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "weather,location=${location} temperature=${temperature} ${timestamp}",
+                "description": "Used when Body type is Plain text. Each row becomes one line; ${column} placeholders are filled from that row. Set a Content-Type header (default text/plain) if the endpoint needs one."
               }
             ]
           },
@@ -32322,6 +31927,31 @@
                     "value": "array"
                   }
                 ]
+              },
+              {
+                "key": "bodyType",
+                "label": "Body type",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "Plain text / raw",
+                    "value": "text"
+                  }
+                ],
+                "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
+              },
+              {
+                "key": "bodyTemplate",
+                "label": "Body template",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "weather,location=${location} temperature=${temperature} ${timestamp}",
+                "description": "Used when Body type is Plain text. Each row becomes one line; ${column} placeholders are filled from that row. Set a Content-Type header (default text/plain) if the endpoint needs one."
               }
             ]
           },
@@ -32448,6 +32078,31 @@
                     "value": "array"
                   }
                 ]
+              },
+              {
+                "key": "bodyType",
+                "label": "Body type",
+                "kind": "select",
+                "defaultValue": "json",
+                "options": [
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "Plain text / raw",
+                    "value": "text"
+                  }
+                ],
+                "description": "JSON sends each row (or the batch) as JSON. Plain text renders each row through the template below and sends the rows newline-joined as one request (e.g. InfluxDB Line Protocol for QuestDB)."
+              },
+              {
+                "key": "bodyTemplate",
+                "label": "Body template",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "weather,location=${location} temperature=${temperature} ${timestamp}",
+                "description": "Used when Body type is Plain text. Each row becomes one line; ${column} placeholders are filled from that row. Set a Content-Type header (default text/plain) if the endpoint needs one."
               }
             ]
           },

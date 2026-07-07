@@ -296,10 +296,7 @@ export const PALETTE: Category[] = [
                 id: 'xf.join',
                 label: 'Join',
                 components: [
-                    xf('join.inner', 'Inner Join', 'available'),
-                    xf('join.left', 'Left Join', 'available'),
-                    xf('join.right', 'Right Join', 'available'),
-                    xf('join.full', 'Full Outer Join', 'available'),
+                    xf('join', 'Join', 'available', 'Inner / left / right / full outer join, chosen by the Type dropdown'),
                     xf('join.cross', 'Cross Join', 'available'),
                     xf('join.spatial', 'Spatial Join', 'available', 'Two-input join whose predicate is ST_Intersects / Contains / Within / Touches / Crosses / Overlaps / Equals'),
                     xf('lookup', 'Lookup', 'available'),
