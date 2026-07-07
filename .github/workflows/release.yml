@@ -200,6 +200,27 @@ jobs:
             cp "$base/duckle-lance" apps/desktop/bin/duckle-lance
           fi
 
+      # The runner/mcp/lance binaries are already staged into apps/desktop/bin/,
+      # so their release-runner build tree (multi-GB, lance pulls DataFusion +
+      # Vortex + Arrow) is dead weight for the desktop build below, which writes a
+      # second full target/release tree. Drop it first so the arm64 Linux runner
+      # does not run out of disk: the "Free disk space" step above barely helps
+      # there because the x86 toolchains it deletes are absent on arm64. Linux
+      # only; the desktop build uses the release profile, not release-runner, so
+      # this costs no rebuild. df before/after for visibility if it ever recurs.
+      - name: Reclaim disk before the desktop build (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          df -h . || true
+          if [ -n "${{ matrix.target }}" ]; then
+            rm -rf "target/${{ matrix.target }}/release-runner"
+          else
+            rm -rf target/release-runner
+          fi
+          df -h . || true
+
       - name: Build raw Duckle binary
         shell: bash
         run: |
