@@ -832,6 +832,66 @@ pub(crate) fn render_prompt_template(template: &str, row: &JsonValue) -> String 
     out
 }
 
+/// Post-process a written .xlsx so Excel preserves leading/trailing whitespace
+/// in text cells. DuckDB's excel writer serializes cell text as `<t>...</t>`
+/// without `xml:space="preserve"`; per the OOXML spec Excel then normalizes
+/// (strips) the edge whitespace of those elements when it loads the workbook,
+/// so a SQL Server nvarchar value like "   note" reads back as "note" (#141).
+/// We reopen the file (a zip), add `xml:space="preserve"` to every `<t>`
+/// element in the worksheet / shared-strings parts, and repack. Best-effort:
+/// the caller logs and continues on error, since the unmodified file is still a
+/// valid workbook.
+pub(crate) fn finalize_xlsx_whitespace(path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let bytes = std::fs::read(path)?;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    let mut out_buf: Vec<u8> = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut out_buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let name = entry.name().to_string();
+            // Cell strings live in the worksheet parts (the native inlineStr
+            // writer) and in sharedStrings.xml (the GDAL writer); only those
+            // parts need patching.
+            let is_text_part =
+                name.starts_with("xl/worksheets/") || name == "xl/sharedStrings.xml";
+            if is_text_part {
+                let mut content = String::new();
+                entry.read_to_string(&mut content)?;
+                // Bare "<t>" only. Never touch "<t " (already carries
+                // attributes, so already correct) or "<t/>" (empty, no text).
+                let patched = content.replace("<t>", "<t xml:space=\"preserve\">");
+                writer
+                    .start_file(name, opts)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                writer.write_all(patched.as_bytes())?;
+            } else {
+                // Everything else is copied verbatim (keeps its compression).
+                writer
+                    .raw_copy_file(entry)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            }
+        }
+        writer
+            .finish()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    }
+
+    // Replace the original via a temp file + rename so a failure mid-write can
+    // never leave a truncated .xlsx in place.
+    let tmp = path.with_extension("xlsx.tmp");
+    std::fs::write(&tmp, &out_buf)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 /// Compile the regex set for xf.ai.pii based on the user's `types`
 /// selection (empty = all). Each regex is paired with the replacement
 /// label that gets substituted in for each match. Conservative
@@ -915,10 +975,60 @@ pub(crate) fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String>
 
 #[cfg(test)]
 mod tests {
-    use super::{infer_avro_nullable_field, walk_xml_to_rows};
+    use super::{finalize_xlsx_whitespace, infer_avro_nullable_field, walk_xml_to_rows};
     use serde_json::json;
+    use std::io::{Read, Write};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+
+    #[test]
+    fn xlsx_whitespace_preserve_is_injected() {
+        // #141: DuckDB's xlsx writer emits <t>   text</t> without
+        // xml:space="preserve", so Excel strips the leading spaces on load.
+        // finalize_xlsx_whitespace must add the attribute (and copy every other
+        // zip entry verbatim).
+        let path = std::env::temp_dir()
+            .join(format!("duckle_xlsx_ws_{}.xlsx", std::process::id()));
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zw.start_file("[Content_Types].xml", opts).unwrap();
+            zw.write_all(b"<Types/>").unwrap();
+            zw.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            zw.write_all(
+                b"<worksheet><c t=\"inlineStr\"><is><t>   lead</t></is></c></worksheet>",
+            )
+            .unwrap();
+            zw.finish().unwrap();
+        }
+
+        finalize_xlsx_whitespace(&path).unwrap();
+
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let mut sheet = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+        assert!(
+            sheet.contains("<t xml:space=\"preserve\">   lead</t>"),
+            "leading whitespace must be preserved, got: {}",
+            sheet
+        );
+        // Non-text parts are copied byte-for-byte.
+        let mut ct = String::new();
+        archive
+            .by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_string(&mut ct)
+            .unwrap();
+        assert_eq!(ct, "<Types/>");
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn xml_cdata_text_is_captured_not_dropped() {

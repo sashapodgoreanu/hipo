@@ -106,6 +106,12 @@ async-nats = "0.37"
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
 quick-xml = "0.36"
+# ZIP reader/writer, used only to post-process xlsx output. DuckDB's excel
+# writer emits <t> text nodes without xml:space="preserve", so Excel strips
+# leading/trailing whitespace from those cells on load. We reopen the written
+# .xlsx (which is a zip), add the attribute, and repack (#141). Deflate only -
+# no need for the bzip2 / zstd / aes backends.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # RabbitMQ / AMQP 0.9.1 client. Pure Rust, async. Same block_on
 # pattern as Kafka/NATS. Publishes to an exchange + routing key;
 # pulls from a queue with a per-message timeout for batch ETL.

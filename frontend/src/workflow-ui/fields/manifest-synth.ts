@@ -4953,7 +4953,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Embeddings',
                 fields: [
-                    { key: 'textColumn', label: 'Text column', kind: 'column', required: true },
+                    { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
                     aiProviderField(),
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'text-embedding-3-small' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
@@ -4980,14 +4980,14 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                 label: 'Prompt',
                 fields: [
                     {
-                        key: 'prompt',
+                        key: 'promptTemplate',
                         label: 'Prompt template',
                         kind: 'textarea',
                         rows: 6,
                         monospace: true,
                         required: true,
-                        placeholder: 'Clean and normalize this address:\n{{address}}',
-                        description: 'Reference columns with {{column_name}}.',
+                        placeholder: 'Clean and normalize this address:\n{address}',
+                        description: 'Reference columns with {column_name}.',
                     },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', required: true, defaultValue: 'ai_result' },
                     { key: 'temperature', label: 'Temperature', kind: 'number', defaultValue: 0 },
@@ -5001,7 +5001,7 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Chunking',
                 fields: [
-                    { key: 'textColumn', label: 'Text column', kind: 'column', required: true },
+                    { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
                     {
                         key: 'strategy',
                         label: 'Strategy',
@@ -5049,8 +5049,8 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Classify',
                 fields: [
-                    { key: 'textColumn', label: 'Text column', kind: 'column', required: true },
-                    { key: 'labels', label: 'Labels', kind: 'text', required: true, placeholder: 'positive, neutral, negative', description: 'Comma-separated candidate labels.' },
+                    { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
+                    { key: 'categories', label: 'Labels', kind: 'text', required: true, placeholder: 'positive, neutral, negative', description: 'Comma-separated candidate labels.' },
                     aiProviderField(),
                     { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
                     { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },

@@ -81,7 +81,11 @@ impl Stage {
     /// driver-based source or sink should add itself here so it forces
     /// the per-stage path.
     pub fn is_pure_sql(&self) -> bool {
-        self.runtime.is_none()
+        // snk.excel needs a Rust-side post-write pass (inject
+        // xml:space="preserve" so Excel keeps whitespace-bearing cells, #141),
+        // so it is not a bare SQL stage: force it onto the per-stage executor
+        // where that hook runs instead of the collapsed single-CLI-spawn path.
+        self.runtime.is_none() && self.component_id != "snk.excel"
     }
 }
 
@@ -3636,6 +3640,7 @@ fn build_stage(
             node_id: node.id.clone(),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")
+                .or_else(|| string_prop(&props, "textColumn"))
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "text".into()),
             output_column: string_prop(&props, "outputColumn")
@@ -3679,6 +3684,7 @@ fn build_stage(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: apiKey required", component_id)))?;
         let categories: Vec<String> = string_prop(&props, "categories")
+            .or_else(|| string_prop(&props, "labels"))
             .filter(|s| !s.is_empty())
             .map(|s| {
                 s.split(',')
@@ -3697,6 +3703,7 @@ fn build_stage(
             node_id: node.id.clone(),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")
+                .or_else(|| string_prop(&props, "textColumn"))
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "text".into()),
             output_column: string_prop(&props, "outputColumn")
@@ -3739,7 +3746,12 @@ fn build_stage(
             base_url: string_prop(&props, "baseUrl")
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "https://api.openai.com".into()),
-            prompt_template: string_prop(&props, "promptTemplate").unwrap_or_default(),
+            // Accept the legacy `prompt` key too: the GUI wrote `prompt` before
+            // it was aligned to the engine's `promptTemplate`, so pipelines saved
+            // with the old key would otherwise send an empty message (#142).
+            prompt_template: string_prop(&props, "promptTemplate")
+                .or_else(|| string_prop(&props, "prompt"))
+                .unwrap_or_default(),
             system_prompt: string_prop(&props, "systemPrompt").filter(|s| !s.is_empty()),
             temperature: props
                 .get("temperature")
@@ -3764,6 +3776,7 @@ fn build_stage(
             node_id: node.id.clone(),
             from_view: from_view.to_string(),
             input_column: string_prop(&props, "inputColumn")
+                .or_else(|| string_prop(&props, "textColumn"))
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "text".into()),
             output_column: string_prop(&props, "outputColumn")

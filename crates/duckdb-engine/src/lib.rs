@@ -397,7 +397,29 @@ impl DuckdbEngine {
         let doc: PipelineDoc = serde_json::from_value(doc_json)
             .map_err(|e| EngineError::Query(format!("autodetect: build probe pipeline: {}", e)))?;
 
-        let result = self.execute_pipeline(&doc);
+        // A driver can panic (not just error) while decoding a column type it
+        // does not support: tiberius hits an unimplemented decode path in the
+        // SQL Server COLMETADATA for sql_variant or a CLR UDT (how geography /
+        // geometry / hierarchyid arrive). Autodetect probes with SELECT *, so it
+        // meets these columns even when a curated run that projects only the
+        // supported columns would not. Contain the panic here so autodetect
+        // surfaces a clean error instead of aborting the whole app (#141). This
+        // relies on the unwind panic strategy set in the release profile; the
+        // probe DB / parquet / NDJSON are throwaway per-call temporaries, so
+        // AssertUnwindSafe is sound.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute_pipeline(&doc)
+        }))
+        .map_err(|_| {
+            let _ = std::fs::remove_file(&out);
+            EngineError::Query(format!(
+                "autodetect: the src.{} driver hit a column type it cannot decode \
+                 (for example a SQL Server sql_variant column, or a UDT such as \
+                 geography, geometry or hierarchyid). Select only the supported \
+                 columns in the source query to autodetect, or set the schema manually.",
+                format
+            ))
+        })?;
         if result.status != "ok" {
             let _ = std::fs::remove_file(&out);
             let msg = result
@@ -1300,6 +1322,26 @@ impl DuckdbEngine {
 
             match result {
                 Ok(_) => {
+                    // snk.excel post-write: DuckDB's xlsx writer drops
+                    // xml:space="preserve" on cell text, so Excel strips
+                    // leading/trailing whitespace on load. Reopen the file and
+                    // add the attribute. Best-effort - a failure here leaves the
+                    // (still valid) file untouched rather than failing the run
+                    // (#141).
+                    if stage.component_id == "snk.excel" {
+                        if let Some(p) = stage.sink_path.as_deref() {
+                            if is_local_path(p) && std::path::Path::new(p).exists() {
+                                if let Err(e) = crate::util::finalize_xlsx_whitespace(
+                                    std::path::Path::new(p),
+                                ) {
+                                    eprintln!(
+                                        "duckle: snk.excel whitespace finalize failed for {}: {}",
+                                        p, e
+                                    );
+                                }
+                            }
+                        }
+                    }
                     // #102: expose this node's output under its user alias so a
                     // downstream raw / pure SQL stage (run later in this loop
                     // against the same db file) can reference it by a friendly

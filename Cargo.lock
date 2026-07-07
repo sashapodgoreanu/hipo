@@ -4094,6 +4094,7 @@ dependencies = [
  "wasmi",
  "wat",
  "webpki-roots 0.26.11",
+ "zip",
 ]
 
 [[package]]

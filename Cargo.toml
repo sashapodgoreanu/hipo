@@ -85,7 +85,11 @@ codegen-units = 1
 lto = "fat"
 opt-level = 3
 strip = "symbols"
-panic = "abort"
+# Unwind (not abort) so a panic in a driver (e.g. the tiberius SQL Server
+# reader hitting a column type it cannot decode) can be caught and turned
+# into a clean error instead of aborting the whole app. This also makes the
+# existing catch_unwind boundaries (autodetect probe, duckle-runner serve)
+# actually work in shipped builds (#141).
 
 # Faster release builds for dev iteration on the desktop app.
 [profile.release-fast]
@@ -105,7 +109,6 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
 
 [profile.dev]
 opt-level = 0
