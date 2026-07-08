@@ -319,6 +319,21 @@ impl DuckdbEngine {
         // autodetect falls back to a fake schema (issue #148).
         let mut options = options;
         crate::context::apply_env_to_value(&mut options);
+        // SQL Server / Synapse: introspect through the catalog, never a SELECT *
+        // probe. The tiberius driver panics (todo!) while parsing the result
+        // COLMETADATA for a sql_variant column or a CLR UDT (geometry /
+        // geography / hierarchyid), so any SELECT * that touches such a column
+        // aborts the probe - and autodetect uses SELECT *, so it meets them even
+        // when a curated run that projects only supported columns would not
+        // (#141). Describing the query with sp_describe_first_result_set returns
+        // the schema as ordinary text columns, so the panic path is never taken
+        // and every column type resolves. Returns None only when there is no
+        // table / query to introspect, in which case we fall through.
+        if matches!(format, "sqlserver" | "synapse") {
+            if let Some(insp) = self.inspect_sqlserver_catalog(format, &options)? {
+                return Ok(insp);
+            }
+        }
         let select = match plan::source_select_for_format(format, &options) {
             Some(select) => select,
             // An ATTACH-relational source (postgres/mysql/...) has a SELECT
@@ -442,6 +457,188 @@ impl DuckdbEngine {
         let inspection = self.inspect("parquet", serde_json::json!({ "path": out_str }));
         let _ = std::fs::remove_file(&out);
         inspection
+    }
+
+    /// SQL Server / Synapse autodetect that never trips the tiberius COLMETADATA
+    /// panic (#141). Instead of a `SELECT *` probe (which asks the driver to
+    /// describe every column, and tiberius `todo!()`s on `sql_variant` and the
+    /// CLR UDT types `geometry` / `geography` / `hierarchyid`), it describes the
+    /// source query with `sp_describe_first_result_set` (SQL Server 2012+, so the
+    /// reporter's 2014 is covered), whose own result columns are all plain text /
+    /// int types. That yields the real name + type of every column regardless of
+    /// type. The preview then reads a small sample with those unsafe types cast
+    /// to text, so it does not trip the panic either. Returns `Ok(None)` when
+    /// there is no table or query to introspect (the caller then falls back to
+    /// the generic driver probe).
+    fn inspect_sqlserver_catalog(
+        &self,
+        format: &str,
+        options: &JsonValue,
+    ) -> Result<Option<Inspection>, EngineError> {
+        // The query to describe: an explicit query / sql wins, else SELECT * from
+        // the qualified table. No table and no query -> nothing to introspect.
+        let str_opt = |k: &str| {
+            options
+                .get(k)
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        };
+        let query = if let Some(q) = str_opt("query").or_else(|| str_opt("sql")) {
+            q.to_string()
+        } else if let Some(table) = str_opt("tableName").or_else(|| str_opt("table")) {
+            let schema = str_opt("schema").unwrap_or("dbo");
+            format!(
+                "SELECT * FROM [{}].[{}]",
+                schema.replace(']', "]]"),
+                table.replace(']', "]]")
+            )
+        } else {
+            return Ok(None);
+        };
+
+        // 1. Schema: one row per output column, columns `name` + `system_type_name`.
+        let describe = format!(
+            "EXEC sp_describe_first_result_set @tsql = N'{}', @params = NULL, @browse_information_mode = 0",
+            sql_escape(&query)
+        );
+        let meta = self.sqlserver_probe_rows(format, options, &describe)?;
+        if meta.is_empty() {
+            return Err(EngineError::Query(format!(
+                "autodetect: SQL Server returned no columns for the source. \
+                 Check the table name / query. Query: {}",
+                query
+            )));
+        }
+        let schema: Vec<Column> = meta
+            .iter()
+            .filter_map(|r| {
+                let name = r.get("name").and_then(JsonValue::as_str)?.to_string();
+                let type_name = r
+                    .get("system_type_name")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("");
+                let nullable = r
+                    .get("is_nullable")
+                    .and_then(|v| v.as_bool().or_else(|| v.as_i64().map(|n| n != 0)))
+                    .unwrap_or(true);
+                Some(Column {
+                    name,
+                    data_type: map_sqlserver_type(type_name),
+                    nullable,
+                    primary_key: None,
+                    format: None,
+                })
+            })
+            .collect();
+        if schema.is_empty() {
+            return Err(EngineError::Query(
+                "autodetect: SQL Server described 0 usable columns".into(),
+            ));
+        }
+
+        // 2. Sample rows: cap a read of the same query with the unsafe column
+        //    types converted to text so tiberius only ever meets decodable types.
+        //    Best-effort: if the sample still fails, return the schema alone.
+        let proj = meta
+            .iter()
+            .filter_map(|r| {
+                let name = r.get("name").and_then(JsonValue::as_str)?;
+                let type_name = r
+                    .get("system_type_name")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("");
+                Some(sqlserver_preview_expr(name, type_name))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sample_sql = format!("SELECT TOP {} {} FROM ({}) q", PREVIEW_LIMIT, proj, query);
+        let sample_rows = self
+            .sqlserver_probe_rows(format, options, &sample_sql)
+            .unwrap_or_default();
+
+        Ok(Some(Inspection {
+            schema,
+            sample_rows,
+        }))
+    }
+
+    /// Run one SQL Server / Synapse query through the same driver the run path
+    /// uses and return its rows as JSON. Drives a synthetic `src.<format>(query)
+    /// -> snk.parquet` probe, then reads the parquet back. Used by
+    /// `inspect_sqlserver_catalog` for catalog queries whose result columns are
+    /// all decodable types.
+    fn sqlserver_probe_rows(
+        &self,
+        format: &str,
+        options: &JsonValue,
+        query: &str,
+    ) -> Result<Vec<JsonValue>, EngineError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+
+        let mut src_props = options.clone();
+        if let Some(obj) = src_props.as_object_mut() {
+            obj.insert("query".to_string(), JsonValue::String(query.to_string()));
+            // The source builder can prefer a table over the query; drop it so
+            // our catalog query is the one that runs.
+            obj.remove("tableName");
+            obj.remove("table");
+        }
+        let unique = format!(
+            "{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let out = std::env::temp_dir().join(format!("duckle_mssql_probe_{}.parquet", unique));
+        let out_str = out.to_string_lossy().replace('\\', "/");
+
+        let doc_json = serde_json::json!({
+            "nodes": [
+                { "id": "probe_src", "position": { "x": 0, "y": 0 },
+                  "data": { "label": "probe", "componentId": format!("src.{}", format),
+                            "properties": src_props } },
+                { "id": "probe_out", "position": { "x": 220, "y": 0 },
+                  "data": { "label": "out", "componentId": "snk.parquet",
+                            "properties": { "path": out_str } } }
+            ],
+            "edges": [
+                { "id": "probe_edge", "source": "probe_src", "target": "probe_out",
+                  "sourceHandle": "main", "targetHandle": "main",
+                  "data": { "connectionType": "main" } }
+            ]
+        });
+        let doc: PipelineDoc = serde_json::from_value(doc_json)
+            .map_err(|e| EngineError::Query(format!("autodetect: build sqlserver probe: {}", e)))?;
+
+        // The catalog queries return only decodable column types, so the tiberius
+        // panic path is never taken; keep the guard so a driver quirk can never
+        // abort the whole app. Temp parquet is a throwaway per-call file.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute_pipeline(&doc)
+        }))
+        .map_err(|_| {
+            let _ = std::fs::remove_file(&out);
+            EngineError::Query(
+                "autodetect: the SQL Server driver panicked running a catalog query".into(),
+            )
+        })?;
+        if result.status != "ok" {
+            let _ = std::fs::remove_file(&out);
+            let msg = result
+                .nodes
+                .get("probe_src")
+                .and_then(|n| n.error.clone())
+                .or_else(|| result.nodes.values().find_map(|n| n.error.clone()))
+                .unwrap_or_else(|| "autodetect: sqlserver catalog query failed".into());
+            return Err(EngineError::Query(msg));
+        }
+        let rows = self.run_rows(
+            None,
+            &format!("SELECT * FROM read_parquet('{}')", out_str),
+        );
+        let _ = std::fs::remove_file(&out);
+        rows
     }
 
     /// Column-level lineage for a single SQL query: which source columns feed
@@ -3597,6 +3794,58 @@ fn map_duckdb_type(t: &str) -> DataType {
     }
 }
 
+/// Map a SQL Server `system_type_name` (as returned by
+/// sp_describe_first_result_set, e.g. "int", "nvarchar(4000)", "decimal(18,4)",
+/// "sql_variant", "geometry") to a duckle DataType. Keys off the leading type
+/// token; any length / precision in parentheses is ignored (#141).
+fn map_sqlserver_type(system_type_name: &str) -> DataType {
+    let base = system_type_name
+        .split(['(', ' '])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match base.as_str() {
+        "bigint" => DataType::Int64,
+        "int" | "smallint" | "tinyint" => DataType::Int32,
+        "bit" => DataType::Bool,
+        "decimal" | "numeric" | "money" | "smallmoney" => DataType::Decimal,
+        "float" => DataType::Float64,
+        "real" => DataType::Float32,
+        "date" => DataType::Date,
+        "datetime" | "datetime2" | "smalldatetime" | "datetimeoffset" => DataType::Timestamp,
+        "time" => DataType::Time,
+        // SQL Server's `timestamp` / `rowversion` is an 8-byte binary, NOT a
+        // datetime, so it lands here with the other binary types.
+        "binary" | "varbinary" | "image" | "timestamp" | "rowversion" => DataType::Binary,
+        "geometry" | "geography" => DataType::Geometry,
+        // char / varchar / text / nchar / nvarchar / ntext / uniqueidentifier /
+        // xml / sql_variant / hierarchyid / sysname / ... render as text.
+        _ => DataType::String,
+    }
+}
+
+/// Build the preview SELECT expression for one SQL Server column. The types the
+/// tiberius driver cannot decode in COLMETADATA (`sql_variant`, and the CLR UDTs
+/// `geometry` / `geography` / `hierarchyid`) are converted to text server-side
+/// so the sample-row probe never trips the panic; every other column is selected
+/// as-is (#141).
+fn sqlserver_preview_expr(name: &str, system_type_name: &str) -> String {
+    let q = format!("[{}]", name.replace(']', "]]"));
+    let base = system_type_name
+        .split(['(', ' '])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match base.as_str() {
+        "sql_variant" => format!("CAST({} AS nvarchar(4000)) AS {}", q, q),
+        "geometry" | "geography" => format!("{}.STAsText() AS {}", q, q),
+        "hierarchyid" => format!("{}.ToString() AS {}", q, q),
+        _ => q,
+    }
+}
+
 pub(crate) fn sql_escape(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -4077,10 +4326,11 @@ pub fn compile_pipeline_sql_opts(
 #[cfg(test)]
 mod tests {
     use super::{
-        aws_sigv4_sign, chunk_text, cosine_similarity, glob_match, mssql_numeric_to_string,
-        parse_link_next, pii_patterns, read_marker, render_prompt_template, secret_placeholder,
-        unwrap_dynamodb_attrs, DuckdbEngine, MarkerState,
+        aws_sigv4_sign, chunk_text, cosine_similarity, glob_match, map_sqlserver_type,
+        mssql_numeric_to_string, parse_link_next, pii_patterns, read_marker, render_prompt_template,
+        secret_placeholder, sqlserver_preview_expr, unwrap_dynamodb_attrs, DuckdbEngine, MarkerState,
     };
+    use duckle_metadata::DataType;
     use std::path::PathBuf;
 
     #[test]
@@ -4098,6 +4348,64 @@ mod tests {
         let child = run_b.clone();
         run_b.request_cancel();
         assert!(child.check_cancelled().is_err(), "a clone shares the run's flag");
+    }
+
+    #[test]
+    fn sqlserver_type_mapping_covers_every_family() {
+        // #141: autodetect maps sp_describe_first_result_set's system_type_name
+        // (which carries length / precision) to a duckle DataType by the leading
+        // token. Locks the whole family so a driver type can never silently
+        // become String again.
+        for (t, want) in [
+            ("bigint", DataType::Int64),
+            ("int", DataType::Int32),
+            ("smallint", DataType::Int32),
+            ("tinyint", DataType::Int32),
+            ("bit", DataType::Bool),
+            ("decimal(18,4)", DataType::Decimal),
+            ("numeric(10,2)", DataType::Decimal),
+            ("money", DataType::Decimal),
+            ("smallmoney", DataType::Decimal),
+            ("float", DataType::Float64),
+            ("real", DataType::Float32),
+            ("date", DataType::Date),
+            ("datetime", DataType::Timestamp),
+            ("datetime2(7)", DataType::Timestamp),
+            ("datetimeoffset(7)", DataType::Timestamp),
+            ("time(7)", DataType::Time),
+            ("nvarchar(4000)", DataType::String),
+            ("varchar(max)", DataType::String),
+            ("uniqueidentifier", DataType::String),
+            ("xml", DataType::String),
+            ("sql_variant", DataType::String),
+            ("hierarchyid", DataType::String),
+            ("binary(4)", DataType::Binary),
+            ("varbinary(max)", DataType::Binary),
+            ("image", DataType::Binary),
+            // SQL Server `timestamp` / `rowversion` is an 8-byte binary, not a
+            // datetime, so it must land on Binary.
+            ("timestamp", DataType::Binary),
+            ("geometry", DataType::Geometry),
+            ("geography", DataType::Geometry),
+        ] {
+            assert_eq!(map_sqlserver_type(t), want, "type {}", t);
+        }
+
+        // The preview projection converts only the types tiberius cannot decode
+        // in COLMETADATA; everything else is selected verbatim.
+        assert_eq!(sqlserver_preview_expr("a", "int"), "[a]");
+        assert_eq!(
+            sqlserver_preview_expr("v", "sql_variant"),
+            "CAST([v] AS nvarchar(4000)) AS [v]"
+        );
+        assert_eq!(
+            sqlserver_preview_expr("g", "geometry"),
+            "[g].STAsText() AS [g]"
+        );
+        assert_eq!(
+            sqlserver_preview_expr("h", "hierarchyid"),
+            "[h].ToString() AS [h]"
+        );
     }
 
     #[test]
