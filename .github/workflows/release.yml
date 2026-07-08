@@ -301,6 +301,14 @@ jobs:
   checksums:
     name: Publish SHA256SUMS
     needs: build
+    # Run even when a build leg failed (issue #156). The successful legs still
+    # re-upload their binaries via --clobber, so if this job is skipped the
+    # published SHA256SUMS.txt keeps stale checksums for the changed binaries and
+    # the in-app self-updater aborts every update with a checksum mismatch. It
+    # re-downloads whatever is actually on the release and checksums that, so the
+    # sums always match the published binaries even after a partial re-roll. Skip
+    # only on cancellation.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
