@@ -6,7 +6,7 @@
 
 <p><b>Duckle</b> is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, describe what you need in plain English to <b>Duckie</b> (the on-device AI assistant), and execute at native speed through DuckDB. 290+ connectors, 50+ transforms, a built-in scheduler, and a chat assistant that runs entirely on your CPU. Ships as a ~65 MB single-file desktop app. No cloud, no servers, no lock-in.</p>
 
-<a href="https://duckle.org/"><img src="docs/assets/hero-demo.gif" alt="Duckle in action: describe a pipeline to the Duckie AI assistant, build it on the visual canvas, and run 16 nodes on DuckDB in about three seconds" width="820"/></a>
+<a href="https://duckle.org/"><img src="docs/assets/ingest-seconds-benchmark.png" alt="Benchmark: loading a 20M-row CSV into DuckDB at each tool's best config. Duckle 15.69s, dlt 40.68s, Talend bulk 90s, Informatica bulk 100s, ingestr 411s, Airbyte about 1150s." width="820"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
 
@@ -176,6 +176,31 @@ The sidebar on the right is **Duckie AI Assistant** - powered by **Qwen 2.5 Code
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
+
+---
+
+## Benchmark
+
+The most common job in data engineering: load a **20M-row CSV into DuckDB**. One identical 2.49 GB file (20M rows of TPC-H lineitem, 16 typed columns), every tool measured at its best configuration, wall-clock time to land the data as a table.
+
+| Tool | Time | Peak RAM | vs Duckle |
+|---|---|---|---|
+| **Duckle** | **15.69s** | 2.88 GB | 1.0x (fastest) |
+| dlt | 40.68s | 2.95 GB | 2.6x |
+| Talend (bulk) | 90s | not captured | 5.7x |
+| Informatica (bulk) | 100s | not captured | 6.4x |
+| ingestr v1 (Go) | 411.01s | 1.01 GB | 26x |
+| Airbyte | ~1150s | 3.4 GB | 73x |
+
+**How it was measured**
+
+- **Machine:** Intel Core i7-13650HX (14C / 20T), 24 GB RAM, NVMe SSD, Windows 11, DuckDB 1.5.4. Duckle, dlt and ingestr ran here.
+- **Best config per tool:** dlt used the Arrow plus parquet loader path; Talend and Informatica used their bulk output connectors at max config (their default row-by-row sinks were 5-7x slower). Nothing was left on a slow default to pad the gap.
+- **Talend and Informatica** ran on a separate 8 GB VPS, so per-tool peak RAM was not captured for those two.
+- **Airbyte** (source-file to destination-duckdb) is scaled from measured 2M and 5M runs at a steady ~18k rows/s, and it also needs an always-on ~8 GB platform just to start.
+- Wall-clock time, peak working-set of the whole process tree.
+
+**Why Duckle is this fast:** its 15.69s sits right on top of raw DuckDB's own load floor (~16s to fully parse and write all 20M typed rows into an on-disk table). Duckle wraps the engine with pipelines, connectors, and a UI, then gets out of its way. That is the entire design goal. A read-only scan or aggregate over the same CSV is far faster still; this benchmark measures the heavier "materialize it as a table" job that every ETL tool here performs.
 
 ---
 
