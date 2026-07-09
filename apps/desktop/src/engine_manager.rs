@@ -341,6 +341,9 @@ fn duckdb_command(bin: &Path) -> std::process::Command {
         // CREATE_NO_WINDOW: suppress the console flash on Windows.
         cmd.creation_flags(0x0800_0000);
     }
+    // -no-init: never process a user's ~/.duckdbrc. An init file that prints
+    // output would pollute version/platform probes and extension installs.
+    cmd.arg("-no-init");
     cmd
 }
 

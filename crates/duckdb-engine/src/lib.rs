@@ -198,6 +198,10 @@ impl DuckdbEngine {
                 cmd.arg(":memory:");
             }
         }
+        // Never process a user's ~/.duckdbrc. An init file that prints output
+        // (e.g. a `.show` command) pollutes stdout and breaks autodetect,
+        // schema inference, and pipeline runs. -no-init suppresses it.
+        cmd.arg("-no-init");
         if json {
             cmd.arg("-json");
         }
@@ -1953,6 +1957,8 @@ impl DuckdbEngine {
         // Same as run(): open the throwaway run-db at v1.5.0 so GEOMETRY CRS
         // survives the batched session too (issue #150).
         cmd.arg("-storage-version").arg("v1.5.0");
+        // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute output.
+        cmd.arg("-no-init");
         if allow_unsigned_extensions() {
             cmd.arg("-unsigned");
         }
@@ -2827,6 +2833,8 @@ fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError>
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     cmd.arg(db.to_string_lossy().to_string());
+    // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute output.
+    cmd.arg("-no-init");
     if allow_unsigned_extensions() {
         cmd.arg("-unsigned");
     }
@@ -2870,6 +2878,9 @@ fn duckdb_query_json(bin: &Path, db: &Path, sql: &str) -> Vec<JsonValue> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     cmd.arg(db.to_string_lossy().to_string());
+    // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute the JSON
+    // this reader parses from stdout.
+    cmd.arg("-no-init");
     if allow_unsigned_extensions() {
         cmd.arg("-unsigned");
     }

@@ -4802,6 +4802,25 @@ fn mssql_attach(props: &JsonValue) -> String {
     )
 }
 
+/// libpq-style value quoting for a `key=value` connection string. A value that
+/// is empty or contains whitespace, a single quote, or a backslash must be
+/// wrapped in single quotes with `\` and `'` backslash-escaped; otherwise the
+/// value parser stops at the first space and mis-reads the rest of the string.
+/// This is what makes special-character passwords (spaces, quotes, `?`, `{`,
+/// ...) work over the mysql / postgres ATTACH (issue #157). The whole connstr
+/// is later wrapped in a SQL string literal by `sql_escape`, which doubles the
+/// single quotes we add here - DuckDB decodes that back to the libpq form.
+fn conn_kv_quote(v: &str) -> String {
+    let needs_quote = v.is_empty()
+        || v.chars().any(|c| c.is_whitespace() || c == '\'' || c == '\\');
+    if needs_quote {
+        let escaped = v.replace('\\', "\\\\").replace('\'', "\\'");
+        format!("'{}'", escaped)
+    } else {
+        v.to_string()
+    }
+}
+
 pub(crate) fn db_attach(props: &JsonValue, extension: &str, default_port: u64, read_only: bool) -> String {
     let host = string_prop(props, "host").unwrap_or_default();
     if host.is_empty() {
@@ -4813,25 +4832,36 @@ pub(crate) fn db_attach(props: &JsonValue, extension: &str, default_port: u64, r
         .filter(|p| *p > 0)
         .unwrap_or(default_port);
     let db_key = if extension == "postgres" { "dbname" } else { "database" };
-    let mut parts = vec![format!("host={}", host), format!("port={}", port)];
+    let mut parts = vec![format!("host={}", conn_kv_quote(&host)), format!("port={}", port)];
     if let Some(db) = string_prop(props, "database").filter(|s| !s.is_empty()) {
-        parts.push(format!("{}={}", db_key, db));
+        parts.push(format!("{}={}", db_key, conn_kv_quote(&db)));
     }
     if let Some(u) = string_prop(props, "user")
         .or_else(|| string_prop(props, "username"))
         .filter(|s| !s.is_empty())
     {
-        parts.push(format!("user={}", u));
+        parts.push(format!("user={}", conn_kv_quote(&u)));
     }
     if let Some(p) = string_prop(props, "password").filter(|s| !s.is_empty()) {
-        parts.push(format!("password={}", p));
+        parts.push(format!("password={}", conn_kv_quote(&p)));
     }
     let connstr = parts.join(" ");
-    let (alias, mode) = if read_only {
-        ("duckle_src", ", READ_ONLY")
-    } else {
-        ("duckle_dst", "")
-    };
+    // `read_only` from the call site means "this is a source" (aliased
+    // duckle_src) vs "sink" (duckle_dst). The READ_ONLY *attach option* is
+    // applied to sources by default, but a user can drop it with readOnly=false
+    // when their server / extension version rejects it (issue #157).
+    let is_source = read_only;
+    let alias = if is_source { "duckle_src" } else { "duckle_dst" };
+    let attach_read_only = is_source
+        && !matches!(
+            props.get("readOnly"),
+            Some(JsonValue::Bool(false))
+        )
+        && !matches!(
+            string_prop(props, "readOnly").as_deref().map(|s| s.trim().to_ascii_lowercase()),
+            Some(ref s) if s == "false" || s == "0" || s == "no" || s == "off"
+        );
+    let mode = if attach_read_only { ", READ_ONLY" } else { "" };
     let type_name = extension.to_uppercase();
     format!(
         "LOAD {ext}; ATTACH '{conn}' AS {alias} (TYPE {type_name}{mode}); ",
@@ -7722,5 +7752,76 @@ mod rest_auth_tests {
             })),
             vec![("X-Custom".to_string(), "a:b:c".to_string())]
         );
+    }
+}
+
+#[cfg(test)]
+mod db_attach_tests {
+    use super::db_attach;
+    use serde_json::json;
+
+    #[test]
+    fn special_char_password_is_quoted() {
+        // A password with a space (and other specials like ? and {) must be
+        // single-quoted in the libpq key-value form, then SQL-escaped (each
+        // single quote doubled). Issue #157.
+        let sql = db_attach(
+            &json!({ "host": "h", "database": "db", "user": "u", "password": "p@ss w?rd{" }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(sql.contains("password=''p@ss w?rd{''"), "password not quoted: {}", sql);
+        assert!(sql.contains("AS duckle_src (TYPE MYSQL, READ_ONLY)"), "wrong attach: {}", sql);
+    }
+
+    #[test]
+    fn quote_in_password_is_escaped() {
+        // libpq value 'pa\'ss'  ->  sql_escape doubles the quotes: ''pa\''ss''
+        let sql = db_attach(
+            &json!({ "host": "h", "user": "u", "password": "pa'ss" }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(sql.contains(r"password=''pa\''ss''"), "quote not escaped: {}", sql);
+    }
+
+    #[test]
+    fn simple_password_stays_bare() {
+        let sql = db_attach(
+            &json!({ "host": "h", "user": "u", "password": "simplepass" }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(sql.contains("password=simplepass"), "should be bare: {}", sql);
+    }
+
+    #[test]
+    fn read_only_can_be_disabled() {
+        // #157: some MySQL / extension versions reject the READ_ONLY attach
+        // option. readOnly=false drops it but keeps the duckle_src alias.
+        for ro in [json!(false), json!("false"), json!("off")] {
+            let sql = db_attach(
+                &json!({ "host": "h", "user": "u", "password": "x", "readOnly": ro }),
+                "mysql",
+                3306,
+                true,
+            );
+            assert!(!sql.contains("READ_ONLY"), "READ_ONLY should be gone: {}", sql);
+            assert!(sql.contains("AS duckle_src (TYPE MYSQL)"), "wrong attach: {}", sql);
+        }
+    }
+
+    #[test]
+    fn read_only_kept_by_default() {
+        let sql = db_attach(
+            &json!({ "host": "h", "user": "u", "password": "x" }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(sql.contains(", READ_ONLY"), "READ_ONLY should stay by default: {}", sql);
     }
 }

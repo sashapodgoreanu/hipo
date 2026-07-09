@@ -98,7 +98,8 @@ fn generate_sample_data(ws: &Path, duckdb_bin: &Path) -> Result<(), String> {
     // -c). CREATE_NO_WINDOW: no console flash on Windows.
     let read_cmd = format!(".read {}", gen_path.to_string_lossy().replace('\\', "/"));
     let mut cmd = std::process::Command::new(duckdb_bin);
-    cmd.arg(":memory:").arg(&read_cmd);
+    // -no-init: ignore ~/.duckdbrc so a user init file cannot break sample gen.
+    cmd.arg("-no-init").arg(":memory:").arg(&read_cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

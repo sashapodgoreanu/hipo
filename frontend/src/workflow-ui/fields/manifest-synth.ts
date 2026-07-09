@@ -1289,9 +1289,23 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
             },
         ]);
     }
+    // The Postgres- and MySQL-family sources ATTACH via the DuckDB extension
+    // with a READ_ONLY option. Expose a toggle so a server / extension version
+    // that rejects READ_ONLY can still connect (issue #157).
+    const attachBacked = [
+        'src.postgres', 'src.cockroach', 'src.pgvector', 'src.redshift',
+        'src.mysql', 'src.mariadb',
+    ].includes(comp.id);
+    const readOnlyField: Field = {
+        key: 'readOnly',
+        label: 'Attach read-only',
+        kind: 'bool',
+        defaultValue: true,
+        description: 'Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option.',
+    };
     return base(comp, [
         { label: 'Connection', fields: dbConnectionFields(comp.id) },
-        { label: 'Query', fields: dbReadFields() },
+        { label: 'Query', fields: attachBacked ? [...dbReadFields(), readOnlyField] : dbReadFields() },
     ]);
 }
 

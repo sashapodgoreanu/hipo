@@ -440,7 +440,8 @@ fn no_window(cmd: &mut std::process::Command) {
 fn duckdb_version(bin: &Path) -> Option<String> {
     let mut cmd = std::process::Command::new(bin);
     no_window(&mut cmd);
-    let out = cmd.arg("--version").output().ok()?;
+    // -no-init: ignore ~/.duckdbrc so init-file output cannot corrupt the probe.
+    let out = cmd.arg("-no-init").arg("--version").output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
     s.split_whitespace()
         .find(|t| t.starts_with('v') && t[1..].chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
@@ -451,7 +452,9 @@ fn duckdb_version(bin: &Path) -> Option<String> {
 fn duckdb_platform(bin: &Path) -> Option<String> {
     let mut cmd = std::process::Command::new(bin);
     no_window(&mut cmd);
+    // -no-init: ignore ~/.duckdbrc so init-file output cannot corrupt the probe.
     let out = cmd
+        .arg("-no-init")
         .arg("-noheader")
         .arg("-list")
         .arg("-c")
