@@ -52,6 +52,15 @@ const ADVANCED_FIELDS: Field[] = [
         defaultValue: false,
         description: 'Print the post-stage row count to the run output (descriptive; row counts already surface in node badges).',
     },
+    {
+        key: 'sqlOverride',
+        label: 'Override stage SQL',
+        kind: 'textarea',
+        monospace: true,
+        rows: 6,
+        placeholder: 'SELECT * FROM input WHERE ...',
+        description: "Advanced (source and transform stages): replace this stage's generated SQL with your own SELECT. Reference the upstream as `input`, or `input1`, `input2`, ... for multi-input stages like joins (main input first). Leave empty to use the generated SQL. A source stage with no upstream runs this SQL verbatim.",
+    },
 ];
 
 // Universal Materialize control, shown on the Basic tab of every node. The

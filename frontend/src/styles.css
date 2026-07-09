@@ -2248,6 +2248,33 @@ textarea:focus-visible {
     border-color: var(--accent);
 }
 
+/* Masked secret input (password / token) with an inline show/hide toggle. */
+.field-secret {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+.field-secret .field-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.field-secret-toggle {
+    flex: 0 0 auto;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+    padding: 0 10px;
+    font-size: 0.8462rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color 80ms ease, border-color 80ms ease;
+}
+.field-secret-toggle:hover {
+    color: var(--text-1);
+    border-color: var(--accent);
+}
+
 .field-readonly {
     padding: 6px 8px;
     background: var(--bg-2);

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Field } from './types';
 
 type Props<T> = {
@@ -6,16 +7,49 @@ type Props<T> = {
     onChange: (v: T) => void;
 };
 
+// A field holds a secret when explicitly flagged, or by the long-standing
+// convention that password / token / key inputs use the bullet placeholder.
+function isSecretField(field: Field): boolean {
+    return field.secret === true || field.placeholder === '••••••••';
+}
+
 export function TextField({ field, value, onChange }: Props<string>) {
+    const secret = isSecretField(field);
+    const [reveal, setReveal] = useState(false);
+    if (!secret) {
+        return (
+            <input
+                type="text"
+                className="field-input"
+                value={value ?? ''}
+                placeholder={field.placeholder}
+                onChange={e => onChange(e.target.value)}
+                spellCheck={false}
+            />
+        );
+    }
     return (
-        <input
-            type="text"
-            className="field-input"
-            value={value ?? ''}
-            placeholder={field.placeholder}
-            onChange={e => onChange(e.target.value)}
-            spellCheck={false}
-        />
+        <div className="field-secret">
+            <input
+                type={reveal ? 'text' : 'password'}
+                className="field-input"
+                value={value ?? ''}
+                placeholder={field.placeholder}
+                onChange={e => onChange(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+            />
+            <button
+                type="button"
+                className="field-secret-toggle"
+                onClick={() => setReveal(r => !r)}
+                aria-label={reveal ? 'Hide' : 'Show'}
+                title={reveal ? 'Hide' : 'Show'}
+                tabIndex={-1}
+            >
+                {reveal ? 'Hide' : 'Show'}
+            </button>
+        </div>
     );
 }
 

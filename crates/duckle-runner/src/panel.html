@@ -88,7 +88,7 @@
   .job { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
     transition: border-color .12s; }
   .job:hover { border-color: var(--line-2); }
-  .job-head { display: grid; grid-template-columns: 14px 1.7fr 1fr 0.9fr 0.9fr 1.1fr auto; gap: 16px;
+  .job-head { display: grid; grid-template-columns: 14px 1.7fr 1fr 0.9fr 0.9fr 0.9fr 1.1fr auto; gap: 16px;
     align-items: center; padding: 14px 18px; cursor: pointer; }
   .dot { width: 11px; height: 11px; border-radius: 50%; }
   .d-ok { background: var(--maya); box-shadow: 0 0 8px rgba(74,168,255,.6); }
@@ -154,7 +154,7 @@
     Workspace
     <div class="ws" id="ws">-</div>
     <div class="cli">Start from a terminal:<br><code id="cli-cmd">duckle serve</code></div>
-    <label><input type="checkbox" id="autorefresh"> Auto-refresh (5s)</label>
+    <label><input type="checkbox" id="autorefresh" checked> Auto-refresh (5s)</label>
   </div>
 </aside>
 
@@ -252,6 +252,15 @@ function relTime(iso){
   try{return new Date(iso).toLocaleDateString();}catch(e){return iso;}
 }
 function fullTime(iso){ if(!iso)return '-'; try{return new Date(iso).toLocaleString();}catch(e){return iso;} }
+function relFuture(iso){
+  if(!iso) return '-';
+  const t=new Date(iso).getTime(); if(isNaN(t)) return iso;
+  const d=(t-Date.now())/1000;
+  if(d<=0) return 'due';
+  if(d<60) return 'in <1m'; if(d<3600) return 'in '+Math.round(d/60)+'m';
+  if(d<86400) return 'in '+Math.round(d/3600)+'h'; if(d<604800) return 'in '+Math.round(d/86400)+'d';
+  try{return new Date(iso).toLocaleDateString();}catch(e){return iso;}
+}
 function toast(msg, kind){ const el=document.createElement('div'); el.className='toast';
   el.innerHTML=(kind?dot(kind):'')+'<span>'+esc(msg)+'</span>'; $('toast').appendChild(el);
   setTimeout(()=>el.remove(), 3800); }
@@ -307,12 +316,15 @@ function renderJobs(){
     const schedHtml=on?`<span class="sched on">◷ ${schedLabel}</span>`:`<span class="sched">manual</span>`;
     const rate=p.st.rate==null?'':`<div class="rate"><i style="width:${p.st.rate}%"></i></div>`;
     const open=OPEN_JOB===p.id?'open':'';
+    const eff=p.running?'running':p.lastStatus;
+    const nextHtml=p.running?'<span class="col-v">running now</span>':`<span class="col-v">${relFuture(p.nextRunAt)}</span>`;
     return `<div class="job ${open}" data-id="${esc(p.id)}">
       <div class="job-head" onclick="toggleJob('${esc(p.id)}')">
-        ${dot(p.lastStatus)}
-        <div><div class="job-name">${esc(p.name||p.id)} ${pill(p.lastStatus)}</div><div class="job-file">${esc(p.file)} · ${p.nodeCount} nodes</div></div>
+        ${dot(eff)}
+        <div><div class="job-name">${esc(p.name||p.id)} ${pill(eff)}</div><div class="job-file">${esc(p.file)} · ${p.nodeCount} nodes</div></div>
         <div>${schedHtml}</div>
         <div><div class="col-k">Last run</div><div class="col-v">${relTime(p.lastAt)}</div></div>
+        <div><div class="col-k">Next run</div>${nextHtml}</div>
         <div><div class="col-k">Duration</div><div class="col-v">${fmtDur(p.lastDurationMs)}</div></div>
         <div><div class="col-k">${p.st.runs} run${p.st.runs===1?'':'s'} · ${p.st.rate==null?'-':p.st.rate+'%'}</div>${rate}</div>
         <div style="display:flex;gap:8px;align-items:center">
@@ -438,8 +450,12 @@ async function runJob(file, id, btn){
 }
 
 // ── Auto-refresh ──
+// On by default so the live "Running" status and countdown to the next run
+// stay current without a manual refresh (discussion #155). Toggle to stop.
 let timer=null;
-$('autorefresh').onchange=e=>{ if(timer){clearInterval(timer);timer=null;} if(e.target.checked) timer=setInterval(refreshAll,5000); };
+function setAutoRefresh(on){ if(timer){clearInterval(timer);timer=null;} if(on) timer=setInterval(refreshAll,5000); }
+$('autorefresh').onchange=e=>setAutoRefresh(e.target.checked);
+setAutoRefresh($('autorefresh').checked);
 
 refreshAll();
 </script>

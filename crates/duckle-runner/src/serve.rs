@@ -100,6 +100,9 @@ struct State {
     /// Serializes pipeline execution: the shared workspace env vars and DuckDB
     /// process make concurrent runs unsafe, so manual + scheduled runs queue.
     run_lock: Mutex<()>,
+    /// Pipeline ids currently executing, so the console can show a live
+    /// "Running" status (discussion #155). Populated for the duration of a run.
+    running: Mutex<std::collections::HashSet<String>>,
     /// Scheduler poll cadence (issue #135). Default 15s; overridable via
     /// --tick-interval or DUCKLE_TICK_INTERVAL.
     tick_interval: Duration,
@@ -124,6 +127,7 @@ pub fn run() -> Result<(), String> {
         workspace: workspace.clone(),
         duckdb: duckdb.clone(),
         run_lock: Mutex::new(()),
+        running: Mutex::new(std::collections::HashSet::new()),
         tick_interval: args.tick_interval,
     });
 
@@ -964,6 +968,8 @@ fn api_pipelines(state: &State) -> Value {
         .map(|(path, id, v)| {
             let last = last_run(&state.workspace, &id);
             let sched = scheds.get(&id).cloned().unwrap_or(json!({ "enabled": false, "intervalMinutes": 0 }));
+            let running = state.running.lock().map(|s| s.contains(&id)).unwrap_or(false);
+            let next_at = next_run_at(&sched, last.as_ref().map(|r| r.at.as_str()));
             let name = names
                 .get(&id)
                 .cloned()
@@ -982,6 +988,8 @@ fn api_pipelines(state: &State) -> Value {
                 "lastDurationMs": last.as_ref().map(|r| r.duration_ms),
                 "lastRows": last.as_ref().map(|r| r.rows),
                 "schedule": sched,
+                "running": running,
+                "nextRunAt": next_at,
             })
         })
         .collect();
@@ -1129,6 +1137,38 @@ fn normalize_cron(expr: &str) -> Option<String> {
     }
 }
 
+/// The next time an enabled schedule is expected to fire, as an RFC3339 string
+/// for the console to display beside "last run" (discussion #155). Cron uses the
+/// exact next occurrence in local time; interval mode estimates from the last
+/// run (or now) rolled forward by whole intervals. Returns None when the
+/// schedule is disabled or has neither a cron nor a positive interval.
+fn next_run_at(sched: &Value, last_at: Option<&str>) -> Option<String> {
+    if !sched.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    let cron = sched.get("cron").and_then(Value::as_str).unwrap_or("").trim();
+    if !cron.is_empty() {
+        let schedule = normalize_cron(cron).and_then(|e| e.parse::<cron::Schedule>().ok())?;
+        return schedule.after(&chrono::Local::now()).next().map(|dt| dt.to_rfc3339());
+    }
+    let interval = sched.get("intervalMinutes").and_then(Value::as_u64).unwrap_or(0);
+    if interval == 0 {
+        return None;
+    }
+    let step = chrono::Duration::minutes(interval as i64);
+    let now = chrono::Utc::now();
+    let mut next = last_at
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc) + step)
+        .unwrap_or(now + step);
+    // A steady interval schedule fires every `interval`; roll past any missed
+    // slots so the shown time is the next one still in the future.
+    while next <= now {
+        next += step;
+    }
+    Some(next.to_rfc3339())
+}
+
 fn save_schedule(state: &State, body: &Value) -> Result<Value, String> {
     let id = body.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
     let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1188,6 +1228,20 @@ fn discover_pipeline_params(state: &State, file: &str) -> Result<Vec<String>, St
 /// env/time placeholders (as the runner does), execute through the engine,
 /// append a run-history record, and return a result summary. Serialized by the
 /// run lock so a scheduled run never overlaps a manual one.
+/// Removes a pipeline id from the running set when the run ends, no matter how
+/// (normal return, `?` error, or panic). Paired with the insert in execute_one.
+struct RunningGuard<'a> {
+    set: &'a Mutex<std::collections::HashSet<String>>,
+    id: String,
+}
+impl Drop for RunningGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.set.lock() {
+            set.remove(&self.id);
+        }
+    }
+}
+
 fn execute_one(
     state: &State,
     file: &str,
@@ -1201,6 +1255,14 @@ fn execute_one(
     let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "pipeline".into());
 
     let _guard = state.run_lock.lock().map_err(|_| "run lock poisoned".to_string())?;
+
+    // Mark this pipeline as running for the duration of the execution so the
+    // console can show a live "Running" status (discussion #155). The guard
+    // clears it on every exit path, including the `?` early returns below.
+    if let Ok(mut set) = state.running.lock() {
+        set.insert(id.clone());
+    }
+    let _running = RunningGuard { set: &state.running, id: id.clone() };
 
     // Same placeholder resolution as `duckle-runner run`: ${ENV:KEY} secrets,
     // then the dynamic ${date}/${datetime}/... builtins.

@@ -1303,9 +1303,19 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
         defaultValue: true,
         description: 'Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option.',
     };
+    // Advanced escape hatch: a raw connection string used verbatim inside the
+    // ATTACH, overriding the fields above. Lets you encode special characters
+    // yourself or pass a full mysql:// / postgresql:// URL (issue #157).
+    const connStringField: Field = {
+        key: 'connString',
+        label: 'Connection string (advanced)',
+        kind: 'text',
+        placeholder: "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
+        description: 'Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL.',
+    };
     return base(comp, [
         { label: 'Connection', fields: dbConnectionFields(comp.id) },
-        { label: 'Query', fields: attachBacked ? [...dbReadFields(), readOnlyField] : dbReadFields() },
+        { label: 'Query', fields: attachBacked ? [...dbReadFields(), readOnlyField, connStringField] : dbReadFields() },
     ]);
 }
 

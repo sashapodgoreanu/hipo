@@ -39,6 +39,8 @@ export type Field = {
     rows?: number;
     /** Filter connection-ref / routine-ref dropdowns to compatible items. */
     accepts?: string[];
+    /** Render a `text` field as a masked secret input (with show/hide). */
+    secret?: boolean;
 };
 
 export type FormSection = {

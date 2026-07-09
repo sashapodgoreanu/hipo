@@ -146,6 +146,37 @@ pub(crate) fn build_view_sql(
     declared: Option<&[duckle_metadata::Column]>,
     reject_wired: bool,
 ) -> Result<String, String> {
+    // Editable plan-stage SQL (issue #157): a `sqlOverride` on a stage replaces
+    // its generated SELECT with the user's own. Upstreams are exposed as CTEs -
+    // `input` (the main upstream) and `input1`, `input2`, ... (each upstream in
+    // edge order, main first) - so the edited SQL is robust to the internal
+    // upstream table names. A stage with no upstream (a source) runs the
+    // override verbatim.
+    if let Some(over) = string_prop(props, "sqlOverride")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        let mut ups: Vec<&str> = Vec::new();
+        if let Some(m) = inputs.main() {
+            ups.push(m);
+        }
+        for refs in inputs.ports.values() {
+            for r in refs {
+                let s = r.as_str();
+                if !ups.iter().any(|u| *u == s) {
+                    ups.push(s);
+                }
+            }
+        }
+        if ups.is_empty() {
+            return Ok(over);
+        }
+        let mut ctes = vec![format!("input AS (SELECT * FROM {})", quote_ident(ups[0]))];
+        for (i, up) in ups.iter().enumerate() {
+            ctes.push(format!("input{} AS (SELECT * FROM {})", i + 1, quote_ident(up)));
+        }
+        return Ok(format!("WITH {} {}", ctes.join(", "), over));
+    }
     match component_id {
         // Sources - declared schema is consulted by CSV / TSV (via `types=`)
         // and Excel (via an all_varchar read + cast/project wrapper, since
@@ -4822,30 +4853,44 @@ fn conn_kv_quote(v: &str) -> String {
 }
 
 pub(crate) fn db_attach(props: &JsonValue, extension: &str, default_port: u64, read_only: bool) -> String {
-    let host = string_prop(props, "host").unwrap_or_default();
-    if host.is_empty() {
-        return String::new();
-    }
-    let port = props
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .filter(|p| *p > 0)
-        .unwrap_or(default_port);
-    let db_key = if extension == "postgres" { "dbname" } else { "database" };
-    let mut parts = vec![format!("host={}", conn_kv_quote(&host)), format!("port={}", port)];
-    if let Some(db) = string_prop(props, "database").filter(|s| !s.is_empty()) {
-        parts.push(format!("{}={}", db_key, conn_kv_quote(&db)));
-    }
-    if let Some(u) = string_prop(props, "user")
-        .or_else(|| string_prop(props, "username"))
+    // Advanced override: a raw connection string the user supplies directly
+    // (issue #157). When present it replaces the host/port/user/password we
+    // would otherwise build, so a user can pass their own libpq key-value
+    // string or a mysql://... / postgresql://... URL and encode any special
+    // characters themselves. The duckle_src / duckle_dst alias is still ours,
+    // so downstream plan stages resolve the same way.
+    let connstr = if let Some(c) = string_prop(props, "connString")
+        .or_else(|| string_prop(props, "connectionString"))
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
     {
-        parts.push(format!("user={}", conn_kv_quote(&u)));
-    }
-    if let Some(p) = string_prop(props, "password").filter(|s| !s.is_empty()) {
-        parts.push(format!("password={}", conn_kv_quote(&p)));
-    }
-    let connstr = parts.join(" ");
+        c
+    } else {
+        let host = string_prop(props, "host").unwrap_or_default();
+        if host.is_empty() {
+            return String::new();
+        }
+        let port = props
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .filter(|p| *p > 0)
+            .unwrap_or(default_port);
+        let db_key = if extension == "postgres" { "dbname" } else { "database" };
+        let mut parts = vec![format!("host={}", conn_kv_quote(&host)), format!("port={}", port)];
+        if let Some(db) = string_prop(props, "database").filter(|s| !s.is_empty()) {
+            parts.push(format!("{}={}", db_key, conn_kv_quote(&db)));
+        }
+        if let Some(u) = string_prop(props, "user")
+            .or_else(|| string_prop(props, "username"))
+            .filter(|s| !s.is_empty())
+        {
+            parts.push(format!("user={}", conn_kv_quote(&u)));
+        }
+        if let Some(p) = string_prop(props, "password").filter(|s| !s.is_empty()) {
+            parts.push(format!("password={}", conn_kv_quote(&p)));
+        }
+        parts.join(" ")
+    };
     // `read_only` from the call site means "this is a source" (aliased
     // duckle_src) vs "sink" (duckle_dst). The READ_ONLY *attach option* is
     // applied to sources by default, but a user can drop it with readOnly=false
@@ -7823,5 +7868,97 @@ mod db_attach_tests {
             true,
         );
         assert!(sql.contains(", READ_ONLY"), "READ_ONLY should stay by default: {}", sql);
+    }
+
+    #[test]
+    fn conn_string_override_replaces_built_parts() {
+        // #157: a user-supplied connection string is used verbatim, overriding
+        // host/password, but Duckle keeps its duckle_src alias.
+        let sql = db_attach(
+            &json!({
+                "connString": "mysql://user:p%40ss@dbhost:3306/app",
+                "host": "ignored",
+                "password": "ignored",
+            }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(
+            sql.contains("ATTACH 'mysql://user:p%40ss@dbhost:3306/app' AS duckle_src (TYPE MYSQL, READ_ONLY)"),
+            "override not used: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn conn_string_override_works_without_host() {
+        // Without connString an empty host returns "" (no ATTACH); with an
+        // override there is no host requirement.
+        let sql = db_attach(&json!({ "connString": "host=h dbname=db" }), "postgres", 5432, true);
+        assert!(sql.contains("ATTACH 'host=h dbname=db' AS duckle_src"), "{}", sql);
+    }
+}
+
+#[cfg(test)]
+mod sql_override_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn inputs_with(ports: &[(&str, &str)]) -> NodeInputs {
+        let mut ni = NodeInputs::default();
+        for (port, up) in ports {
+            ni.ports.entry(port.to_string()).or_default().push(up.to_string());
+        }
+        ni
+    }
+
+    #[test]
+    fn override_wraps_single_input_as_cte() {
+        let ni = inputs_with(&[("main", "up_a")]);
+        let sql = build_view_sql(
+            "xf.filter",
+            &json!({ "sqlOverride": "SELECT * FROM input WHERE x > 0" }),
+            &ni,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(sql.starts_with("WITH input AS (SELECT * FROM \"up_a\")"), "{}", sql);
+        assert!(sql.contains("input1 AS (SELECT * FROM \"up_a\")"), "{}", sql);
+        assert!(sql.ends_with("SELECT * FROM input WHERE x > 0"), "{}", sql);
+    }
+
+    #[test]
+    fn override_exposes_multiple_inputs_main_first() {
+        let ni = inputs_with(&[("main", "up_main"), ("lookup", "up_look")]);
+        let sql = build_view_sql(
+            "xf.join",
+            &json!({ "sqlOverride": "SELECT * FROM input1 JOIN input2 USING (id)" }),
+            &ni,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(sql.contains("input AS (SELECT * FROM \"up_main\")"), "{}", sql);
+        assert!(sql.contains("input1 AS (SELECT * FROM \"up_main\")"), "{}", sql);
+        assert!(sql.contains("input2 AS (SELECT * FROM \"up_look\")"), "{}", sql);
+    }
+
+    #[test]
+    fn override_without_input_is_verbatim() {
+        let ni = NodeInputs::default();
+        let sql = build_view_sql("src.csv", &json!({ "sqlOverride": "SELECT 1 AS x" }), &ni, None, false).unwrap();
+        assert_eq!(sql, "SELECT 1 AS x");
+    }
+
+    #[test]
+    fn blank_override_falls_through_to_generated() {
+        // A whitespace-only override is ignored: the normal builder runs. A
+        // ctl.replicate stage just re-selects its upstream, no WITH-input wrapper.
+        let ni = inputs_with(&[("main", "up_a")]);
+        let sql = build_view_sql("ctl.replicate", &json!({ "sqlOverride": "   " }), &ni, None, false).unwrap();
+        assert!(!sql.contains("input AS (SELECT"), "override should have been ignored: {}", sql);
+        assert!(sql.contains("SELECT * FROM \"up_a\""), "{}", sql);
     }
 }
