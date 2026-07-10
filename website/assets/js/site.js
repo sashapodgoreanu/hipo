@@ -74,11 +74,57 @@
         if (href === here) a.classList.add("active");
     });
 
-    /* ---- "Contact us" modal ----
-       Static site, no backend: a short form that opens the visitor's mail
-       client with a prefilled message to the maintainer. Injected once and
-       shared by every page's header button. */
+    /* ---- contact + connector modal delivery ----
+       When FORM_ENDPOINT is set, submissions are POSTed to it and emailed
+       server-side (Formspree-style), so the visitor never leaves the page and
+       no mail client opens. When it is blank, the success screen offers the
+       prefilled email as an optional, user-clicked link. Never auto-launches
+       the mail app. */
     var HOST = "souravroy7864@gmail.com";
+    // Direct server-side email. Create a free form at https://formspree.io and
+    // paste its URL here, e.g. "https://formspree.io/f/xxxxxxxx". Web3Forms also
+    // works: set this to "https://api.web3forms.com/submit" and put the access
+    // key in FORM_EXTRA. Leave "" to use the optional-mailto fallback.
+    var FORM_ENDPOINT = "";
+    // Hidden fields sent with every submission (Web3Forms needs an access key:
+    // { access_key: "your-key" }). Leave empty for Formspree.
+    var FORM_EXTRA = {};
+
+    var MODAL_CHK = '<span class="chk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
+
+    // Render a final screen into a modal and wire its ".js-modal-done" control.
+    function modalDone(modalEl, html, close) {
+        modalEl.innerHTML = html;
+        var d = modalEl.querySelector(".js-modal-done");
+        if (d) d.addEventListener("click", function (ev) { ev.preventDefault(); close(); });
+    }
+    function sentScreen(msg) {
+        return '<div class="modal-ok">' + MODAL_CHK + '<h3>Thanks - message sent</h3>'
+          + '<p class="muted">' + msg + '</p>'
+          + '<button type="button" class="btn btn-primary btn-pill js-modal-done">Done</button></div>';
+    }
+    function mailtoScreen(mailto, heading) {
+        return '<div class="modal-ok">' + MODAL_CHK + '<h3>' + heading + '</h3>'
+          + '<p class="muted">We will get back to you by email. To send now, open a prefilled message, or write to us any time at <a href="mailto:' + HOST + '">' + HOST + '</a>.</p>'
+          + '<a class="btn btn-primary btn-pill" href="' + mailto + '">Open prefilled email</a>'
+          + '<p class="modal-alt"><a href="#" class="js-modal-done">No thanks, close</a></p></div>';
+    }
+    // POST the submission to FORM_ENDPOINT (emails it server-side, no mail
+    // client) when configured; otherwise show the optional-mailto fallback. A
+    // network/endpoint failure also falls back so the message is never lost.
+    function deliverForm(modalEl, submitBtn, fields, mailto, heading, sentMsg, close) {
+        if (!FORM_ENDPOINT) { modalDone(modalEl, mailtoScreen(mailto, heading), close); return; }
+        var body = new FormData();
+        Object.keys(FORM_EXTRA).forEach(function (k) { body.append(k, FORM_EXTRA[k]); });
+        Object.keys(fields).forEach(function (k) { if (fields[k]) body.append(k, fields[k]); });
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Sending..."; }
+        fetch(FORM_ENDPOINT, { method: "POST", body: body, headers: { Accept: "application/json" } })
+            .then(function (r) { return r.ok; })
+            .then(function (ok) { modalDone(modalEl, ok ? sentScreen(sentMsg) : mailtoScreen(mailto, heading), close); })
+            .catch(function () { modalDone(modalEl, mailtoScreen(mailto, heading), close); });
+    }
+
+    /* ---- "Contact us" modal ---- injected once, shared by every header button. */
     var contactTriggers = document.querySelectorAll(".js-contact");
     if (contactTriggers.length) {
         var overlay = document.createElement("div");
@@ -121,22 +167,21 @@
                 return;
             }
             var subject = "Duckle: " + form.topic.value;
-            var body = "Hi Sourav,%0D%0A%0D%0A"
+            var mbody = "Hi Sourav,%0D%0A%0D%0A"
                 + (form.name.value.trim() ? "Name: " + encodeURIComponent(form.name.value.trim()) + "%0D%0A" : "")
                 + "Email: " + encodeURIComponent(form.email.value)
                 + "%0D%0ATopic: " + encodeURIComponent(form.topic.value)
                 + (form.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(form.notes.value.trim()) : "");
-            // No auto-launch of the mail client (that hijacks the browser). Offer
-            // the prefilled email as an optional, user-clicked link instead.
-            var mailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
-            modal.innerHTML =
-                '<div class="modal-ok"><span class="chk">'
-              + '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>'
-              + '<h3>Thanks for reaching out</h3>'
-              + '<p class="muted">We will get back to you by email. To send your details now, open a prefilled message, or write to us any time at <a href="mailto:' + HOST + '">' + HOST + '</a>.</p>'
-              + '<a class="btn btn-primary btn-pill" href="' + mailto + '">Open prefilled email</a>'
-              + '<p class="modal-alt"><a href="#" id="contactDone">No thanks, close</a></p></div>';
-            modal.querySelector("#contactDone").addEventListener("click", function (ev) { ev.preventDefault(); closeModal(); });
+            var mailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + mbody;
+            deliverForm(modal, form.querySelector("button[type=submit]"), {
+                name: form.name.value.trim(),
+                email: form.email.value,
+                topic: form.topic.value,
+                message: form.notes.value.trim(),
+                _subject: subject,
+                _replyto: form.email.value
+            }, mailto, "Thanks for reaching out",
+               "We have your details and will get back to you by email.", closeModal);
         });
     }
 
@@ -186,22 +231,21 @@
                 return;
             }
             var subject = "Duckle connector request: " + cForm.conn.value.trim();
-            var body = "Hi Sourav,%0D%0A%0D%0AI would like to request a Duckle connector."
+            var mbody = "Hi Sourav,%0D%0A%0D%0AI would like to request a Duckle connector."
                 + "%0D%0A%0D%0AConnector: " + encodeURIComponent(cForm.conn.value.trim())
                 + "%0D%0ADirection: " + encodeURIComponent(cForm.dir.value)
                 + "%0D%0AEmail: " + encodeURIComponent(cForm.email.value)
                 + (cForm.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(cForm.notes.value.trim()) : "");
-            // No auto-launch of the mail client (that hijacks the browser). Offer
-            // the prefilled email as an optional, user-clicked link instead.
-            var cMailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
-            cModal.innerHTML =
-                '<div class="modal-ok"><span class="chk">'
-              + '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>'
-              + '<h3>Request ready to send</h3>'
-              + '<p class="muted">We will get back to you by email. To send your request now, open a prefilled message, or write to us any time at <a href="mailto:' + HOST + '">' + HOST + '</a>.</p>'
-              + '<a class="btn btn-primary btn-pill" href="' + cMailto + '">Open prefilled email</a>'
-              + '<p class="modal-alt"><a href="#" id="connDone">No thanks, close</a></p></div>';
-            cModal.querySelector("#connDone").addEventListener("click", function (ev) { ev.preventDefault(); connClose(); });
+            var cMailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + mbody;
+            deliverForm(cModal, cForm.querySelector("button[type=submit]"), {
+                connector: cForm.conn.value.trim(),
+                direction: cForm.dir.value,
+                email: cForm.email.value,
+                message: cForm.notes.value.trim(),
+                _subject: subject,
+                _replyto: cForm.email.value
+            }, cMailto, "Request ready to send",
+               "We have your request and will get back to you by email.", connClose);
         });
     }
 
