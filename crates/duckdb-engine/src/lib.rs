@@ -1342,6 +1342,11 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::Webhook(spec)) => {
                         self.run_webhook(&db_path, &secret_prefix, spec)
                     }
+                    // snk.execsource (#115): run CREATE TABLE AS on the source
+                    // server itself via postgres_execute / mysql_execute.
+                    Some(RuntimeSpec::RemoteExec(spec)) => {
+                        self.run_remote_exec(&db_path, &secret_prefix, spec)
+                    }
                     // Snowflake / Databricks SQL API sinks: multi-row INSERTs
                     // batched and POSTed with Bearer / token auth.
                     Some(RuntimeSpec::SnowflakeSink(spec)) => {

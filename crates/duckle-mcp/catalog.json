@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 361,
+  "componentCount": 362,
   "components": [
     {
       "id": "src.csv",
@@ -28350,6 +28350,143 @@
                 "label": "Batch size",
                 "kind": "integer",
                 "defaultValue": 10000
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.execsource",
+      "label": "Execute in Source",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "In-database processing: run a CREATE TABLE AS query on the source server itself (Postgres / MySQL) via postgres_execute / mysql_execute. The transform executes in the database and the result lands there, with no round-trip through DuckDB. Self-contained: no input needed.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.execsource",
+        "kind": "sink",
+        "label": "Execute in Source",
+        "description": "In-database processing: run a CREATE TABLE AS query on the source server itself (Postgres / MySQL) via postgres_execute / mysql_execute. The transform executes in the database and the result lands there, with no round-trip through DuckDB. Self-contained: no input needed.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Source server",
+            "fields": [
+              {
+                "key": "engine",
+                "label": "Engine",
+                "kind": "select",
+                "defaultValue": "postgres",
+                "options": [
+                  {
+                    "label": "PostgreSQL (postgres_execute)",
+                    "value": "postgres"
+                  },
+                  {
+                    "label": "MySQL / MariaDB (mysql_execute)",
+                    "value": "mysql"
+                  }
+                ]
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "localhost"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "description": "Defaults to 5432 (Postgres) or 3306 (MySQL) when blank."
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true,
+                "placeholder": "mydb"
+              },
+              {
+                "key": "username",
+                "label": "Username",
+                "kind": "text"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "connString",
+                "label": "Connection string (advanced)",
+                "kind": "text",
+                "description": "Optional. When set, this exact string is used for the ATTACH and the fields above are ignored."
+              }
+            ]
+          },
+          {
+            "label": "Run in database",
+            "fields": [
+              {
+                "key": "sql",
+                "label": "SQL query (runs on the server)",
+                "kind": "expression",
+                "rows": 6,
+                "required": true,
+                "placeholder": "SELECT city, count(*) AS n FROM orders GROUP BY city",
+                "description": "A SELECT executed on the source server in its own dialect. Reference tables directly (no duckle_src). The result lands in the destination table below - nothing is pulled into DuckDB."
+              },
+              {
+                "key": "destSchema",
+                "label": "Destination schema",
+                "kind": "text",
+                "placeholder": "public"
+              },
+              {
+                "key": "destTable",
+                "label": "Destination table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "orders_by_city"
+              },
+              {
+                "key": "mode",
+                "label": "Mode",
+                "kind": "select",
+                "defaultValue": "overwrite",
+                "options": [
+                  {
+                    "label": "Overwrite (drop + create)",
+                    "value": "overwrite"
+                  },
+                  {
+                    "label": "Create (fail if the table exists)",
+                    "value": "create"
+                  }
+                ]
               }
             ]
           }

@@ -522,6 +522,7 @@ export const PALETTE: Category[] = [
                     snk('sqlite', 'SQLite', 'available', 'Write a table into a SQLite file'),
                     snk('duckdb', 'DuckDB', 'available', 'Write a table into a DuckDB file'),
                     snk('clickhouse', 'ClickHouse', 'available', 'INSERT to ClickHouse via the HTTP interface (FORMAT JSONEachRow). Batched at 10k rows by default.'),
+                    snk('execsource', 'Execute in Source', 'available', 'In-database processing: run a CREATE TABLE AS query on the source server itself (Postgres / MySQL) via postgres_execute / mysql_execute. The transform executes in the database and the result lands there, with no round-trip through DuckDB. Self-contained: no input needed.'),
                     snk('jdbc', 'Generic JDBC', 'planned'),
                 ],
             },

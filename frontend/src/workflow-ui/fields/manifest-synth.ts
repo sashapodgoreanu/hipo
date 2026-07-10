@@ -1330,6 +1330,48 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
     ]);
 }
 
+// snk.execsource "Execute in Source" (#115 in-database processing v1b): a
+// self-contained node that runs a CREATE TABLE AS query on the Postgres/MySQL
+// server itself (postgres_execute / mysql_execute), no round-trip through
+// DuckDB. Its own connection + SQL + destination; no upstream input required.
+function synthExecSource(comp: ComponentDef): ComponentManifest {
+    return base(comp, [
+        {
+            label: 'Source server',
+            fields: [
+                {
+                    key: 'engine', label: 'Engine', kind: 'select', defaultValue: 'postgres',
+                    options: [
+                        { label: 'PostgreSQL (postgres_execute)', value: 'postgres' },
+                        { label: 'MySQL / MariaDB (mysql_execute)', value: 'mysql' },
+                    ],
+                },
+                { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'localhost' },
+                { key: 'port', label: 'Port', kind: 'integer', description: 'Defaults to 5432 (Postgres) or 3306 (MySQL) when blank.' },
+                { key: 'database', label: 'Database', kind: 'text', required: true, placeholder: 'mydb' },
+                { key: 'username', label: 'Username', kind: 'text' },
+                { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                { key: 'connString', label: 'Connection string (advanced)', kind: 'text', description: 'Optional. When set, this exact string is used for the ATTACH and the fields above are ignored.' },
+            ],
+        },
+        {
+            label: 'Run in database',
+            fields: [
+                { key: 'sql', label: 'SQL query (runs on the server)', kind: 'expression', rows: 6, required: true, placeholder: 'SELECT city, count(*) AS n FROM orders GROUP BY city', description: 'A SELECT executed on the source server in its own dialect. Reference tables directly (no duckle_src). The result lands in the destination table below - nothing is pulled into DuckDB.' },
+                { key: 'destSchema', label: 'Destination schema', kind: 'text', placeholder: 'public' },
+                { key: 'destTable', label: 'Destination table', kind: 'text', required: true, placeholder: 'orders_by_city' },
+                {
+                    key: 'mode', label: 'Mode', kind: 'select', defaultValue: 'overwrite',
+                    options: [
+                        { label: 'Overwrite (drop + create)', value: 'overwrite' },
+                        { label: 'Create (fail if the table exists)', value: 'create' },
+                    ],
+                },
+            ],
+        },
+    ]);
+}
+
 function synthDbSink(comp: ComponentDef): ComponentManifest {
     // Embedded file databases (SQLite / DuckDB). These attach a local file as
     // duckle_dst and write a table into it - they have no host/account, so the
@@ -5485,6 +5527,7 @@ export function synthesizeManifest(componentId: string): ComponentManifest | und
 
     // Sinks
     if (groupId === 'snk.files') return synthFileSink(comp);
+    if (comp.id === 'snk.execsource') return synthExecSource(comp);
     if (groupId === 'snk.databases') return synthDbSink(comp);
     if (groupId === 'snk.warehouses') return synthWarehouseSink(comp);
     if (groupId === 'snk.storage') return synthStorageSink(comp);

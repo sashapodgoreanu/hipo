@@ -1379,6 +1379,21 @@ pub struct WebhookSpec {
     pub text_template: Option<String>,
 }
 
+/// snk.execsource "Execute in Source" (#115 in-database processing v1b): run a
+/// statement (typically CREATE TABLE ... AS SELECT) directly on the attached
+/// remote server via the scanner extension's passthrough (postgres_execute /
+/// mysql_execute), so the transform runs in-database with no round-trip through
+/// DuckDB. `attach` is the LOAD + ATTACH prelude binding the server as
+/// duckle_dst; `exec_fn` is postgres_execute / mysql_execute; `statement` is
+/// the SQL run on the remote, one CALL each (the mysql extension rejects a
+/// multi-statement batch, so DROP + CREATE arrive as separate statements).
+#[derive(Debug, Clone)]
+pub struct RemoteExecSpec {
+    pub attach: String,
+    pub exec_fn: String,
+    pub statements: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UpsertSpec {
     pub family: UpsertFamily,

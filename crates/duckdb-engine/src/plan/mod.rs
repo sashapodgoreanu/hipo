@@ -97,6 +97,8 @@ impl Stage {
 #[derive(Debug)]
 pub enum RuntimeSpec {
     Upsert(UpsertSpec),
+    /// snk.execsource: run a CREATE TABLE AS on the remote server (#115).
+    RemoteExec(RemoteExecSpec),
     TextSearch(TextSearchSpec),
     /// Parent -> child job call (ctl.runpipeline / ctl.trigger / ctl.runjob).
     /// `vars` are substituted as ${KEY} into the child before it runs.
@@ -945,6 +947,7 @@ fn build_stage(
     let mut upsert: Option<UpsertSpec> = None;
     let mut text_search: Option<TextSearchSpec> = None;
     let mut webhook: Option<WebhookSpec> = None;
+    let mut remote_exec: Option<RemoteExecSpec> = None;
     let mut run_job: Option<(String, Vec<(String, String)>)> = None;
     let mut install_fallback_path: Option<String> = None;
     let mut iterate_pipeline_path: Option<String> = None;
@@ -1157,6 +1160,60 @@ fn build_stage(
             text_template,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.execsource" {
+        // #115 in-database processing v1b: run the transform on the source
+        // server itself (no round-trip). Bind the server as duckle_dst, then
+        // CREATE TABLE <dest> AS <sql> via the extension's execute passthrough
+        // (postgres_execute / mysql_execute). Self-contained: no upstream input.
+        let engine = string_prop(&props, "engine").unwrap_or_else(|| "postgres".into());
+        let (ext, port, exec_fn, default_schema) = if engine == "mysql" {
+            ("mysql", 3306u64, "mysql_execute", None)
+        } else {
+            ("postgres", 5432u64, "postgres_execute", Some("public"))
+        };
+        let attach = db_attach(&props, ext, port, false);
+        if attach.is_empty() {
+            return Err(EngineError::Config(format!(
+                "{}: connection is incomplete (host or connection string required)",
+                component_id
+            )));
+        }
+        let sql = string_prop(&props, "sql")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: SQL query is required", component_id)))?;
+        let table = string_prop(&props, "destTable")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: destination table is required", component_id))
+            })?;
+        // Native (server-side) qualified name, quoted in the target's own
+        // dialect: Postgres uses ANSI double quotes and a schema.table shape
+        // (default public); MySQL uses backticks and selects the database at
+        // ATTACH, so there is no schema layer.
+        let dest = if ext == "mysql" {
+            format!("`{}`", table.replace('`', "``"))
+        } else {
+            let schema = string_prop(&props, "destSchema")
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| default_schema.map(|s| s.to_string()));
+            match schema {
+                Some(s) => format!("{}.{}", quote_ident(&s), quote_ident(&table)),
+                None => quote_ident(&table),
+            }
+        };
+        let inner = sql.trim().trim_end_matches(';').trim().to_string();
+        // Overwrite (default) drops first; "create" appends to a fresh table.
+        let mut statements = Vec::new();
+        if string_prop(&props, "mode").as_deref() != Some("create") {
+            statements.push(format!("DROP TABLE IF EXISTS {dest}"));
+        }
+        statements.push(format!("CREATE TABLE {dest} AS {inner}"));
+        remote_exec = Some(RemoteExecSpec {
+            attach,
+            exec_fn: exec_fn.to_string(),
+            statements,
+        });
+        (String::new(), StageKind::Sink, None)
     } else if component_id == "snk.pinecone" {
         // Pinecone vector upsert. Form fields: indexHost (e.g.
         // 'idx-abc123.svc.us-east1-gcp.pinecone.io'), apiKey, vectorColumn,
@@ -4126,6 +4183,7 @@ fn build_stage(
         .or_else(|| incremental.map(RuntimeSpec::Incremental))
         .or_else(|| ducklake_cdc.map(RuntimeSpec::DuckLakeCdc))
         .or_else(|| webhook.map(RuntimeSpec::Webhook))
+        .or_else(|| remote_exec.map(RuntimeSpec::RemoteExec))
         .or_else(|| snowflake_sink.map(RuntimeSpec::SnowflakeSink))
         .or_else(|| databricks_sink.map(RuntimeSpec::DatabricksSink))
         .or_else(|| snowflake_source.map(RuntimeSpec::SnowflakeSource))

@@ -137,6 +137,33 @@ impl DuckdbEngine {
         Ok(last)
     }
 
+    /// snk.execsource "Execute in Source" (#115): run each statement (a
+    /// CREATE TABLE ... AS SELECT, optionally preceded by DROP) directly on the
+    /// attached remote server through the extension passthrough
+    /// (postgres_execute / mysql_execute). No DuckDB round-trip: the SELECT runs
+    /// in the source and the result lands in a table there. One CALL per
+    /// statement because the mysql extension rejects multi-statement batches.
+    pub(crate) fn run_remote_exec(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &plan::RemoteExecSpec,
+    ) -> Result<String, EngineError> {
+        let mut n = 0usize;
+        for stmt in &spec.statements {
+            let exec_sql = format!(
+                "{secret}{attach}CALL {fn_name}('duckle_dst', '{sql}');",
+                secret = secret_prefix,
+                attach = spec.attach,
+                fn_name = spec.exec_fn,
+                sql = stmt.replace('\'', "''")
+            );
+            self.run(Some(db), &exec_sql, false)?;
+            n += 1;
+        }
+        Ok(format!("executed {} statement(s) on the source server", n))
+    }
+
     /// HTTP sink (snk.webhook / snk.rest). Materializes the upstream
     /// view via DuckDB's -json output, then either
     ///   - row mode: one ureq request per row, body = row JSON
