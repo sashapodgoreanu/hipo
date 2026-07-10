@@ -126,14 +126,17 @@
                 + "Email: " + encodeURIComponent(form.email.value)
                 + "%0D%0ATopic: " + encodeURIComponent(form.topic.value)
                 + (form.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(form.notes.value.trim()) : "");
-            window.location.href = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
+            // No auto-launch of the mail client (that hijacks the browser). Offer
+            // the prefilled email as an optional, user-clicked link instead.
+            var mailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
             modal.innerHTML =
                 '<div class="modal-ok"><span class="chk">'
               + '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>'
-              + '<h3>Message ready to send</h3>'
-              + '<p class="muted">Your email app opened with the details filled in. Press <b>Send</b> there and we will get back to you.</p>'
-              + '<button type="button" class="btn btn-primary btn-pill" id="contactDone">Done</button></div>';
-            modal.querySelector("#contactDone").addEventListener("click", closeModal);
+              + '<h3>Thanks for reaching out</h3>'
+              + '<p class="muted">We will get back to you by email. To send your details now, open a prefilled message, or write to us any time at <a href="mailto:' + HOST + '">' + HOST + '</a>.</p>'
+              + '<a class="btn btn-primary btn-pill" href="' + mailto + '">Open prefilled email</a>'
+              + '<p class="modal-alt"><a href="#" id="contactDone">No thanks, close</a></p></div>';
+            modal.querySelector("#contactDone").addEventListener("click", function (ev) { ev.preventDefault(); closeModal(); });
         });
     }
 
@@ -188,14 +191,17 @@
                 + "%0D%0ADirection: " + encodeURIComponent(cForm.dir.value)
                 + "%0D%0AEmail: " + encodeURIComponent(cForm.email.value)
                 + (cForm.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(cForm.notes.value.trim()) : "");
-            window.location.href = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
+            // No auto-launch of the mail client (that hijacks the browser). Offer
+            // the prefilled email as an optional, user-clicked link instead.
+            var cMailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + body;
             cModal.innerHTML =
                 '<div class="modal-ok"><span class="chk">'
               + '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>'
               + '<h3>Request ready to send</h3>'
-              + '<p class="muted">Your email app opened with the details filled in. Press <b>Send</b> there and we will get back to you.</p>'
-              + '<button type="button" class="btn btn-primary btn-pill" id="connDone">Done</button></div>';
-            cModal.querySelector("#connDone").addEventListener("click", connClose);
+              + '<p class="muted">We will get back to you by email. To send your request now, open a prefilled message, or write to us any time at <a href="mailto:' + HOST + '">' + HOST + '</a>.</p>'
+              + '<a class="btn btn-primary btn-pill" href="' + cMailto + '">Open prefilled email</a>'
+              + '<p class="modal-alt"><a href="#" id="connDone">No thanks, close</a></p></div>';
+            cModal.querySelector("#connDone").addEventListener("click", function (ev) { ev.preventDefault(); connClose(); });
         });
     }
 
