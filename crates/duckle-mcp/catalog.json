@@ -12174,9 +12174,9 @@
             "fields": [
               {
                 "key": "mapping",
-                "label": "Old -> New",
-                "kind": "key-value",
-                "description": "old column name -> new column name"
+                "label": "Columns to rename",
+                "kind": "rename-columns",
+                "description": "Check a column and edit its name. Only checked columns are renamed."
               },
               {
                 "key": "mappingFile",

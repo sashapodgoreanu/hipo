@@ -18,6 +18,7 @@ export type FieldKind =
     | 'aggregations'
     | 'casts'
     | 'key-value'
+    | 'rename-columns'
     | 'connection-ref'
     | 'routine-ref'
     | 'pipeline-ref'

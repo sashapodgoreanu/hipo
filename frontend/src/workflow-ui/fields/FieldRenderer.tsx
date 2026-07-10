@@ -14,6 +14,7 @@ import { ColumnField, ColumnsField } from './ColumnField';
 import { AggregationsField } from './AggregationsField';
 import { CastsField } from './CastsField';
 import { KeyValueField } from './KeyValueField';
+import { RenameColumnsField } from './RenameColumnsField';
 import { FilterBuilderField } from './FilterBuilderField';
 import { ConnectionRefField } from './ConnectionRefField';
 import { RoutineRefField } from './RoutineRefField';
@@ -273,6 +274,8 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
                     onChange={onChange}
                 />
             );
+        case 'rename-columns':
+            return <RenameColumnsField value={value} onChange={onChange} />;
         case 'connection-ref':
             return (
                 <ConnectionRefField

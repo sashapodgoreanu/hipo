@@ -3297,6 +3297,56 @@ html[dir='rtl'] .topbar-lang {
     color: var(--danger);
 }
 
+/* Rename columns (#159): checkbox + old name + editable new name per column */
+.field-rename {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.field-rename-list {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-2);
+    padding: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+.field-rename-row {
+    display: grid;
+    grid-template-columns: 18px 1fr 1fr;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.9231rem;
+}
+.field-rename-row:hover {
+    background: var(--bg-3);
+}
+.field-rename-old {
+    color: var(--text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.field-rename-new {
+    min-width: 0;
+}
+.field-rename-stale .field-rename-old {
+    color: var(--danger);
+    text-decoration: line-through;
+}
+
+/* Cast source-type cell (#160): current type shown inline, next to the target */
+.field-cast-source {
+    color: var(--text-3);
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 0.7692rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Aggregations + KV ------------------------------------------------------- */
 .field-aggregations {
     display: flex;

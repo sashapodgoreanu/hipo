@@ -2786,7 +2786,7 @@ function synthFieldsTransform(comp: ComponentDef): ComponentManifest {
     if (id === 'xf.rename') {
         return base(comp, [
             { label: 'Rename', fields: [
-                { key: 'mapping', label: 'Old -> New', kind: 'key-value', description: 'old column name -> new column name' },
+                { key: 'mapping', label: 'Columns to rename', kind: 'rename-columns', description: 'Check a column and edit its name. Only checked columns are renamed.' },
                 { key: 'mappingFile', label: 'Mapping file (optional)', kind: 'file-path', description: 'Bulk rename from a file of old -> new pairs: a JSON object {"old":"new"} or array of {from,to}, a CSV (old,new), or YAML (old: new). Ideal for renaming many columns from an externally generated map. Inline pairs above take precedence.' },
             ] },
         ], schemaSource);

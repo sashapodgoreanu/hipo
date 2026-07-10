@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
 import { CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
-import { resolveUpstreamSchema, resolveUpstreamSampleRows } from '../schema-resolve';
+import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema } from '../schema-resolve';
 import { buildContextVars, builtinVars, substituteDeep } from '../run-resolve';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import type {
@@ -152,6 +152,16 @@ export default function PropertiesPanel({
 
     const upstreamSchema = useMemo<Column[]>(
         () => resolveUpstreamSchema(selected?.id, allNodes, edges),
+        [selected, edges, allNodes],
+    );
+
+    // #159: the Schema tab for an upstream-derived transform must show the node's
+    // OWN output (post drop/rename/cast/...), not the raw input - otherwise a
+    // Rename node's Schema tab keeps showing the old names while the Preview and
+    // every downstream node already see the renamed ones. resolveOutputSchema is
+    // the same per-component derivation downstream nodes already rely on.
+    const outputSchema = useMemo<Column[]>(
+        () => (selected ? resolveOutputSchema(selected.id, allNodes, edges) : []),
         [selected, edges, allNodes],
     );
 
@@ -594,7 +604,7 @@ export default function PropertiesPanel({
                             <SchemaEditor
                                 columns={
                                     manifest?.schemaSource === 'upstream'
-                                        ? upstreamSchema
+                                        ? outputSchema
                                         : declaredSchema
                                 }
                                 onChange={setSchema}

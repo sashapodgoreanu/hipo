@@ -1,11 +1,13 @@
 import { useContext } from 'react';
-import { X } from 'lucide-react';
 import { FieldContext } from './FieldContext';
 import { CAST_TYPES, type Cast } from './types';
 
-// #144: multi-column Cast / Convert editor. One row per column -> type mapping,
-// so a single Cast node can convert many columns instead of chaining one node
-// per column. Mirrors AggregationsField's row model and reuses its grid styles.
+// #160: multi-column Cast / Convert editor. Every upstream column is listed
+// with a checkbox + its current (source) type shown inline, so bulk type
+// conversions no longer mean adding one row at a time and hopping to the Schema
+// tab to see the source types. Only checked columns are emitted, keeping the
+// same stored shape `casts: [{ column, targetType, format?, onError? }]` that
+// build_cast reads.
 
 type Props = {
     value: Cast[] | undefined;
@@ -22,115 +24,122 @@ const ON_ERROR_OPTIONS: Array<{ label: string; value: string }> = [
     { label: 'Fail run', value: 'fail' },
 ];
 
-// Column widths: column, type, format, on-error, remove.
-const CAST_GRID = { gridTemplateColumns: '1.3fr 1fr 1fr 0.9fr 28px' };
+// Default target when a column is first checked: keep its current type if that
+// type is one we can cast to, else fall back to string. A same-type cast is a
+// harmless no-op, so the user just changes it to the type they actually want.
+const CAST_TYPE_VALUES = new Set(CAST_TYPES.map(t => t.value));
+const defaultTargetFor = (sourceType: string) =>
+    CAST_TYPE_VALUES.has(sourceType) ? sourceType : 'string';
+
+// Grid: checkbox, column, source type, target type, format, on-error.
+const CAST_GRID = { gridTemplateColumns: '18px 1.2fr 0.7fr 1fr 1fr 0.9fr' };
 
 export function CastsField({ value, onChange }: Props) {
     const { upstreamSchema } = useContext(FieldContext);
     const casts = value ?? [];
+    const byCol = new Map(casts.map(c => [c.column, c]));
+    const upstreamNames = new Set(upstreamSchema.map(c => c.name));
+    // Casts whose column is no longer in the upstream (the source changed).
+    // Show them flagged so the user can uncheck them, rather than leaving a
+    // stale conversion in the config that keeps failing the run invisibly.
+    const stale = casts.filter(c => !upstreamNames.has(c.column));
 
-    const add = () => {
-        const taken = new Set(casts.map(c => c.column));
-        const next = upstreamSchema.find(c => !taken.has(c.name));
-        onChange([...casts, { column: next?.name ?? '', targetType: 'string' }]);
+    const setCast = (col: string, next: Cast | null) => {
+        const others = casts.filter(c => c.column !== col);
+        onChange(next ? [...others, next] : others);
+    };
+    const toggle = (name: string, sourceType: string) => {
+        if (byCol.has(name)) setCast(name, null);
+        else setCast(name, { column: name, targetType: defaultTargetFor(sourceType) });
+    };
+    const update = (col: string, patch: Partial<Cast>) => {
+        const cur = byCol.get(col);
+        if (cur) setCast(col, { ...cur, ...patch });
     };
 
-    const update = (i: number, patch: Partial<Cast>) => {
-        onChange(casts.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+    if (upstreamSchema.length === 0 && stale.length === 0) {
+        return (
+            <div className="field-input field-warning">
+                No upstream schema. Connect an input to populate this list.
+            </div>
+        );
+    }
+
+    const renderRow = (
+        name: string,
+        sourceType: string,
+        cast: Cast | undefined,
+        staleRow: boolean,
+    ) => {
+        const enabled = Boolean(cast);
+        return (
+            <div className={`field-agg-row${staleRow ? ' field-rename-stale' : ''}`} key={name} style={CAST_GRID}>
+                <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={() => (staleRow ? setCast(name, null) : toggle(name, sourceType))}
+                    aria-label={`Convert ${name}`}
+                />
+                <span className="field-cast-name field-rename-old" title={name}>{name}</span>
+                <span className="field-cast-source" title={sourceType}>{sourceType}</span>
+                <select
+                    className="schema-input"
+                    value={cast?.targetType ?? defaultTargetFor(sourceType)}
+                    disabled={!enabled}
+                    onChange={e => update(name, { targetType: e.target.value })}
+                >
+                    {CAST_TYPES.map(t => (
+                        <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                </select>
+                <input
+                    type="text"
+                    className="schema-input"
+                    value={cast?.format ?? ''}
+                    onChange={e => update(name, { format: e.target.value })}
+                    disabled={!enabled || !isDateLike(cast?.targetType ?? '')}
+                    placeholder={enabled && isDateLike(cast?.targetType ?? '') ? '%d/%m/%Y' : ''}
+                    title="strptime format for parsing strings into a date/timestamp. Only used for date/timestamp targets; blank = ISO auto-detect."
+                    spellCheck={false}
+                />
+                <select
+                    className="schema-input"
+                    value={cast?.onError ?? ''}
+                    disabled={!enabled}
+                    onChange={e => update(name, { onError: e.target.value || undefined })}
+                    title="How to handle a value in this column that cannot be converted. Default inherits the node-level On conversion error setting."
+                >
+                    {ON_ERROR_OPTIONS.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                </select>
+            </div>
+        );
     };
 
-    const remove = (i: number) => {
-        onChange(casts.filter((_, idx) => idx !== i));
-    };
+    // Count only upstream columns that are converting; stale casts are surfaced
+    // separately below, so folding them into "N" would read as "7 of 5".
+    const activeCount = upstreamSchema.filter(c => byCol.has(c.name)).length;
 
     return (
         <div className="field-aggregations">
             <div className="field-agg-toolbar">
                 <span className="field-agg-count">
-                    {casts.length} column{casts.length === 1 ? '' : 's'}
+                    {activeCount} of {upstreamSchema.length} column{upstreamSchema.length === 1 ? '' : 's'} converting
                 </span>
-                <button type="button" className="schema-add" onClick={add}>
-                    + Add column
-                </button>
             </div>
-            {casts.length === 0 ? (
-                <div className="field-agg-empty">
-                    No conversions defined. Click <b>+ Add column</b> to convert one or more
-                    columns to a new type in this single node.
+            <div className="field-agg-table">
+                <div className="field-agg-row field-agg-header" style={CAST_GRID}>
+                    <div />
+                    <div>Column</div>
+                    <div>Source</div>
+                    <div>Target type</div>
+                    <div>Format</div>
+                    <div>On error</div>
                 </div>
-            ) : (
-                <div className="field-agg-table">
-                    <div className="field-agg-row field-agg-header" style={CAST_GRID}>
-                        <div>Column</div>
-                        <div>Target type</div>
-                        <div>Format</div>
-                        <div>On error</div>
-                        <div />
-                    </div>
-                    {casts.map((c, i) => (
-                        <div className="field-agg-row" key={i} style={CAST_GRID}>
-                            <select
-                                className="schema-input"
-                                value={c.column}
-                                onChange={e => update(i, { column: e.target.value })}
-                            >
-                                <option value="">- column -</option>
-                                {upstreamSchema.map(col => (
-                                    <option key={col.name} value={col.name}>
-                                        {col.name}
-                                    </option>
-                                ))}
-                                {c.column && !upstreamSchema.some(col => col.name === c.column) ? (
-                                    <option value={c.column}>{c.column}  (not in input)</option>
-                                ) : null}
-                            </select>
-                            <select
-                                className="schema-input"
-                                value={c.targetType}
-                                onChange={e => update(i, { targetType: e.target.value })}
-                            >
-                                {CAST_TYPES.map(t => (
-                                    <option key={t.value} value={t.value}>
-                                        {t.label}
-                                    </option>
-                                ))}
-                            </select>
-                            <input
-                                type="text"
-                                className="schema-input"
-                                value={c.format ?? ''}
-                                onChange={e => update(i, { format: e.target.value })}
-                                disabled={!isDateLike(c.targetType)}
-                                placeholder={isDateLike(c.targetType) ? '%d/%m/%Y' : ''}
-                                title="strptime format for parsing strings into a date/timestamp. Only used for date/timestamp targets; blank = ISO auto-detect."
-                                spellCheck={false}
-                            />
-                            <select
-                                className="schema-input"
-                                value={c.onError ?? ''}
-                                onChange={e =>
-                                    update(i, { onError: e.target.value || undefined })
-                                }
-                                title="How to handle a value in this column that cannot be converted. Default inherits the node-level On conversion error setting."
-                            >
-                                {ON_ERROR_OPTIONS.map(o => (
-                                    <option key={o.value} value={o.value}>
-                                        {o.label}
-                                    </option>
-                                ))}
-                            </select>
-                            <button
-                                type="button"
-                                className="schema-remove"
-                                onClick={() => remove(i)}
-                                aria-label="Remove"
-                            >
-                                <X size={12} />
-                            </button>
-                        </div>
-                    ))}
-                </div>
-            )}
+                {upstreamSchema.map(c => renderRow(c.name, c.type, byCol.get(c.name), false))}
+                {stale.map(c => renderRow(c.column, 'not in input', c, true))}
+            </div>
         </div>
     );
 }
