@@ -513,7 +513,7 @@ pre code { background: none; border: none; padding: 0; color: var(--code-ink); }
 @media (max-width: 760px) { .hero h1 { font-size: clamp(2.2rem, 9vw, 2.8rem); } .hgraph { max-width: 380px; margin-top: 8px; } }
 
 /* ============================================================
-   Schedule-a-demo modal (static booking via Google Calendar)
+   Modal (Contact us + Request a connector; static mailto forms)
    ============================================================ */
 .modal-overlay { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(8, 10, 16, .55); backdrop-filter: blur(4px); animation: modalfade .15s ease; }
 .modal-overlay[hidden] { display: none; }
