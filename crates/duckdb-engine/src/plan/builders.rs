@@ -5040,6 +5040,31 @@ pub(crate) fn build_ducklake_diff(props: &JsonValue) -> String {
     )
 }
 
+/// The DuckDB scanner-extension passthrough that runs a query verbatim on the
+/// remote server and returns its result (#115 pushdown / in-database
+/// processing). `postgres_query` / `mysql_query` are the read analogs of the
+/// `postgres_execute` / `mysql_execute` writes Duckle already uses. Returns
+/// None for families that have no such function (they keep the subquery wrap).
+fn pushdown_query_fn(component_id: &str) -> Option<&'static str> {
+    match component_id {
+        "src.postgres" | "src.cockroach" | "src.pgvector" | "src.redshift" => Some("postgres_query"),
+        "src.mysql" | "src.mariadb" => Some("mysql_query"),
+        _ => None,
+    }
+}
+
+/// Whether the `pushdown` toggle is on (bool true or a truthy string).
+fn relational_pushdown_on(props: &JsonValue) -> bool {
+    props.get("pushdown").and_then(JsonValue::as_bool).unwrap_or(false)
+        || matches!(
+            string_prop(props, "pushdown")
+                .as_deref()
+                .map(|s| s.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("true") | Some("1") | Some("yes") | Some("on")
+        )
+}
+
 pub(crate) fn build_relational_source(component_id: &str, props: &JsonValue) -> Result<String, String> {
     let mode = string_prop(props, "mode").unwrap_or_else(|| "table".into());
     if mode == "incremental" {
@@ -5061,6 +5086,22 @@ pub(crate) fn build_relational_source(component_id: &str, props: &JsonValue) -> 
         .filter(|s| !s.trim().is_empty());
     if mode == "sql" || sql.is_some() {
         let sql = sql.ok_or_else(|| format!("{}: SQL query is empty", component_id))?;
+        // #115 in-database processing: when "pushdown" is on and the family has a
+        // native passthrough (Postgres/MySQL), emit it so the literal SQL runs
+        // verbatim on the remote server (aggregations, joins and vendor SQL
+        // execute in-database, only the result is returned), instead of the
+        // (<sql>) subquery wrap that DuckDB's scanner re-parses and re-plans.
+        // Families without a passthrough, or with pushdown off, keep the wrap.
+        if relational_pushdown_on(props) {
+            if let Some(func) = pushdown_query_fn(component_id) {
+                let inner = sql.trim().trim_end_matches(';').trim();
+                return Ok(format!(
+                    "SELECT * FROM {}('duckle_src', '{}')",
+                    func,
+                    sql_escape(inner)
+                ));
+            }
+        }
         return Ok(format!("({})", sql));
     }
     let table = string_prop(props, "tableName")
@@ -7965,6 +8006,80 @@ mod db_attach_tests {
         // override there is no host requirement.
         let sql = db_attach(&json!({ "connString": "host=h dbname=db" }), "postgres", 5432, true);
         assert!(sql.contains("ATTACH 'host=h dbname=db' AS duckle_src"), "{}", sql);
+    }
+}
+
+#[cfg(test)]
+mod pushdown_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pushdown_emits_postgres_query() {
+        let sql = build_relational_source(
+            "src.postgres",
+            &json!({ "mode": "sql", "sql": "SELECT count(*) FROM orders", "pushdown": true }),
+        )
+        .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT * FROM postgres_query('duckle_src', 'SELECT count(*) FROM orders')"
+        );
+    }
+
+    #[test]
+    fn pushdown_uses_mysql_query_for_mysql_family() {
+        // sql prop alone (mode left at default) still triggers the custom-SQL path.
+        let sql = build_relational_source(
+            "src.mariadb",
+            &json!({ "sql": "SELECT 1", "pushdown": true }),
+        )
+        .unwrap();
+        assert_eq!(sql, "SELECT * FROM mysql_query('duckle_src', 'SELECT 1')");
+    }
+
+    #[test]
+    fn pushdown_escapes_single_quotes_and_trims_semicolon() {
+        let sql = build_relational_source(
+            "src.postgres",
+            &json!({ "sql": "SELECT 'x';", "pushdown": true }),
+        )
+        .unwrap();
+        // The query becomes a string-literal argument, so single quotes double
+        // and the trailing semicolon is trimmed.
+        assert_eq!(
+            sql,
+            "SELECT * FROM postgres_query('duckle_src', 'SELECT ''x''')"
+        );
+    }
+
+    #[test]
+    fn pushdown_off_keeps_subquery_wrap() {
+        let sql =
+            build_relational_source("src.postgres", &json!({ "sql": "SELECT 1" })).unwrap();
+        assert_eq!(sql, "(SELECT 1)");
+    }
+
+    #[test]
+    fn pushdown_ignored_for_family_without_passthrough() {
+        // BigQuery has no postgres_query/mysql_query; falls back to the wrap even
+        // with pushdown requested, so it can never emit invalid SQL.
+        let sql = build_relational_source(
+            "src.bigquery",
+            &json!({ "sql": "SELECT 1", "pushdown": true }),
+        )
+        .unwrap();
+        assert_eq!(sql, "(SELECT 1)");
+    }
+
+    #[test]
+    fn pushdown_does_not_affect_whole_table_reads() {
+        let sql = build_relational_source(
+            "src.postgres",
+            &json!({ "tableName": "orders", "pushdown": true }),
+        )
+        .unwrap();
+        assert_eq!(sql, "SELECT * FROM duckle_src.\"public\".\"orders\"");
     }
 }
 

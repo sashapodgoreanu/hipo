@@ -1303,6 +1303,17 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
         defaultValue: true,
         description: 'Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option.',
     };
+    // In-database processing (#115): when Read mode is Custom SQL, run the query
+    // verbatim on the source server via postgres_query / mysql_query so
+    // aggregations, joins and vendor SQL execute in the database and only the
+    // result is returned - instead of the subquery wrap DuckDB may re-plan.
+    const pushdownField: Field = {
+        key: 'pushdown',
+        label: 'Run query on server (pushdown)',
+        kind: 'bool',
+        defaultValue: false,
+        description: 'Custom SQL only. Sends your query straight to the source server (postgres_query / mysql_query) so it runs in-database and only the result comes back. Use the source dialect and reference tables directly (e.g. SELECT ... FROM orders), not duckle_src. Leave off to wrap the query as a subquery DuckDB re-plans.',
+    };
     // Advanced escape hatch: a raw connection string used verbatim inside the
     // ATTACH, overriding the fields above. Lets you encode special characters
     // yourself or pass a full mysql:// / postgresql:// URL (issue #157).
@@ -1315,7 +1326,7 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
     };
     return base(comp, [
         { label: 'Connection', fields: dbConnectionFields(comp.id) },
-        { label: 'Query', fields: attachBacked ? [...dbReadFields(), readOnlyField, connStringField] : dbReadFields() },
+        { label: 'Query', fields: attachBacked ? [...dbReadFields(), pushdownField, readOnlyField, connStringField] : dbReadFields() },
     ]);
 }
 
@@ -1512,6 +1523,10 @@ function synthWarehouseSource(comp: ComponentDef): ComponentManifest {
                 { key: 'schemaName', label: 'Schema', kind: 'text', defaultValue: 'public' },
                 { key: 'tableName', label: 'Table (for SELECT *)', kind: 'text', placeholder: 'orders' },
                 { key: 'query', label: 'Or custom SQL', kind: 'expression', rows: 4, placeholder: 'SELECT * FROM public.orders WHERE ...' },
+                // In-database processing (#115): run the custom SQL on Redshift
+                // itself via postgres_query so aggregations/joins execute in the
+                // warehouse and only the result is returned.
+                { key: 'pushdown', label: 'Run query on server (pushdown)', kind: 'bool', defaultValue: false, description: 'Custom SQL only. Sends your query straight to Redshift (postgres_query) so it runs in-warehouse and only the result comes back, instead of a subquery DuckDB re-plans.' },
             ] },
         ]);
     }

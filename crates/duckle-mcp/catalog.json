@@ -2497,6 +2497,13 @@
                 "description": "Rows fetched per round-trip."
               },
               {
+                "key": "pushdown",
+                "label": "Run query on server (pushdown)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Custom SQL only. Sends your query straight to the source server (postgres_query / mysql_query) so it runs in-database and only the result comes back. Use the source dialect and reference tables directly (e.g. SELECT ... FROM orders), not duckle_src. Leave off to wrap the query as a subquery DuckDB re-plans."
+              },
+              {
                 "key": "readOnly",
                 "label": "Attach read-only",
                 "kind": "bool",
@@ -2661,6 +2668,13 @@
                 "description": "Rows fetched per round-trip."
               },
               {
+                "key": "pushdown",
+                "label": "Run query on server (pushdown)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Custom SQL only. Sends your query straight to the source server (postgres_query / mysql_query) so it runs in-database and only the result comes back. Use the source dialect and reference tables directly (e.g. SELECT ... FROM orders), not duckle_src. Leave off to wrap the query as a subquery DuckDB re-plans."
+              },
+              {
                 "key": "readOnly",
                 "label": "Attach read-only",
                 "kind": "bool",
@@ -2823,6 +2837,13 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "Rows fetched per round-trip."
+              },
+              {
+                "key": "pushdown",
+                "label": "Run query on server (pushdown)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Custom SQL only. Sends your query straight to the source server (postgres_query / mysql_query) so it runs in-database and only the result comes back. Use the source dialect and reference tables directly (e.g. SELECT ... FROM orders), not duckle_src. Leave off to wrap the query as a subquery DuckDB re-plans."
               },
               {
                 "key": "readOnly",
@@ -3746,6 +3767,13 @@
                 "description": "Rows fetched per round-trip."
               },
               {
+                "key": "pushdown",
+                "label": "Run query on server (pushdown)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Custom SQL only. Sends your query straight to the source server (postgres_query / mysql_query) so it runs in-database and only the result comes back. Use the source dialect and reference tables directly (e.g. SELECT ... FROM orders), not duckle_src. Leave off to wrap the query as a subquery DuckDB re-plans."
+              },
+              {
                 "key": "readOnly",
                 "label": "Attach read-only",
                 "kind": "bool",
@@ -4558,6 +4586,13 @@
                 "kind": "expression",
                 "rows": 4,
                 "placeholder": "SELECT * FROM public.orders WHERE ..."
+              },
+              {
+                "key": "pushdown",
+                "label": "Run query on server (pushdown)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Custom SQL only. Sends your query straight to Redshift (postgres_query) so it runs in-warehouse and only the result comes back, instead of a subquery DuckDB re-plans."
               }
             ]
           }
