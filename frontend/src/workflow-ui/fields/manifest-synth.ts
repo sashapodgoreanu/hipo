@@ -4247,6 +4247,78 @@ function synthQualityProfile(comp: ComponentDef): ComponentManifest {
     ], 'declared');
 }
 
+function synthQualityGeometry(comp: ComponentDef): ComponentManifest {
+    const geometryColumn = {
+        key: 'geometryColumn',
+        label: 'Geometry column',
+        kind: 'column' as const,
+        defaultValue: 'geometry',
+        description: 'The geometry column to check or repair. The DuckDB spatial extension is loaded automatically for these tools.',
+    };
+    if (comp.id === 'qa.geomrepair') {
+        return base(comp, [
+            {
+                label: 'Repair Geometry',
+                fields: [
+                    geometryColumn,
+                    {
+                        key: 'mode',
+                        label: 'Repair',
+                        kind: 'select',
+                        defaultValue: 'all',
+                        options: [
+                            { label: 'All geometries (ST_MakeValid)', value: 'all' },
+                            { label: 'Only invalid geometries (valid pass through untouched)', value: 'invalid' },
+                        ],
+                        description: 'Replaces the geometry column in place.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (comp.id === 'qa.geomempty') {
+        return base(comp, [
+            {
+                label: 'Check Empty Geometry',
+                fields: [
+                    geometryColumn,
+                    {
+                        key: 'mode',
+                        label: 'Output',
+                        kind: 'select',
+                        defaultValue: 'flag',
+                        options: [
+                            { label: 'Add is_empty column (keep all)', value: 'flag' },
+                            { label: 'Keep only empty geometries', value: 'empty' },
+                            { label: 'Keep only non-empty geometries', value: 'nonempty' },
+                        ],
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    // qa.geomvalidate
+    return base(comp, [
+        {
+            label: 'Validate Geometry',
+            fields: [
+                geometryColumn,
+                {
+                    key: 'mode',
+                    label: 'Output',
+                    kind: 'select',
+                    defaultValue: 'flag',
+                    options: [
+                        { label: 'Add is_valid column (keep all)', value: 'flag' },
+                        { label: 'Keep only valid geometries', value: 'valid' },
+                        { label: 'Keep only invalid geometries', value: 'invalid' },
+                    ],
+                },
+            ],
+        },
+    ], 'upstream');
+}
+
 function synthQualityCleanse(comp: ComponentDef): ComponentManifest {
     const id = comp.id;
     if (id === 'qa.standardize') {
@@ -5435,6 +5507,7 @@ export function synthesizeManifest(componentId: string): ComponentManifest | und
     if (groupId === 'qa.validation') return synthQualityValidation(comp);
     if (groupId === 'qa.profile') return synthQualityProfile(comp);
     if (groupId === 'qa.cleanse') return synthQualityCleanse(comp);
+    if (groupId === 'qa.geometry') return synthQualityGeometry(comp);
 
     // Custom code
     if (groupId === 'code.sql') return synthCustomCode(comp);

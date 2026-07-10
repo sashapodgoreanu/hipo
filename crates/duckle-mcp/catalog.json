@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 358,
+  "componentCount": 361,
   "components": [
     {
       "id": "src.csv",
@@ -2495,6 +2495,20 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "Rows fetched per round-trip."
+              },
+              {
+                "key": "readOnly",
+                "label": "Attach read-only",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option."
+              },
+              {
+                "key": "connString",
+                "label": "Connection string (advanced)",
+                "kind": "text",
+                "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
               }
             ]
           }
@@ -2645,6 +2659,20 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "Rows fetched per round-trip."
+              },
+              {
+                "key": "readOnly",
+                "label": "Attach read-only",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option."
+              },
+              {
+                "key": "connString",
+                "label": "Connection string (advanced)",
+                "kind": "text",
+                "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
               }
             ]
           }
@@ -2795,6 +2823,20 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "Rows fetched per round-trip."
+              },
+              {
+                "key": "readOnly",
+                "label": "Attach read-only",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option."
+              },
+              {
+                "key": "connString",
+                "label": "Connection string (advanced)",
+                "kind": "text",
+                "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
               }
             ]
           }
@@ -3702,6 +3744,20 @@
                 "kind": "integer",
                 "defaultValue": 1000,
                 "description": "Rows fetched per round-trip."
+              },
+              {
+                "key": "readOnly",
+                "label": "Attach read-only",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Attach the database in READ_ONLY mode (recommended for sources). Uncheck if your server or the installed DuckDB extension version rejects the READ_ONLY attach option."
+              },
+              {
+                "key": "connString",
+                "label": "Connection string (advanced)",
+                "kind": "text",
+                "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
+                "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
               }
             ]
           }
@@ -36947,6 +37003,273 @@
                 "label": "Rules",
                 "kind": "key-value",
                 "description": "rule_name → pattern_or_value"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "pass",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.geomvalidate",
+      "label": "Validate Geometry",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "Flag invalid geometries with ST_IsValid: add an is_valid column (keep all), or keep only valid / only invalid features.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "pass",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.geomvalidate",
+        "kind": "transform",
+        "label": "Validate Geometry",
+        "description": "Flag invalid geometries with ST_IsValid: add an is_valid column (keep all), or keep only valid / only invalid features.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Validate Geometry",
+            "fields": [
+              {
+                "key": "geometryColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "defaultValue": "geometry",
+                "description": "The geometry column to check or repair. The DuckDB spatial extension is loaded automatically for these tools."
+              },
+              {
+                "key": "mode",
+                "label": "Output",
+                "kind": "select",
+                "defaultValue": "flag",
+                "options": [
+                  {
+                    "label": "Add is_valid column (keep all)",
+                    "value": "flag"
+                  },
+                  {
+                    "label": "Keep only valid geometries",
+                    "value": "valid"
+                  },
+                  {
+                    "label": "Keep only invalid geometries",
+                    "value": "invalid"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "pass",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.geomrepair",
+      "label": "Repair Geometry",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "Repair invalid geometries in place with ST_MakeValid: fix all geometries, or only the invalid ones (valid features pass through untouched).",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "pass",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.geomrepair",
+        "kind": "transform",
+        "label": "Repair Geometry",
+        "description": "Repair invalid geometries in place with ST_MakeValid: fix all geometries, or only the invalid ones (valid features pass through untouched).",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Repair Geometry",
+            "fields": [
+              {
+                "key": "geometryColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "defaultValue": "geometry",
+                "description": "The geometry column to check or repair. The DuckDB spatial extension is loaded automatically for these tools."
+              },
+              {
+                "key": "mode",
+                "label": "Repair",
+                "kind": "select",
+                "defaultValue": "all",
+                "options": [
+                  {
+                    "label": "All geometries (ST_MakeValid)",
+                    "value": "all"
+                  },
+                  {
+                    "label": "Only invalid geometries (valid pass through untouched)",
+                    "value": "invalid"
+                  }
+                ],
+                "description": "Replaces the geometry column in place."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "pass",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.geomempty",
+      "label": "Check Empty Geometry",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "Flag empty geometries with ST_IsEmpty: add an is_empty column (keep all), or keep only empty / only non-empty features.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "pass",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.geomempty",
+        "kind": "transform",
+        "label": "Check Empty Geometry",
+        "description": "Flag empty geometries with ST_IsEmpty: add an is_empty column (keep all), or keep only empty / only non-empty features.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Check Empty Geometry",
+            "fields": [
+              {
+                "key": "geometryColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "defaultValue": "geometry",
+                "description": "The geometry column to check or repair. The DuckDB spatial extension is loaded automatically for these tools."
+              },
+              {
+                "key": "mode",
+                "label": "Output",
+                "kind": "select",
+                "defaultValue": "flag",
+                "options": [
+                  {
+                    "label": "Add is_empty column (keep all)",
+                    "value": "flag"
+                  },
+                  {
+                    "label": "Keep only empty geometries",
+                    "value": "empty"
+                  },
+                  {
+                    "label": "Keep only non-empty geometries",
+                    "value": "nonempty"
+                  }
+                ]
               }
             ]
           }

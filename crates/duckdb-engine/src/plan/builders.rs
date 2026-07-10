@@ -270,6 +270,12 @@ pub(crate) fn build_view_sql(
         "qa.contract" => build_contract(inputs, props),
         "qa.freshness" => build_freshness(inputs, props),
         "qa.outlier" => build_outlier(inputs, props, false),
+        // Geometry data-quality tools (issue #158): validate / repair / empty
+        // checks via the spatial extension's ST_IsValid / ST_MakeValid /
+        // ST_IsEmpty. spatial is force-loaded for these ids in attach_prelude.
+        "qa.geomvalidate" => build_geom_validate(inputs, props),
+        "qa.geomrepair" => build_geom_repair(inputs, props),
+        "qa.geomempty" => build_geom_empty(inputs, props),
         "xf.surrogatekey" => build_surrogate_key(inputs, props),
         "xf.sessionize" => build_sessionize(inputs, props),
         "xf.cdc.scd3" => build_scd3(inputs, props),
@@ -383,6 +389,64 @@ pub(crate) fn build_view_sql(
             other
         )),
     }
+}
+
+/// Geometry column for the geometry DQ tools (issue #158), default "geometry".
+fn geom_col(props: &JsonValue) -> String {
+    string_prop(props, "geometryColumn")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "geometry".to_string())
+}
+
+/// Validate Geometry (issue #158): flags geometries with `ST_IsValid`. Mode
+/// `flag` (default) adds an `is_valid` boolean column and keeps all rows;
+/// `valid` / `invalid` keep only the matching rows. spatial is loaded via
+/// attach_prelude for this component id.
+pub(crate) fn build_geom_validate(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.geomvalidate"))?;
+    let src = quote_ident(upstream);
+    // CAST to GEOMETRY so the tool accepts both a native GEOMETRY column (a
+    // no-op cast) and a VARCHAR WKT/GeoJSON column (parsed) - a bare column
+    // reference only auto-casts for string literals, not columns.
+    let g = format!("CAST({} AS GEOMETRY)", quote_ident(&geom_col(props)));
+    Ok(match string_prop(props, "mode").as_deref() {
+        Some("valid") => format!("SELECT * FROM {src} WHERE ST_IsValid({g})"),
+        Some("invalid") => format!("SELECT * FROM {src} WHERE NOT ST_IsValid({g})"),
+        _ => format!("SELECT *, ST_IsValid({g}) AS is_valid FROM {src}"),
+    })
+}
+
+/// Repair Geometry (issue #158): replaces the geometry column in place with
+/// `ST_MakeValid`. Mode `all` (default) repairs every row; `invalid` only
+/// repairs rows that fail `ST_IsValid` (valid rows pass through untouched).
+/// Uses `SELECT * REPLACE` so the geometry column is replaced, not duplicated.
+pub(crate) fn build_geom_repair(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.geomrepair"))?;
+    let src = quote_ident(upstream);
+    let col = quote_ident(&geom_col(props));
+    // CAST accepts a native GEOMETRY column (no-op) or a VARCHAR WKT column
+    // (parsed); both CASE branches stay GEOMETRY-typed so REPLACE is consistent.
+    let g = format!("CAST({col} AS GEOMETRY)");
+    let expr = match string_prop(props, "mode").as_deref() {
+        Some("invalid") => format!("CASE WHEN ST_IsValid({g}) THEN {g} ELSE ST_MakeValid({g}) END"),
+        _ => format!("ST_MakeValid({g})"),
+    };
+    Ok(format!("SELECT * REPLACE ({expr} AS {col}) FROM {src}"))
+}
+
+/// Check Empty Geometry (issue #158): flags empty geometries with `ST_IsEmpty`.
+/// Mode `flag` (default) adds an `is_empty` boolean column and keeps all rows;
+/// `empty` / `nonempty` keep only the matching rows.
+pub(crate) fn build_geom_empty(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("qa.geomempty"))?;
+    let src = quote_ident(upstream);
+    let g = format!("CAST({} AS GEOMETRY)", quote_ident(&geom_col(props)));
+    Ok(match string_prop(props, "mode").as_deref() {
+        Some("empty") => format!("SELECT * FROM {src} WHERE ST_IsEmpty({g})"),
+        Some("nonempty") => format!("SELECT * FROM {src} WHERE NOT ST_IsEmpty({g})"),
+        _ => format!("SELECT *, ST_IsEmpty({g}) AS is_empty FROM {src}"),
+    })
 }
 
 pub(crate) fn build_passthrough_op(inputs: &NodeInputs, op: &str) -> Result<String, String> {
@@ -4750,7 +4814,11 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         | "xf.geo.distance"
         | "xf.geo.buffer"
         | "xf.geo.intersects"
-        | "xf.join.spatial" => {
+        | "xf.join.spatial"
+        // Geometry DQ tools (issue #158) call ST_IsValid / ST_MakeValid / ST_IsEmpty.
+        | "qa.geomvalidate"
+        | "qa.geomrepair"
+        | "qa.geomempty" => {
             return "INSTALL spatial; LOAD spatial; ".into();
         }
         // inet is a small built-in extension. INSTALL is a no-op once
@@ -7960,5 +8028,69 @@ mod sql_override_tests {
         let sql = build_view_sql("ctl.replicate", &json!({ "sqlOverride": "   " }), &ni, None, false).unwrap();
         assert!(!sql.contains("input AS (SELECT"), "override should have been ignored: {}", sql);
         assert!(sql.contains("SELECT * FROM \"up_a\""), "{}", sql);
+    }
+}
+
+#[cfg(test)]
+mod geom_dq_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn one_input() -> NodeInputs {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        ni
+    }
+
+    #[test]
+    fn validate_flag_adds_is_valid_column() {
+        let sql = build_geom_validate(&one_input(), &json!({})).unwrap();
+        assert_eq!(sql, "SELECT *, ST_IsValid(CAST(\"geometry\" AS GEOMETRY)) AS is_valid FROM \"up\"");
+    }
+
+    #[test]
+    fn validate_filters_and_honors_column() {
+        let valid = build_geom_validate(&one_input(), &json!({"mode":"valid","geometryColumn":"geom"})).unwrap();
+        assert_eq!(valid, "SELECT * FROM \"up\" WHERE ST_IsValid(CAST(\"geom\" AS GEOMETRY))");
+        let invalid = build_geom_validate(&one_input(), &json!({"mode":"invalid"})).unwrap();
+        assert_eq!(invalid, "SELECT * FROM \"up\" WHERE NOT ST_IsValid(CAST(\"geometry\" AS GEOMETRY))");
+    }
+
+    #[test]
+    fn repair_all_replaces_in_place() {
+        let sql = build_geom_repair(&one_input(), &json!({})).unwrap();
+        assert_eq!(sql, "SELECT * REPLACE (ST_MakeValid(CAST(\"geometry\" AS GEOMETRY)) AS \"geometry\") FROM \"up\"");
+    }
+
+    #[test]
+    fn repair_invalid_only_uses_case() {
+        let sql = build_geom_repair(&one_input(), &json!({"mode":"invalid"})).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT * REPLACE (CASE WHEN ST_IsValid(CAST(\"geometry\" AS GEOMETRY)) THEN CAST(\"geometry\" AS GEOMETRY) ELSE ST_MakeValid(CAST(\"geometry\" AS GEOMETRY)) END AS \"geometry\") FROM \"up\""
+        );
+    }
+
+    #[test]
+    fn empty_flag_and_filters() {
+        assert_eq!(
+            build_geom_empty(&one_input(), &json!({})).unwrap(),
+            "SELECT *, ST_IsEmpty(CAST(\"geometry\" AS GEOMETRY)) AS is_empty FROM \"up\""
+        );
+        assert_eq!(
+            build_geom_empty(&one_input(), &json!({"mode":"empty"})).unwrap(),
+            "SELECT * FROM \"up\" WHERE ST_IsEmpty(CAST(\"geometry\" AS GEOMETRY))"
+        );
+        assert_eq!(
+            build_geom_empty(&one_input(), &json!({"mode":"nonempty"})).unwrap(),
+            "SELECT * FROM \"up\" WHERE NOT ST_IsEmpty(CAST(\"geometry\" AS GEOMETRY))"
+        );
+    }
+
+    #[test]
+    fn spatial_extension_is_force_loaded() {
+        for id in ["qa.geomvalidate", "qa.geomrepair", "qa.geomempty"] {
+            assert!(attach_prelude(id, &json!({})).contains("LOAD spatial"), "{} missing spatial prelude", id);
+        }
     }
 }

@@ -707,6 +707,15 @@ export const PALETTE: Category[] = [
                     qa('addressclean', 'Address Cleanse', 'planned'),
                 ],
             },
+            {
+                id: 'qa.geometry',
+                label: 'Geometry',
+                components: [
+                    qa('geomvalidate', 'Validate Geometry', 'available', 'Flag invalid geometries with ST_IsValid: add an is_valid column (keep all), or keep only valid / only invalid features.'),
+                    qa('geomrepair', 'Repair Geometry', 'available', 'Repair invalid geometries in place with ST_MakeValid: fix all geometries, or only the invalid ones (valid features pass through untouched).'),
+                    qa('geomempty', 'Check Empty Geometry', 'available', 'Flag empty geometries with ST_IsEmpty: add an is_empty column (keep all), or keep only empty / only non-empty features.'),
+                ],
+            },
         ],
     },
     {
