@@ -137,9 +137,9 @@
           + '<p class="muted">Tell us what you need and we will get back to you by email.</p>'
           + '<form id="contactForm" novalidate>'
           + '<div class="frow"><label>Your name<input type="text" name="name" placeholder="Jane Doe"></label>'
-          + '<label>Topic<select name="topic"><option value="General question">General question</option><option value="Request a demo">Request a demo</option><option value="Pricing">Pricing</option><option value="Support">Support</option><option value="Partnership">Partnership</option></select></label></div>'
+          + '<label>Topic<select name="topic" required><option value="" disabled selected>Select an option</option><option value="Enterprise Support">Enterprise Support</option><option value="Feature Development">Feature Development</option><option value="Engineering Collaboration">Engineering Collaboration</option><option value="Unsure / exploratory">Unsure / exploratory</option></select></label></div>'
           + '<label>Your email<input type="email" name="email" placeholder="you@company.com" required></label>'
-          + '<label>How can we help?<textarea name="notes" rows="4" placeholder="Your stack and what you would like to discuss"></textarea></label>'
+          + '<label>How can we help?<textarea name="notes" rows="4" placeholder="Tell us about your use case"></textarea></label>'
           + '<input type="text" name="botcheck" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px">'
           + '<button type="submit" class="btn btn-primary btn-pill">Send message</button>'
           + '</form></div>';
@@ -162,7 +162,7 @@
 
         form.addEventListener("submit", function (e) {
             e.preventDefault();
-            if (!form.email.value) {
+            if (!form.email.value || !form.topic.value) {
                 if (form.reportValidity) form.reportValidity();
                 return;
             }
