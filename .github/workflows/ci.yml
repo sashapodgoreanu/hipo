@@ -292,11 +292,18 @@ jobs:
             fi
             sleep 2
           done
-          # mc isn't in the minio server image, so use the standalone client.
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-          mc alias set local http://localhost:9000 minioadmin minioadmin
-          mc mb local/duckle-test
+          # mc isn't in the minio server image. Run the official mc container
+          # instead of downloading the standalone binary: the dl.min.io TLS chain
+          # started failing curl verification (exit 60), and the Docker pull is
+          # already retried. Host networking reaches the mapped localhost:9000,
+          # and MC_HOST_ configures the alias inline without a persisted config.
+          for i in 1 2 3; do
+            docker pull minio/mc:latest && break
+            echo "mc pull attempt $i failed; retrying in 5s"; sleep 5
+          done
+          docker run --rm --network host \
+            -e MC_HOST_local=http://minioadmin:minioadmin@localhost:9000 \
+            minio/mc:latest mb --ignore-existing local/duckle-test
       - name: Install DuckDB CLI
         run: |
           set -e
