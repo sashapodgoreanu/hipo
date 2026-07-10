@@ -81,14 +81,13 @@
        prefilled email as an optional, user-clicked link. Never auto-launches
        the mail app. */
     var HOST = "souravroy7864@gmail.com";
-    // Direct server-side email. Create a free form at https://formspree.io and
-    // paste its URL here, e.g. "https://formspree.io/f/xxxxxxxx". Web3Forms also
-    // works: set this to "https://api.web3forms.com/submit" and put the access
-    // key in FORM_EXTRA. Leave "" to use the optional-mailto fallback.
-    var FORM_ENDPOINT = "";
-    // Hidden fields sent with every submission (Web3Forms needs an access key:
-    // { access_key: "your-key" }). Leave empty for Formspree.
-    var FORM_EXTRA = {};
+    // Direct server-side email via Web3Forms: the POST is emailed to the address
+    // registered against this access key, so submit sends the message with no
+    // mail client. The key is a public, submit-only key (safe in client JS).
+    // Leave FORM_ENDPOINT "" to fall back to the optional-mailto success screen.
+    var FORM_ENDPOINT = "https://api.web3forms.com/submit";
+    // Hidden fields sent with every submission. Web3Forms requires access_key.
+    var FORM_EXTRA = { access_key: "b77df62d-c53e-4d26-9ea8-ef9f4fa5c505" };
 
     var MODAL_CHK = '<span class="chk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
 
@@ -141,6 +140,7 @@
           + '<label>Topic<select name="topic"><option value="General question">General question</option><option value="Request a demo">Request a demo</option><option value="Pricing">Pricing</option><option value="Support">Support</option><option value="Partnership">Partnership</option></select></label></div>'
           + '<label>Your email<input type="email" name="email" placeholder="you@company.com" required></label>'
           + '<label>How can we help?<textarea name="notes" rows="4" placeholder="Your stack and what you would like to discuss"></textarea></label>'
+          + '<input type="text" name="botcheck" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px">'
           + '<button type="submit" class="btn btn-primary btn-pill">Send message</button>'
           + '</form></div>';
         document.body.appendChild(overlay);
@@ -174,12 +174,13 @@
                 + (form.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(form.notes.value.trim()) : "");
             var mailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + mbody;
             deliverForm(modal, form.querySelector("button[type=submit]"), {
+                subject: subject,
+                from_name: form.name.value.trim() || form.email.value,
                 name: form.name.value.trim(),
                 email: form.email.value,
                 topic: form.topic.value,
                 message: form.notes.value.trim(),
-                _subject: subject,
-                _replyto: form.email.value
+                botcheck: form.botcheck && form.botcheck.value
             }, mailto, "Thanks for reaching out",
                "We have your details and will get back to you by email.", closeModal);
         });
@@ -205,6 +206,7 @@
           + '<label>Direction<select name="dir"><option value="Source">Source (read from)</option><option value="Destination">Destination (write to)</option><option value="Both">Both</option></select></label></div>'
           + '<label>Your email<input type="email" name="email" placeholder="you@company.com" required></label>'
           + '<label>What do you need it for?<textarea name="notes" rows="3" placeholder="Auth method, API docs link, volume, and how you would use it"></textarea></label>'
+          + '<input type="text" name="botcheck" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px">'
           + '<button type="submit" class="btn btn-primary btn-pill">Send request</button>'
           + '</form></div>';
         document.body.appendChild(cOverlay);
@@ -238,12 +240,13 @@
                 + (cForm.notes.value.trim() ? "%0D%0A%0D%0A" + encodeURIComponent(cForm.notes.value.trim()) : "");
             var cMailto = "mailto:" + HOST + "?subject=" + encodeURIComponent(subject) + "&body=" + mbody;
             deliverForm(cModal, cForm.querySelector("button[type=submit]"), {
+                subject: subject,
+                from_name: cForm.email.value,
                 connector: cForm.conn.value.trim(),
                 direction: cForm.dir.value,
                 email: cForm.email.value,
                 message: cForm.notes.value.trim(),
-                _subject: subject,
-                _replyto: cForm.email.value
+                botcheck: cForm.botcheck && cForm.botcheck.value
             }, cMailto, "Request ready to send",
                "We have your request and will get back to you by email.", connClose);
         });
