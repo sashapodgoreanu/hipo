@@ -329,8 +329,8 @@ impl DuckdbEngine {
         // geography / hierarchyid), so any SELECT * that touches such a column
         // aborts the probe - and autodetect uses SELECT *, so it meets them even
         // when a curated run that projects only supported columns would not
-        // (#141). Describing the query with sp_describe_first_result_set returns
-        // the schema as ordinary text columns, so the panic path is never taken
+        // (#141). Describing the query with sys.dm_exec_describe_first_result_set
+        // returns the schema as ordinary text columns, so the panic path is never taken
         // and every column type resolves. Returns None only when there is no
         // table / query to introspect, in which case we fall through.
         if matches!(format, "sqlserver" | "synapse") {
@@ -467,13 +467,18 @@ impl DuckdbEngine {
     /// panic (#141). Instead of a `SELECT *` probe (which asks the driver to
     /// describe every column, and tiberius `todo!()`s on `sql_variant` and the
     /// CLR UDT types `geometry` / `geography` / `hierarchyid`), it describes the
-    /// source query with `sp_describe_first_result_set` (SQL Server 2012+, so the
-    /// reporter's 2014 is covered), whose own result columns are all plain text /
-    /// int types. That yields the real name + type of every column regardless of
-    /// type. The preview then reads a small sample with those unsafe types cast
-    /// to text, so it does not trip the panic either. Returns `Ok(None)` when
-    /// there is no table or query to introspect (the caller then falls back to
-    /// the generic driver probe).
+    /// source query with the `sys.dm_exec_describe_first_result_set` TVF (SQL
+    /// Server 2012+, so the reporter's 2014 is covered) and projects only
+    /// `name` / `system_type_name` / `is_nullable`, each `CAST` to `nvarchar` /
+    /// `int`. The bare `EXEC sp_describe_first_result_set` returns the proc's
+    /// full native column set, which differs by server version and made tiberius
+    /// panic decoding the describe result itself on 2014's older TDS; wrapping
+    /// the TVF in a cast projection means the driver only ever meets two nvarchar
+    /// and one int column. That yields the real name + type of every column
+    /// regardless of type. The preview then reads a small sample with those
+    /// unsafe types cast to text, so it does not trip the panic either. Returns
+    /// `Ok(None)` when there is no table or query to introspect (the caller then
+    /// falls back to the generic driver probe).
     fn inspect_sqlserver_catalog(
         &self,
         format: &str,
@@ -502,8 +507,14 @@ impl DuckdbEngine {
         };
 
         // 1. Schema: one row per output column, columns `name` + `system_type_name`.
+        //    Project only the three fields we read, each cast to a type tiberius
+        //    always decodes, so the describe result can never panic the driver.
         let describe = format!(
-            "EXEC sp_describe_first_result_set @tsql = N'{}', @params = NULL, @browse_information_mode = 0",
+            "SELECT CAST(name AS nvarchar(128)) AS name, \
+             CAST(system_type_name AS nvarchar(256)) AS system_type_name, \
+             CAST(is_nullable AS int) AS is_nullable \
+             FROM sys.dm_exec_describe_first_result_set(N'{}', NULL, 0) \
+             ORDER BY column_ordinal",
             sql_escape(&query)
         );
         let meta = self.sqlserver_probe_rows(format, options, &describe)?;

@@ -17,7 +17,7 @@ fn main() {
 
     // Exactly what the FE autodetect sends for a src.sqlserver node: connection
     // props + tableName (or a raw query via MSSQL_QUERY), so inspect resolves
-    // the schema through sp_describe_first_result_set.
+    // the schema through sys.dm_exec_describe_first_result_set.
     let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
     let port: u64 = env("MSSQL_PORT", "1433").parse().unwrap_or(1433);
     let mut opts = json!({
