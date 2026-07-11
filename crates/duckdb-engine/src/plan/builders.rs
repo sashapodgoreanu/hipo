@@ -4920,6 +4920,58 @@ fn conn_kv_quote(v: &str) -> String {
     }
 }
 
+/// Append advanced libpq connection parameters (issue #161) to the structured
+/// `key=value` connection string. This is what lets Duckle reach PostgreSQL
+/// instances that enforce TLS (`sslmode=require` / `verify-full`, standard in
+/// regulated environments) plus client-cert auth, a connect timeout, and
+/// session `options`. The DuckDB postgres extension hands the DSN to libpq, so
+/// these are the exact libpq parameter names.
+///
+/// The SSL / libpq-named fields are gated on the postgres wire family because
+/// the mysql extension uses different key names (`ssl_mode`, `ssl_ca`, ...); a
+/// mysql user needing those uses the free-text passthrough below instead. The
+/// passthrough (`connParams`) applies to both families and is appended verbatim
+/// so any parameter we do not model explicitly still works.
+fn push_advanced_conn_opts(parts: &mut Vec<String>, props: &JsonValue, extension: &str) {
+    if extension == "postgres" {
+        // sslmode: disable | allow | prefer | require | verify-ca | verify-full.
+        if let Some(m) = string_prop(props, "sslmode").filter(|s| !s.is_empty()) {
+            parts.push(format!("sslmode={}", conn_kv_quote(&m)));
+        }
+        // Client-cert / root-cert file paths (values may contain spaces).
+        for (prop, key) in [("sslrootcert", "sslrootcert"), ("sslcert", "sslcert"), ("sslkey", "sslkey")] {
+            if let Some(v) = string_prop(props, prop).filter(|s| !s.is_empty()) {
+                parts.push(format!("{}={}", key, conn_kv_quote(&v)));
+            }
+        }
+        // connect_timeout is integer seconds; accept a number or a numeric string.
+        if let Some(t) = props
+            .get("connectTimeout")
+            .and_then(JsonValue::as_u64)
+            .or_else(|| string_prop(props, "connectTimeout").and_then(|s| s.trim().parse::<u64>().ok()))
+            .filter(|n| *n > 0)
+        {
+            parts.push(format!("connect_timeout={}", t));
+        }
+        // Session-level options, e.g. "-c search_path=myschema" (contains spaces,
+        // so conn_kv_quote wraps it in libpq single quotes).
+        if let Some(o) = string_prop(props, "options").filter(|s| !s.is_empty()) {
+            parts.push(format!("options={}", conn_kv_quote(&o)));
+        }
+    }
+    // Free-text passthrough: any additional libpq/driver parameters, appended
+    // verbatim. The user writes `key=value ...` form and is responsible for
+    // quoting; the whole DSN is later wrapped by sql_escape so no SQL escape is
+    // needed here. Works for both postgres and mysql.
+    if let Some(extra) = string_prop(props, "connParams")
+        .or_else(|| string_prop(props, "extraParams"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        parts.push(extra);
+    }
+}
+
 pub(crate) fn db_attach(props: &JsonValue, extension: &str, default_port: u64, read_only: bool) -> String {
     // Advanced override: a raw connection string the user supplies directly
     // (issue #157). When present it replaces the host/port/user/password we
@@ -4957,6 +5009,7 @@ pub(crate) fn db_attach(props: &JsonValue, extension: &str, default_port: u64, r
         if let Some(p) = string_prop(props, "password").filter(|s| !s.is_empty()) {
             parts.push(format!("password={}", conn_kv_quote(&p)));
         }
+        push_advanced_conn_opts(&mut parts, props, extension);
         parts.join(" ")
     };
     // `read_only` from the call site means "this is a source" (aliased
@@ -8006,6 +8059,88 @@ mod db_attach_tests {
         // override there is no host requirement.
         let sql = db_attach(&json!({ "connString": "host=h dbname=db" }), "postgres", 5432, true);
         assert!(sql.contains("ATTACH 'host=h dbname=db' AS duckle_src"), "{}", sql);
+    }
+
+    #[test]
+    fn postgres_ssl_and_advanced_opts_appended() {
+        // #161: TLS-enforcing servers need sslmode; regulated setups add
+        // root/client certs, a connect timeout, and session options.
+        let sql = db_attach(
+            &json!({
+                "host": "h", "database": "db", "user": "u", "password": "p",
+                "sslmode": "verify-full",
+                "sslrootcert": "/etc/ssl/root.crt",
+                "sslcert": "/etc/ssl/client.crt",
+                "sslkey": "/etc/ssl/client.key",
+                "connectTimeout": 10,
+                "options": "-c search_path=app",
+            }),
+            "postgres",
+            5432,
+            true,
+        );
+        assert!(sql.contains("sslmode=verify-full"), "sslmode missing: {}", sql);
+        assert!(sql.contains("sslrootcert=/etc/ssl/root.crt"), "rootcert missing: {}", sql);
+        assert!(sql.contains("sslcert=/etc/ssl/client.crt"), "cert missing: {}", sql);
+        assert!(sql.contains("sslkey=/etc/ssl/client.key"), "key missing: {}", sql);
+        assert!(sql.contains("connect_timeout=10"), "timeout missing: {}", sql);
+        // `options` has a space, so conn_kv_quote single-quotes it and sql_escape
+        // then doubles those quotes.
+        assert!(sql.contains("options=''-c search_path=app''"), "options not quoted: {}", sql);
+    }
+
+    #[test]
+    fn connect_timeout_accepts_numeric_string() {
+        let sql = db_attach(
+            &json!({ "host": "h", "connectTimeout": "15" }),
+            "postgres",
+            5432,
+            true,
+        );
+        assert!(sql.contains("connect_timeout=15"), "string timeout not parsed: {}", sql);
+    }
+
+    #[test]
+    fn mysql_ignores_postgres_ssl_fields() {
+        // sslmode / sslrootcert are libpq names; the mysql extension uses
+        // different keys, so they must not leak into a mysql DSN.
+        let sql = db_attach(
+            &json!({ "host": "h", "sslmode": "require", "sslrootcert": "/x.crt" }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(!sql.contains("sslmode"), "sslmode should be postgres-only: {}", sql);
+        assert!(!sql.contains("sslrootcert"), "rootcert should be postgres-only: {}", sql);
+    }
+
+    #[test]
+    fn free_text_conn_params_passthrough() {
+        // connParams is appended verbatim and works for both families (here a
+        // mysql-specific ssl_mode the structured fields do not model).
+        let sql = db_attach(
+            &json!({ "host": "h", "connParams": "ssl_mode=REQUIRED ssl_ca=/ca.pem" }),
+            "mysql",
+            3306,
+            true,
+        );
+        assert!(sql.contains("ssl_mode=REQUIRED ssl_ca=/ca.pem"), "passthrough missing: {}", sql);
+    }
+
+    #[test]
+    fn conn_string_override_ignores_advanced_opts() {
+        // A raw connString is used verbatim; the structured advanced fields
+        // (which the user would instead encode inside their own string) are
+        // not appended.
+        let sql = db_attach(
+            &json!({ "connString": "host=h dbname=db", "sslmode": "require", "connParams": "x=1" }),
+            "postgres",
+            5432,
+            true,
+        );
+        assert!(sql.contains("ATTACH 'host=h dbname=db' AS duckle_src"), "{}", sql);
+        assert!(!sql.contains("sslmode"), "advanced fields must not append to override: {}", sql);
+        assert!(!sql.contains("x=1"), "passthrough must not append to override: {}", sql);
     }
 }
 

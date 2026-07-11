@@ -406,6 +406,14 @@ export default function PropertiesPanel({
                             'url',
                             'endpoint',
                             'urlStyle',
+                            // PostgreSQL advanced / libpq TLS options (#161).
+                            'sslmode',
+                            'sslrootcert',
+                            'sslcert',
+                            'sslkey',
+                            'connectTimeout',
+                            'options',
+                            'connParams',
                         ];
                         for (const k of keys) {
                             const v = payload[k];
@@ -504,23 +512,49 @@ export default function PropertiesPanel({
                                 </button>
                             ) : null}
                             {manifest ? (
-                                manifest.sections.map(section => (
-                                    <div className="form-section" key={section.label}>
-                                        <div className="form-section-label">{section.label}</div>
-                                        {section.fields.map(field => (
-                                            <FieldRenderer
-                                                key={field.key}
-                                                field={field}
-                                                value={
-                                                    props[field.key] !== undefined
-                                                        ? props[field.key]
-                                                        : field.defaultValue
-                                                }
-                                                onChange={v => setProperty(field.key, v)}
-                                            />
-                                        ))}
-                                    </div>
-                                ))
+                                manifest.sections.map(section => {
+                                    const fields = section.fields.map(field => (
+                                        <FieldRenderer
+                                            key={field.key}
+                                            field={field}
+                                            value={
+                                                props[field.key] !== undefined
+                                                    ? props[field.key]
+                                                    : field.defaultValue
+                                            }
+                                            onChange={v => setProperty(field.key, v)}
+                                        />
+                                    ));
+                                    // Collapsible sections (e.g. Postgres advanced TLS, #161)
+                                    // render as a native disclosure so the common case stays
+                                    // clean. Open by default if any field already has a value.
+                                    if (section.collapsible) {
+                                        const hasValue = section.fields.some(
+                                            f =>
+                                                props[f.key] !== undefined &&
+                                                props[f.key] !== '' &&
+                                                props[f.key] !== null,
+                                        );
+                                        return (
+                                            <details
+                                                className="form-section form-section-collapsible"
+                                                key={section.label}
+                                                open={hasValue || !section.defaultCollapsed}
+                                            >
+                                                <summary className="form-section-label form-section-summary">
+                                                    {section.label}
+                                                </summary>
+                                                {fields}
+                                            </details>
+                                        );
+                                    }
+                                    return (
+                                        <div className="form-section" key={section.label}>
+                                            <div className="form-section-label">{section.label}</div>
+                                            {fields}
+                                        </div>
+                                    );
+                                })
                             ) : (
                                 <div className="properties-hint">
                                     {t('properties.genericComponent')}

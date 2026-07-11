@@ -275,6 +275,94 @@ const dbConnectionFields = (componentId: string): Field[] => [
     { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
 ];
 
+// Postgres wire-family ids that accept libpq TLS / advanced options (issue
+// #161). All of these ATTACH through the DuckDB postgres extension, so the same
+// sslmode / cert / connect_timeout / options params flow through to libpq.
+const PG_ADVANCED_IDS = new Set([
+    'src.postgres', 'snk.postgres',
+    'src.cockroach', 'snk.cockroach',
+    'src.redshift', 'snk.redshift',
+    'src.pgvector', 'snk.pgvector',
+]);
+
+// libpq advanced / TLS connection fields (issue #161). Grouped into their own
+// collapsible section (default collapsed) so the common case stays clean, but
+// TLS-enforced servers (sslmode=require / verify-full) and client-cert auth are
+// reachable without hand-writing a raw connection string. The keys match the
+// props the engine's db_attach reads.
+const pgAdvancedFields = (): Field[] => [
+    {
+        key: 'sslmode',
+        label: 'SSL mode',
+        kind: 'select',
+        defaultValue: '',
+        options: [
+            { label: 'Default (driver negotiates)', value: '' },
+            { label: 'disable', value: 'disable' },
+            { label: 'allow', value: 'allow' },
+            { label: 'prefer', value: 'prefer' },
+            { label: 'require', value: 'require' },
+            { label: 'verify-ca', value: 'verify-ca' },
+            { label: 'verify-full', value: 'verify-full' },
+        ],
+        description: 'libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS.',
+    },
+    {
+        key: 'sslrootcert',
+        label: 'SSL root cert',
+        kind: 'file-path',
+        description: 'CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full.',
+    },
+    {
+        key: 'sslcert',
+        label: 'SSL client cert',
+        kind: 'file-path',
+        description: 'Client certificate file for certificate-based auth (libpq sslcert).',
+    },
+    {
+        key: 'sslkey',
+        label: 'SSL client key',
+        kind: 'file-path',
+        description: 'Client private-key file (libpq sslkey).',
+    },
+    {
+        key: 'connectTimeout',
+        label: 'Connect timeout (s)',
+        kind: 'integer',
+        description: 'Maximum seconds to wait for a connection (libpq connect_timeout).',
+    },
+    {
+        key: 'options',
+        label: 'Session options',
+        kind: 'text',
+        placeholder: '-c search_path=myschema',
+        description: 'Command-line options sent to the server on connect (libpq options), e.g. set the search_path.',
+    },
+    {
+        key: 'connParams',
+        label: 'Extra parameters',
+        kind: 'text',
+        placeholder: 'key=value key2=value2',
+        description: 'Any additional libpq parameters, appended verbatim to the connection string.',
+    },
+];
+
+// Splice the advanced-connection section in right after the connection section
+// (the one carrying the host field) so it reads as part of connection setup.
+// Applied uniformly from synthesizeManifest regardless of which synth path
+// (databases / warehouses / vector) built the base manifest.
+function injectPgAdvancedSection(manifest: ComponentManifest): void {
+    const section: FormSection = {
+        label: 'Advanced connection (SSL)',
+        fields: pgAdvancedFields(),
+        collapsible: true,
+        defaultCollapsed: true,
+    };
+    const connIdx = manifest.sections.findIndex(s => s.fields.some(f => f.key === 'host'));
+    if (connIdx >= 0) manifest.sections.splice(connIdx + 1, 0, section);
+    else manifest.sections.push(section);
+}
+
 const dbReadFields = (): Field[] => [
     {
         key: 'mode',
@@ -5504,6 +5592,14 @@ function synthDbt(comp: ComponentDef): ComponentManifest {
 // Main entry ------------------------------------------------------------
 
 export function synthesizeManifest(componentId: string): ComponentManifest | undefined {
+    const manifest = dispatchManifest(componentId);
+    // Cross-cutting: Postgres wire-family components gain a collapsible advanced
+    // TLS/libpq section (issue #161), regardless of which synth path built them.
+    if (manifest && PG_ADVANCED_IDS.has(componentId)) injectPgAdvancedSection(manifest);
+    return manifest;
+}
+
+function dispatchManifest(componentId: string): ComponentManifest | undefined {
     const entry = findPaletteEntry(componentId);
     if (!entry) return undefined;
     const { groupId, comp } = entry;

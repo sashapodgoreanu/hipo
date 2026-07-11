@@ -50,6 +50,16 @@ export type ConnectionPayload = {
     accountKey?: string;
     brokers?: string;
     url?: string;
+    // PostgreSQL advanced / libpq TLS options (issue #161). Carried on the
+    // connection so TLS-enforced servers (sslmode=require / verify-full) and
+    // client-cert auth work from a saved connection, not just inline node props.
+    sslmode?: string;
+    sslrootcert?: string;
+    sslcert?: string;
+    sslkey?: string;
+    connectTimeout?: number;
+    options?: string;
+    connParams?: string;
     extra?: Record<string, string>;
     notes?: string;
 };

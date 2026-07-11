@@ -3071,6 +3071,16 @@ html[dir='rtl'] .topbar-lang {
     border-bottom: 1px solid var(--border);
 }
 
+.form-section-summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: revert;
+}
+
+.form-section-collapsible[open] > .form-section-summary {
+    color: var(--text-2);
+}
+
 .form-field {
     margin-bottom: 10px;
 }

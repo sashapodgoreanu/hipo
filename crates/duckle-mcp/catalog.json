@@ -2442,6 +2442,88 @@
             ]
           },
           {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
+          },
+          {
             "label": "Query",
             "fields": [
               {
@@ -3712,6 +3794,88 @@
             ]
           },
           {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
+          },
+          {
             "label": "Query",
             "fields": [
               {
@@ -4564,6 +4728,88 @@
                 "placeholder": "••••••••"
               }
             ]
+          },
+          {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           },
           {
             "label": "Source table",
@@ -11154,6 +11400,88 @@
                 "placeholder": "••••••••"
               }
             ]
+          },
+          {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           },
           {
             "label": "Table",
@@ -26861,6 +27189,88 @@
             ]
           },
           {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
+          },
+          {
             "label": "Destination",
             "fields": [
               {
@@ -27036,6 +27446,88 @@
                 "placeholder": "••••••••"
               }
             ]
+          },
+          {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           },
           {
             "label": "Destination",
@@ -29404,6 +29896,88 @@
                 "placeholder": "••••••••"
               }
             ]
+          },
+          {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           },
           {
             "label": "Destination",
@@ -32958,6 +33532,88 @@
                 "placeholder": "••••••••"
               }
             ]
+          },
+          {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
           },
           {
             "label": "Destination",

@@ -20,7 +20,11 @@ const CONNECTION_TYPES: ConnectionType[] = [
     {
         kind: 'postgres',
         label: 'PostgreSQL',
-        fields: ['host', 'port', 'database', 'username', 'password'],
+        fields: [
+            'host', 'port', 'database', 'username', 'password',
+            // Advanced / TLS (issue #161).
+            'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams',
+        ],
         defaultPort: 5432,
     },
     {
@@ -62,7 +66,10 @@ const CONNECTION_TYPES: ConnectionType[] = [
     {
         kind: 'redshift',
         label: 'Redshift',
-        fields: ['host', 'port', 'database', 'username', 'password'],
+        fields: [
+            'host', 'port', 'database', 'username', 'password',
+            'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams',
+        ],
         defaultPort: 5439,
     },
     {
@@ -124,6 +131,13 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
     url: 'Base URL',
     endpoint: 'Endpoint (MinIO / R2 / B2, blank for AWS)',
     urlStyle: 'URL style',
+    sslmode: 'SSL mode',
+    sslrootcert: 'SSL root cert',
+    sslcert: 'SSL client cert',
+    sslkey: 'SSL client key',
+    connectTimeout: 'Connect timeout (s)',
+    options: 'Session options',
+    connParams: 'Extra parameters',
 };
 
 const SECRET_FIELDS = new Set<keyof ConnectionPayload>(['password', 'secretKey', 'accountKey']);
@@ -229,7 +243,31 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                     <div className="connection-field-grid">
                         {meta?.fields.map(field => {
                             const isSecret = SECRET_FIELDS.has(field);
-                            const isPort = field === 'port';
+                            const isNumber = field === 'port' || field === 'connectTimeout';
+                            if (field === 'sslmode') {
+                                // Values MUST match libpq sslmode names so the
+                                // engine forwards them verbatim into the DSN (#161).
+                                return (
+                                    <div className="modal-field" key={field}>
+                                        <label className="modal-field-label">
+                                            {FIELD_LABELS[field] ?? field}
+                                        </label>
+                                        <select
+                                            className="modal-input"
+                                            value={(values.sslmode as string | undefined) ?? ''}
+                                            onChange={e => setField('sslmode', e.target.value)}
+                                        >
+                                            <option value="">Default</option>
+                                            <option value="disable">disable</option>
+                                            <option value="allow">allow</option>
+                                            <option value="prefer">prefer</option>
+                                            <option value="require">require</option>
+                                            <option value="verify-ca">verify-ca</option>
+                                            <option value="verify-full">verify-full</option>
+                                        </select>
+                                    </div>
+                                );
+                            }
                             if (field === 'urlStyle') {
                                 // The values MUST match the S3 node's URL-style
                                 // option values ('' / 'path' / 'vhost') so picking
@@ -258,14 +296,14 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                         {FIELD_LABELS[field] ?? field}
                                     </label>
                                     <input
-                                        type={isSecret ? 'password' : isPort ? 'number' : 'text'}
+                                        type={isSecret ? 'password' : isNumber ? 'number' : 'text'}
                                         className="modal-input"
                                         value={(values[field] as string | number | undefined) ?? ''}
                                         placeholder={isSecret ? '••••••••' : ''}
                                         onChange={e =>
                                             setField(
                                                 field,
-                                                isPort ? Number(e.target.value) : e.target.value,
+                                                isNumber ? Number(e.target.value) : e.target.value,
                                             )
                                         }
                                         spellCheck={false}
