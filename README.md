@@ -45,7 +45,7 @@
 **Get started**
 
 - [What is Duckle?](#what-is-duckle)
-- [What's new in v0.5.4](#whats-new-in-v054)
+- [What's new in v0.5.5](#whats-new-in-v055)
 - [Quickstart (60 s)](#quickstart-60-seconds)
 - [Download / Install](#download--install)
 - [Build from source](#build-from-source)
@@ -125,21 +125,22 @@ Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 ---
 
-## What's new in v0.5.4
+## What's new in v0.5.5
 
-SAP connectivity, a faster dbt loop, custom AI gateways, and a batch of reliability fixes from reported issues.
+A Salesforce write-back sink, deeper database connectivity, geospatial data-quality tools, and a batch of reliability fixes from reported issues.
 
-- **Native SAP sources.** `src.sap` reads SAP OData v2 / v4 and CDS services, and `src.sap.rfc` calls classic RFC-enabled function modules over SOAP - so SAP data lands in a pipeline without separate middleware.
-- **Custom OpenAI-compatible AI endpoints (#142).** `xf.ai.llm`, `xf.ai.classify`, and `xf.ai.embed` gain a "Custom" provider with an optional base URL, endpoint path, and extra headers, to reach any OpenAI-compatible gateway.
-- **Multi-column Cast with per-column error handling (#144).** One Cast node converts many columns at once, each with its own target type, format, and on-error behaviour (inherit, set NULL, or fail the run).
-- **Faster xf.dbt loop (#146).** When a dbt node sits behind upstream stages, Duckle warms dbt's project parse in the background while those stages run, so `dbt run` reuses a warm cache instead of paying a cold parse.
-- **Portable pipeline artifacts across operating systems (#145).** A single-file artifact built on one OS keeps its `${workspace}` placeholder and re-resolves it on the run host, so a Windows-built artifact runs correctly on Linux and vice versa.
-- **SQL Server Encrypt toggle for legacy servers (#141)** to disable TLS for older instances, plus a Parquet fix so JSON-typed text columns are no longer written with literal quotes (#140), and truncate-and-insert write mode for Oracle / SQL Server (#138).
-- **Opt-in unsigned DuckDB extension loading (#143)**, an editable workspace git remote (#139), environment variables resolved consistently in canvas and scheduled runs (#137), scheduler interval fixes (#135), form-encoded `snk.rest` bodies, and global editor font scaling.
+- **Salesforce sink `snk.salesforce` (#164).** Write rows back into Salesforce through the sObject Collections API - insert, update, upsert by external Id, or delete - with Bearer-token auth over TLS.
+- **PostgreSQL advanced / SSL connection options (#161).** `sslmode`, root / client certificates, connect timeout, session `options`, and free-text passthrough, so the Postgres wire family (postgres / cockroach / redshift / pgvector) reaches TLS-enforced servers.
+- **Execute-in-source and remote-SQL pushdown (#115).** Push filters and joins down to Postgres / MySQL, or run a `CREATE TABLE AS` on the source server itself, so heavy work stays in the database instead of streaming every row.
+- **Geometry Validation and Repair data-quality tools (#158).** `qa.geomvalidate`, `qa.geomrepair`, and `qa.geomempty`, with robust WKT-to-GEOMETRY casting.
+- **Bulk Rename and Cast editors (#159, #160).** Rename or convert many columns in a single node, with the Schema tab kept in sync.
+- **Custom MySQL ATTACH, editable stage SQL, and masked secrets (#157)**, plus a plain-text / Influx Line Protocol body for `snk.rest` (#147) and a custom base URL for AI LLM providers (#142).
 
-Fixes: see the release notes for the full list.
+Fixes: Shapefile export now writes the `.prj` file from REST / JSON sources as well as CSV (#163, #150, #151), the `src.webhook` node shows its own Port / Timeout dialog in the web editor (#162), "Autodetect from Source" returns the real schema for every connector (#148), multi-key joins and the `SQL name` field work as expected (#152, #153, #154, #120), the SQL Server source handles older TDS servers and `sql_variant` / XML columns (#141), and the self-updater no longer trips on a stale checksum after a re-roll (#156).
 
-Full notes: see the [v0.5.4 release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.4).
+Under the hood: the embedded sidecar binaries are now zstd-compressed for a smaller download.
+
+Full notes: see the [v0.5.5 release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.5).
 
 ---
 
@@ -458,7 +459,7 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.4):
+Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.5):
 
 | OS | Asset | How to run |
 |---|---|---|
