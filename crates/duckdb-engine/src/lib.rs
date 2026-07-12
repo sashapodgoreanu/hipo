@@ -2853,6 +2853,15 @@ fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), EngineError>
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     cmd.arg(db.to_string_lossy().to_string());
+    // Open the throwaway run-db at v1.5.0, same as run() / execute_batched:
+    // a connector source (src.rest etc) materializes its table through this
+    // helper BEFORE any other stage, so it is often the process that CREATES
+    // the run-db file. -storage-version only takes effect at file creation, so
+    // omitting it here locks the file to the pre-1.5.0 default and every later
+    // stage silently drops GEOMETRY CRS - which made a REST/JSON source -> ESRI
+    // Shapefile emit no .prj while an identical CSV source (whose first process
+    // is the v1.5.0 batched executor) did (issue #163, follow-up to #150).
+    cmd.arg("-storage-version").arg("v1.5.0");
     // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute output.
     cmd.arg("-no-init");
     if allow_unsigned_extensions() {
@@ -2898,6 +2907,9 @@ fn duckdb_query_json(bin: &Path, db: &Path, sql: &str) -> Vec<JsonValue> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     cmd.arg(db.to_string_lossy().to_string());
+    // Match apply_duckdb_sql: open the run-db at v1.5.0 so this reader never
+    // creates the file at an older storage version (see #163 / #150).
+    cmd.arg("-storage-version").arg("v1.5.0");
     // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute the JSON
     // this reader parses from stdout.
     cmd.arg("-no-init");

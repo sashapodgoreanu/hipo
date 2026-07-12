@@ -3253,6 +3253,85 @@ fn geo_distance_computes_point_distance() {
 }
 
 #[test]
+fn rest_source_to_shapefile_writes_prj() {
+    // #163: a REST/JSON source feeding ST_SetCRS -> ESRI Shapefile must emit
+    // the .prj (CRS) file, exactly like a CSV source does. The REST source is
+    // not pure-SQL, so it materializes its table (and CREATES the throwaway
+    // run-db) through apply_duckdb_sql before any other stage; if that helper
+    // opens the file below storage v1.5.0, the later geometry table drops its
+    // CRS and GDAL writes no .prj. Gated behind DUCKLE_TEST_SPATIAL like the
+    // other GDAL-backed spatial tests.
+    if std::env::var("DUCKLE_TEST_SPATIAL").ok().as_deref() != Some("1") {
+        eprintln!("skipping: set DUCKLE_TEST_SPATIAL=1 to run spatial tests");
+        return;
+    }
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock http");
+    let port = listener.local_addr().unwrap().port();
+
+    // Serve one GET with a JSON array of points (flat lng/lat).
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(1) {
+            let mut stream = match stream { Ok(s) => s, Err(_) => break };
+            stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
+            stream.set_nodelay(true).ok();
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(_) => break, // one read is enough to see the GET request line
+                    Err(_) => break,
+                }
+            }
+            let body = r#"[{"name":"a","lng":-73.9,"lat":40.7},{"name":"b","lng":2.35,"lat":48.85}]"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out_shp = out_path(tmp.path(), "points.shp");
+    let url = format!("http://127.0.0.1:{}/points", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.rest", json!({ "url": url, "method": "GET" })),
+            node("t", "code.sql", json!({
+                "loadSpatial": true,
+                "sql": "SELECT name, ST_SetCRS(ST_Point(lng, lat), 'EPSG:4326') AS SHAPE FROM input"
+            })),
+            node("k", "snk.spatial", json!({ "path": out_shp, "driver": "ESRI Shapefile" })),
+        ]),
+        json!([main_edge("e1", "s", "t"), main_edge("e2", "t", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "rest->shapefile pipeline failed: {:?}", r.error);
+
+    // The whole point of the fix: the .prj sits next to the .shp and names the CRS.
+    let prj = out_shp.trim_end_matches(".shp").to_string() + ".prj";
+    assert!(
+        std::path::Path::new(&prj).exists(),
+        ".prj not written (CRS dropped) at {}",
+        prj
+    );
+    let prj_text = std::fs::read_to_string(&prj).unwrap_or_default();
+    assert!(
+        prj_text.contains("WGS_1984") || prj_text.contains("4326"),
+        "unexpected .prj contents: {}",
+        prj_text
+    );
+}
+
+#[test]
 fn snk_webhook_posts_one_request_per_row() {
     // Spins up a tiny TCP/HTTP listener, runs snk.webhook against it,
     // and verifies (a) two requests arrived (one per CSV row) and (b)
