@@ -1295,6 +1295,11 @@ pub struct RestSourceSpec {
     pub pagination: RestPagination,
     /// Hard cap on pages fetched (safety net against runaway loops).
     pub max_pages: u64,
+    /// #166: when set (src.salesforce with OAuth client-credentials auth), the
+    /// runner mints a fresh access token per run and injects
+    /// `Authorization: Bearer <token>` before the request loop, overriding any
+    /// static auth header. None for every other REST source.
+    pub oauth: Option<SalesforceOAuth>,
 }
 
 /// src.databricks: SQL Statement Execution API read. Same shape as
@@ -1394,13 +1399,27 @@ pub enum SalesforceWriteApi {
     Bulk,
 }
 
+/// OAuth 2.0 client-credentials config for the Salesforce connectors (#166).
+/// When present on a source/sink spec the engine mints a fresh short-lived
+/// access token per run by POSTing `grant_type=client_credentials` to
+/// `{login_url}/services/oauth2/token`, replacing the pre-minted ~2h Bearer
+/// token users otherwise have to re-paste. `login_url` is the org's My Domain
+/// base (e.g. https://acme.my.salesforce.com); the token response also carries
+/// the `instance_url` the API calls target.
+#[derive(Debug, Clone)]
+pub struct SalesforceOAuth {
+    pub login_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+}
+
 /// snk.salesforce: write upstream rows into a Salesforce object via the REST
 /// write APIs. Tier 1 targets the sObject Collections API (<=200 records per
 /// request). Auth is a Bearer OAuth access token, same token flow as
 /// src.salesforce; supply it via `${ENV:SF_TOKEN}` so no secret lands in the
-/// pipeline JSON. `instance_url` is the org base (e.g.
-/// https://acme.my.salesforce.com) and doubles as the endpoint override tests
-/// point at a mock server.
+/// pipeline JSON, or set `oauth` to mint a fresh token per run (#166).
+/// `instance_url` is the org base (e.g. https://acme.my.salesforce.com) and
+/// doubles as the endpoint override tests point at a mock server.
 #[derive(Debug, Clone)]
 pub struct SalesforceSinkSpec {
     pub from_view: String,
@@ -1432,6 +1451,11 @@ pub struct SalesforceSinkSpec {
     pub fail_on_error: bool,
     /// Which write API to use (Tier 1 = Collections).
     pub api: SalesforceWriteApi,
+    /// When set, mint a fresh access token per run via OAuth client-credentials
+    /// (#166) instead of using the static Bearer `access_token`. The minted
+    /// `instance_url` from the token response overrides `instance_url` when the
+    /// latter is empty.
+    pub oauth: Option<SalesforceOAuth>,
 }
 
 /// snk.execsource "Execute in Source" (#115 in-database processing v1b): run a

@@ -11390,3 +11390,207 @@ fn snk_salesforce_update_remaps_idfield() {
     );
     assert_eq!(recs[0]["attributes"]["type"], json!("Account"));
 }
+
+/// Spawn a mock that answers TWO requests: a Salesforce OAuth token POST
+/// (`/services/oauth2/token`) followed by the real data request. The token
+/// response advertises `instance_url` back at this same mock so the follow-up
+/// request routes to us. Returns (port, rx yielding both raw requests, join).
+/// Used to drive the #166 client-credentials mint end-to-end.
+#[allow(clippy::type_complexity)]
+fn sf_mock_server_oauth(
+    data_resp: &'static str,
+) -> (
+    u16,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf oauth mock");
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let request_line = String::from_utf8_lossy(&buf)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let _ = tx.send(buf);
+            let body = if request_line.contains("oauth2/token") {
+                format!(
+                    r#"{{"access_token":"minted-abc","instance_url":"http://127.0.0.1:{}","token_type":"Bearer"}}"#,
+                    port
+                )
+            } else {
+                data_resp.to_string()
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    (port, rx, handle)
+}
+
+#[test]
+fn snk_salesforce_oauth_client_credentials_mints_token() {
+    // #166: with authMode=clientCredentials and no accessToken/instanceUrl, the
+    // sink mints a fresh token from clientId/clientSecret and uses the token
+    // response's instance_url for the Collections POST.
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server_oauth(
+        r#"[{"id":"001000000000001","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\n");
+    let login = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "authMode": "clientCredentials",
+                    "loginUrl": login,
+                    "clientId": "3MVG9cid",
+                    "clientSecret": "shhh",
+                    "apiVersion": "v60.0",
+                    "object": "Account",
+                    "operation": "insert"
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "salesforce CC insert failed: {:?}", r.error);
+
+    // First request: the token mint (form-encoded client-credentials grant).
+    let tok_req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected token request");
+    let tok_raw = String::from_utf8_lossy(&tok_req);
+    assert!(
+        tok_raw.lines().next().unwrap_or("").contains("/services/oauth2/token"),
+        "first request should hit the token endpoint: {}",
+        tok_raw.lines().next().unwrap_or("")
+    );
+    assert!(
+        tok_raw.contains("grant_type=client_credentials"),
+        "token body should carry the client-credentials grant"
+    );
+    assert!(
+        tok_raw.contains("client_id=3MVG9cid") && tok_raw.contains("client_secret=shhh"),
+        "token body should carry client id + secret"
+    );
+
+    // Second request: the Collections POST, authed with the MINTED token and
+    // routed at the minted instance_url.
+    let data_req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected collections request");
+    let _ = handle.join();
+    let data_raw = String::from_utf8_lossy(&data_req);
+    let line0 = data_raw.lines().next().unwrap_or("");
+    assert!(
+        line0.starts_with("POST ") && line0.contains("/composite/sobjects"),
+        "expected Collections POST, got: {}",
+        line0
+    );
+    assert!(
+        data_raw.contains("Authorization: Bearer minted-abc"),
+        "collections request must use the freshly minted token, not a static one"
+    );
+}
+
+#[test]
+fn src_salesforce_oauth_client_credentials_mints_token() {
+    // #166: src.salesforce with authType=oauth_client_credentials mints a token
+    // and injects it as the Bearer header on the query GET.
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) =
+        sf_mock_server_oauth(r#"{"records":[{"Id":"001","Name":"Acme"}]}"#);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out_csv = out_path(tmp.path(), "sf_out.csv");
+    let base = format!("http://127.0.0.1:{}", port);
+    let url = format!("{}/services/data/v60.0/query/?q=SELECT+Id,Name+FROM+Account", base);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "s",
+                "src.salesforce",
+                json!({
+                    "url": url,
+                    "authType": "oauth_client_credentials",
+                    "loginUrl": base,
+                    "clientId": "3MVG9cid",
+                    "clientSecret": "shhh",
+                    "responsePath": "/records"
+                }),
+            ),
+            node("snk", "snk.csv", json!({ "path": out_csv })),
+        ]),
+        json!([main_edge("e", "s", "snk")]),
+    ));
+    assert_eq!(r.status, "ok", "salesforce CC source failed: {:?}", r.error);
+
+    // First request: token mint.
+    let tok_req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected token request");
+    assert!(
+        String::from_utf8_lossy(&tok_req)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .contains("/services/oauth2/token"),
+        "first request should hit the token endpoint"
+    );
+
+    // Second request: the query GET carrying the minted Bearer token.
+    let data_req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected query request");
+    let _ = handle.join();
+    let data_raw = String::from_utf8_lossy(&data_req);
+    assert!(
+        data_raw.lines().next().unwrap_or("").starts_with("GET "),
+        "expected the SOQL query GET, got: {}",
+        data_raw.lines().next().unwrap_or("")
+    );
+    assert!(
+        data_raw.contains("Authorization: Bearer minted-abc"),
+        "query request must carry the minted Bearer token"
+    );
+}

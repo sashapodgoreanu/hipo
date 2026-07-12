@@ -30221,7 +30221,7 @@
       "label": "Salesforce",
       "kind": "sink",
       "availability": "available",
-      "summary": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; Bearer OAuth token, same auth as src.salesforce. Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).",
+      "summary": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).",
       "ports": {
         "inputs": [
           {
@@ -30236,27 +30236,65 @@
         "id": "snk.salesforce",
         "kind": "sink",
         "label": "Salesforce",
-        "description": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; Bearer OAuth token, same auth as src.salesforce. Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).",
+        "description": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).",
         "schemaSource": "upstream",
         "sections": [
           {
             "label": "Salesforce org",
             "fields": [
               {
+                "key": "authMode",
+                "label": "Auth mode",
+                "kind": "select",
+                "defaultValue": "bearer",
+                "options": [
+                  {
+                    "label": "Bearer token (paste / refresh manually)",
+                    "value": "bearer"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "clientCredentials"
+                  }
+                ],
+                "description": "Client Credentials mints a fresh short-lived token each run from a connected app, so you stop pasting an expiring token (#166)."
+              },
+              {
                 "key": "instanceUrl",
-                "label": "Instance URL",
+                "label": "Instance URL (Bearer mode)",
                 "kind": "text",
-                "required": true,
                 "placeholder": "https://acme.my.salesforce.com",
-                "description": "Org base URL (no trailing slash)."
+                "description": "Org base URL (no trailing slash). Required in Bearer mode; in Client Credentials mode the token response supplies it."
               },
               {
                 "key": "accessToken",
-                "label": "Access token (Bearer)",
+                "label": "Access token (Bearer mode)",
                 "kind": "text",
-                "required": true,
+                "secret": true,
                 "placeholder": "${ENV:SF_TOKEN}",
-                "description": "OAuth access token, same token flow as src.salesforce. Use ${ENV:...} so no secret lands in the pipeline JSON."
+                "description": "Required in Bearer mode. Use ${ENV:...} so no secret lands in the pipeline JSON."
+              },
+              {
+                "key": "loginUrl",
+                "label": "Login URL (Client Credentials)",
+                "kind": "text",
+                "placeholder": "https://acme.my.salesforce.com",
+                "description": "Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token. Defaults to Instance URL when blank."
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID (Client Credentials)",
+                "kind": "text",
+                "placeholder": "Connected app consumer key",
+                "description": "Required in Client Credentials mode."
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret (Client Credentials)",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:SF_CLIENT_SECRET}",
+                "description": "Required in Client Credentials mode. Use ${ENV:...} so no secret lands in the pipeline JSON."
               },
               {
                 "key": "apiVersion",
@@ -39065,7 +39103,7 @@
       "label": "Salesforce",
       "kind": "source",
       "availability": "available",
-      "summary": "Salesforce REST. Riders the generic src.rest path with Bearer OAuth token; users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.",
+      "summary": "Salesforce REST. Rides the generic src.rest path with a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app); users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -39086,7 +39124,7 @@
         "id": "src.salesforce",
         "kind": "source",
         "label": "Salesforce",
-        "description": "Salesforce REST. Riders the generic src.rest path with Bearer OAuth token; users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.",
+        "description": "Salesforce REST. Rides the generic src.rest path with a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app); users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -39156,6 +39194,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -39171,6 +39213,27 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "loginUrl",
+                "label": "Login URL (Client Credentials)",
+                "kind": "text",
+                "placeholder": "https://acme.my.salesforce.com",
+                "description": "Your My Domain base. Mints a fresh token per run at {loginUrl}/services/oauth2/token so you stop pasting an expiring token (#166). Used only when Auth type is OAuth Client Credentials."
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID (Client Credentials)",
+                "kind": "text",
+                "placeholder": "Connected app consumer key"
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret (Client Credentials)",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:SF_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON."
               }
             ]
           },

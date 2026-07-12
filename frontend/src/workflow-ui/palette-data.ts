@@ -544,7 +544,7 @@ export const PALETTE: Category[] = [
                 id: 'snk.saas',
                 label: 'SaaS Connectors',
                 components: [
-                    snk('salesforce', 'Salesforce', 'available', 'Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; Bearer OAuth token, same auth as src.salesforce. Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).'),
+                    snk('salesforce', 'Salesforce', 'available', 'Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).'),
                 ],
             },
             {
@@ -770,7 +770,7 @@ export const PALETTE: Category[] = [
                 id: 'saas.crm',
                 label: 'CRM',
                 components: [
-                    src('salesforce', 'Salesforce', 'available', 'Salesforce REST. Riders the generic src.rest path with Bearer OAuth token; users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.'),
+                    src('salesforce', 'Salesforce', 'available', 'Salesforce REST. Rides the generic src.rest path with a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app); users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records.'),
                     src('hubspot', 'HubSpot', 'available', 'HubSpot REST. Bearer auth via a Private App access token. Cursor pagination on `paging.next.after` (cursorNextPath /paging/next/after, cursorParam `after`). responsePath /results.'),
                     src('pipedrive', 'Pipedrive', 'available', 'Pipedrive REST. URL ?api_token=... or Bearer auth. Cursor pagination on `additional_data.pagination.next_start` (start parameter). responsePath /data.'),
                     src('zendesk', 'Zendesk', 'available', 'Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource).'),

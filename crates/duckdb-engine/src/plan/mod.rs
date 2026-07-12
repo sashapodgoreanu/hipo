@@ -1648,19 +1648,32 @@ fn build_stage(
         // Auth: Bearer OAuth access token, same token as src.salesforce.
         // instance_url doubles as the endpoint base tests point at a mock.
         let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        // #166: OAuth client-credentials mints a fresh token per run from the
+        // durable clientId/clientSecret, so instanceUrl + accessToken are only
+        // required in the default Bearer mode. In client-credentials mode the
+        // token response supplies both the access token and the instance_url.
+        let oauth = salesforce_oauth_from_props(&props)?;
         let instance_url = string_prop(&props, "instanceUrl")
             .map(|s| s.trim_end_matches('/').to_string())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!(
-                "{}: instanceUrl required (e.g. https://acme.my.salesforce.com)",
-                component_id
-            )))?;
-        let access_token = string_prop(&props, "accessToken")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| EngineError::Config(format!(
-                "{}: accessToken required (Bearer OAuth token; use ${{ENV:SF_TOKEN}})",
-                component_id
-            )))?;
+            .filter(|s| !s.is_empty());
+        let access_token = string_prop(&props, "accessToken").filter(|s| !s.is_empty());
+        if oauth.is_none() {
+            if instance_url.is_none() {
+                return Err(EngineError::Config(format!(
+                    "{}: instanceUrl required (e.g. https://acme.my.salesforce.com)",
+                    component_id
+                )));
+            }
+            if access_token.is_none() {
+                return Err(EngineError::Config(format!(
+                    "{}: accessToken required (Bearer OAuth token; use ${{ENV:SF_TOKEN}}), \
+                     or set Auth mode to OAuth Client Credentials",
+                    component_id
+                )));
+            }
+        }
+        let instance_url = instance_url.unwrap_or_default();
+        let access_token = access_token.unwrap_or_default();
         let object = string_prop(&props, "object")
             .or_else(|| string_prop(&props, "sobject"))
             .filter(|s| !s.is_empty())
@@ -1716,6 +1729,7 @@ fn build_stage(
             all_or_none: props.get("allOrNone").and_then(|v| v.as_bool()).unwrap_or(false),
             fail_on_error: props.get("failOnError").and_then(|v| v.as_bool()).unwrap_or(true),
             api,
+            oauth,
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.elastic" || component_id == "snk.opensearch" {
@@ -3324,6 +3338,7 @@ fn build_stage(
             response_format: RestResponseFormat::Json,
             pagination: RestPagination::None,
             max_pages: 1,
+            oauth: None,
         });
         (String::new(), StageKind::View, None)
     } else if matches!(
@@ -3431,6 +3446,16 @@ fn build_stage(
             }
         }
         push_rest_auth(&mut headers, &props);
+        // #166: src.salesforce OAuth 2.0 client-credentials. When authType selects
+        // client-credentials the runner mints a fresh access token per run and
+        // injects the Bearer header (push_rest_auth added nothing for this mode),
+        // so users stop pasting a ~2h token. Bearer stays the default; every other
+        // REST alias resolves to None here.
+        let oauth = if component_id == "src.salesforce" {
+            salesforce_oauth_from_props(&props)?
+        } else {
+            None
+        };
         let response_format = if is_soap
             || string_prop(&props, "responseFormat").as_deref() == Some("xml")
         {
@@ -3540,6 +3565,7 @@ fn build_stage(
             response_format,
             pagination,
             max_pages,
+            oauth,
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.snowflake" {

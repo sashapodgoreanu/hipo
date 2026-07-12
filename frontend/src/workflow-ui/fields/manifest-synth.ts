@@ -1828,8 +1828,22 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Salesforce org',
                 fields: [
-                    { key: 'instanceUrl', label: 'Instance URL', kind: 'text', required: true, placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash).' },
-                    { key: 'accessToken', label: 'Access token (Bearer)', kind: 'text', required: true, placeholder: '${ENV:SF_TOKEN}', description: 'OAuth access token, same token flow as src.salesforce. Use ${ENV:...} so no secret lands in the pipeline JSON.' },
+                    {
+                        key: 'authMode',
+                        label: 'Auth mode',
+                        kind: 'select',
+                        defaultValue: 'bearer',
+                        options: [
+                            { label: 'Bearer token (paste / refresh manually)', value: 'bearer' },
+                            { label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'clientCredentials' },
+                        ],
+                        description: 'Client Credentials mints a fresh short-lived token each run from a connected app, so you stop pasting an expiring token (#166).',
+                    },
+                    { key: 'instanceUrl', label: 'Instance URL (Bearer mode)', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash). Required in Bearer mode; in Client Credentials mode the token response supplies it.' },
+                    { key: 'accessToken', label: 'Access token (Bearer mode)', kind: 'text', secret: true, placeholder: '${ENV:SF_TOKEN}', description: 'Required in Bearer mode. Use ${ENV:...} so no secret lands in the pipeline JSON.' },
+                    { key: 'loginUrl', label: 'Login URL (Client Credentials)', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token. Defaults to Instance URL when blank.' },
+                    { key: 'clientId', label: 'Client ID (Client Credentials)', kind: 'text', placeholder: 'Connected app consumer key', description: 'Required in Client Credentials mode.' },
+                    { key: 'clientSecret', label: 'Client secret (Client Credentials)', kind: 'text', secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Required in Client Credentials mode. Use ${ENV:...} so no secret lands in the pipeline JSON.' },
                     { key: 'apiVersion', label: 'API version', kind: 'text', defaultValue: 'v60.0' },
                 ],
             },
@@ -2365,6 +2379,11 @@ function synthWebhookSource(comp: ComponentDef): ComponentManifest {
 }
 
 function synthApiSource(comp: ComponentDef): ComponentManifest {
+    // #166: src.salesforce offers OAuth 2.0 client-credentials as an auth mode so
+    // the source stops needing a manually-refreshed ~2h Bearer token. The extra
+    // option + fields only surface on the Salesforce tile; every other REST alias
+    // keeps the plain none / bearer / apikey auth.
+    const isSalesforce = comp.id === 'src.salesforce';
     return base(comp, [
         ...(comp.id === 'src.sap'
             ? [
@@ -2427,10 +2446,20 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                         { label: 'None', value: 'none' },
                         { label: 'Bearer token', value: 'bearer' },
                         { label: 'API key (header)', value: 'apikey' },
+                        ...(isSalesforce
+                            ? [{ label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'oauth_client_credentials' }]
+                            : []),
                     ],
                 },
                 { key: 'authToken', label: 'Token / API key', kind: 'text', placeholder: '••••••••' },
                 { key: 'authHeader', label: 'API key header', kind: 'text', placeholder: 'X-API-Key', description: 'Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key.' },
+                ...(isSalesforce
+                    ? [
+                          { key: 'loginUrl', label: 'Login URL (Client Credentials)', kind: 'text' as const, placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. Mints a fresh token per run at {loginUrl}/services/oauth2/token so you stop pasting an expiring token (#166). Used only when Auth type is OAuth Client Credentials.' },
+                          { key: 'clientId', label: 'Client ID (Client Credentials)', kind: 'text' as const, placeholder: 'Connected app consumer key' },
+                          { key: 'clientSecret', label: 'Client secret (Client Credentials)', kind: 'text' as const, secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.' },
+                      ]
+                    : []),
             ],
         },
         {

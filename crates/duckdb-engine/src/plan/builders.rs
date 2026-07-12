@@ -7823,6 +7823,52 @@ pub(crate) fn push_rest_auth(headers: &mut Vec<(String, String)>, props: &JsonVa
     }
 }
 
+/// #166: read OAuth 2.0 client-credentials config for the Salesforce connectors.
+/// Returns `Some(..)` when the form selects the client-credentials grant (via
+/// `authMode` on the sink form, or `authType` on the src.rest-shaped source
+/// form), erroring if a required field is missing; `None` keeps the default
+/// Bearer-token path so existing `${ENV:SF_TOKEN}` pipelines are unchanged.
+/// `loginUrl` falls back to `instanceUrl` (a My Domain org serves both the OAuth
+/// token endpoint and the data API from the same host).
+pub(crate) fn salesforce_oauth_from_props(
+    props: &JsonValue,
+) -> Result<Option<SalesforceOAuth>, EngineError> {
+    let mode = string_prop(props, "authMode")
+        .or_else(|| string_prop(props, "authType"))
+        .unwrap_or_else(|| "bearer".into());
+    let is_client_credentials = matches!(
+        mode.as_str(),
+        "clientCredentials" | "client_credentials" | "oauth" | "oauth_client_credentials"
+    );
+    if !is_client_credentials {
+        return Ok(None);
+    }
+    let client_id = string_prop(props, "clientId")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config(
+            "salesforce: clientId required for OAuth client-credentials auth".into(),
+        ))?;
+    let client_secret = string_prop(props, "clientSecret")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config(
+            "salesforce: clientSecret required for OAuth client-credentials auth".into(),
+        ))?;
+    let login_url = string_prop(props, "loginUrl")
+        .filter(|s| !s.is_empty())
+        .or_else(|| string_prop(props, "instanceUrl").filter(|s| !s.is_empty()))
+        .map(|s| s.trim_end_matches('/').to_string())
+        .ok_or_else(|| EngineError::Config(
+            "salesforce: loginUrl required for OAuth client-credentials auth \
+             (e.g. https://acme.my.salesforce.com)"
+                .into(),
+        ))?;
+    Ok(Some(SalesforceOAuth {
+        login_url,
+        client_id,
+        client_secret,
+    }))
+}
+
 /// Resolve the `(header-name, value)` to send for API-key auth. Precedence:
 /// 1. an explicit `authHeader` prop (e.g. `X-Redmine-API-Key`);
 /// 2. a token written as `Header-Name: value` - split it, so a key pasted as

@@ -69,12 +69,21 @@ Response: array of `{ "id", "success", "errors": [{statusCode, message, fields}]
 
 ### Config surface (see catalog manifest)
 
-`instanceUrl` (required), `accessToken` (required, Bearer - use `${ENV:SF_TOKEN}`),
-`apiVersion` (default `v60.0`), `object` (required), `operation`
-(insert|update|upsert|delete), `externalIdField` (required for upsert),
-`idField` (default `Id`, for update/delete), `api` (collections|bulk),
-`batchSize` (clamped to 200), `allOrNone` (default false), `failOnError`
-(default true).
+`authMode` (`bearer` default | `clientCredentials`),
+`instanceUrl` (required in Bearer mode), `accessToken` (required in Bearer
+mode - use `${ENV:SF_TOKEN}`), `loginUrl` / `clientId` / `clientSecret`
+(required in Client-Credentials mode - #166), `apiVersion` (default `v60.0`),
+`object` (required), `operation` (insert|update|upsert|delete),
+`externalIdField` (required for upsert), `idField` (default `Id`, for
+update/delete), `api` (collections|bulk), `batchSize` (clamped to 200),
+`allOrNone` (default false), `failOnError` (default true).
+
+In Client-Credentials mode the engine POSTs `grant_type=client_credentials` to
+`{loginUrl}/services/oauth2/token` once per run and uses the returned
+`{access_token, instance_url}`, so a fresh short-lived token is minted each run
+instead of a pasted ~2h Bearer token. `src.salesforce` gains the same mode via
+its `authType=oauth_client_credentials` option, so read-Org-A/write-Org-B
+migrations work with a connection each side.
 
 `instanceUrl` doubles as the endpoint base a mock server points at in tests
 (same trick as the Snowflake sink's `endpoint`).
@@ -86,7 +95,7 @@ unit-tested, validated end-to-end against a live org, and docs updated (README
 Sinks table, `docs/roadmap.md`, `CONTRIBUTING.md`). What's left is follow-up:
 
 1. **Tier 2 - Bulk API 2.0** - new `RuntimeSpec` path with a poll loop (create → upload CSV → close → poll → fetch success/failed results); the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
-2. **Tier 2 - Salesforce auth Connection** - both `src.salesforce` and this sink are Bearer-token-only (no minting or refresh; the token expires ~2h). A first-class Salesforce Connection that stores Client-Credentials (key/secret) or a JWT cert and mints + refreshes the token would upgrade the source and the sink at once. Duckle already has a Connection concept (`create_connection`/`list_connections`).
+2. **Salesforce auth: OAuth Client-Credentials** - *shipped (#166).* Both `src.salesforce` and this sink now offer a client-credentials `authMode`: the engine mints a fresh short-lived token per run from `clientId`/`clientSecret`/`loginUrl` (`{loginUrl}/services/oauth2/token`) instead of a pasted ~2h Bearer token. Follow-ups: (a) a first-class *saved, encrypted* Salesforce Connection kind so the node stores a connection-ref rather than inline `${ENV:}` credentials (Duckle already has `create_connection`/`list_connections`); (b) JWT-bearer + 401-retry/refresh.
 3. **Tier 3** - reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
 
 ## Contribution checklist (per CONTRIBUTING.md)

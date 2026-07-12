@@ -32,6 +32,76 @@ pub(crate) fn render_text_template(template: &str, row: &serde_json::Value) -> S
     .into_owned()
 }
 
+/// Mint a fresh Salesforce access token via the OAuth 2.0 client-credentials
+/// grant (#166). POSTs a form-encoded `grant_type=client_credentials` (plus the
+/// connected-app client id/secret) to `{login_url}/services/oauth2/token` and
+/// returns `(access_token, instance_url)` from the JSON response. A fresh
+/// short-lived token per run replaces the pre-minted ~2h Bearer token users
+/// otherwise re-paste, and because source and sink each mint from their own
+/// connection, org-to-org migration (read Org A, write Org B) works out of the
+/// box.
+pub(crate) fn mint_salesforce_token(
+    login_url: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<(String, String), EngineError> {
+    let url = format!(
+        "{}/services/oauth2/token",
+        login_url.trim_end_matches('/')
+    );
+    let resp = crate::tls::http_agent()
+        .post(&url)
+        .set("Accept", "application/json")
+        .send_form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+        ]);
+    let txt = match resp {
+        Ok(r) => r.into_string().unwrap_or_default(),
+        Err(ureq::Error::Status(code, r)) => {
+            let b = r.into_string().unwrap_or_default();
+            return Err(EngineError::Query(format!(
+                "salesforce OAuth: token endpoint HTTP {} from {}: {}",
+                code,
+                url,
+                b.chars().take(300).collect::<String>()
+            )));
+        }
+        Err(e) => {
+            return Err(EngineError::Query(format!(
+                "salesforce OAuth: token endpoint transport to {}: {}",
+                url, e
+            )));
+        }
+    };
+    let v: JsonValue = serde_json::from_str(&txt).map_err(|e| {
+        EngineError::Query(format!(
+            "salesforce OAuth: token endpoint returned non-JSON ({}): {}",
+            e,
+            txt.chars().take(200).collect::<String>()
+        ))
+    })?;
+    let access = v
+        .get("access_token")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if access.is_empty() {
+        return Err(EngineError::Query(format!(
+            "salesforce OAuth: token endpoint response missing access_token: {}",
+            txt.chars().take(200).collect::<String>()
+        )));
+    }
+    let instance = v
+        .get("instance_url")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string();
+    Ok((access, instance))
+}
+
 impl DuckdbEngine {
     /// Relational-DB upsert. DuckDB's ATTACH doesn't propagate the
     /// target's UNIQUE / PRIMARY KEY constraints, so a native DuckDB
@@ -368,11 +438,34 @@ impl DuckdbEngine {
             return Ok(format!("salesforce: 0 rows to {} {}", spec.operation, spec.object));
         }
 
+        // #166: in OAuth client-credentials mode, mint a fresh token per run and
+        // prefer the token response's instance_url; otherwise use the static
+        // Bearer token + configured instanceUrl.
+        let (access_token, instance_url) = match &spec.oauth {
+            Some(o) => {
+                let (tok, minted_instance) =
+                    mint_salesforce_token(&o.login_url, &o.client_id, &o.client_secret)?;
+                let instance = if !minted_instance.is_empty() {
+                    minted_instance
+                } else if !spec.instance_url.is_empty() {
+                    spec.instance_url.clone()
+                } else {
+                    return Err(EngineError::Config(
+                        "salesforce: OAuth token response carried no instance_url and no \
+                         instanceUrl was configured"
+                            .into(),
+                    ));
+                };
+                (tok, instance)
+            }
+            None => (spec.access_token.clone(), spec.instance_url.clone()),
+        };
         let base = format!(
             "{}/services/data/{}/composite/sobjects",
-            spec.instance_url, spec.api_version
+            instance_url.trim_end_matches('/'),
+            spec.api_version
         );
-        let auth_header = format!("Bearer {}", spec.access_token);
+        let auth_header = format!("Bearer {}", access_token);
         let all_or_none = spec.all_or_none;
 
         // Build the (method, url, body) for one chunk of upstream rows.
@@ -7412,15 +7505,24 @@ impl DuckdbEngine {
         // are reused across pages instead of a fresh TCP+TLS handshake each
         // request (ureq::request uses a throwaway agent per call).
         let agent = crate::tls::http_agent();
+        // #166: src.salesforce OAuth client-credentials. Mint a fresh token once
+        // per run and inject it as the Authorization header (replacing any static
+        // one), so the whole pagination walk uses the same short-lived token.
+        let mut eff_headers = spec.headers.clone();
+        if let Some(o) = &spec.oauth {
+            let (token, _instance) =
+                mint_salesforce_token(&o.login_url, &o.client_id, &o.client_secret)?;
+            eff_headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+            eff_headers.push(("Authorization".into(), format!("Bearer {}", token)));
+        }
         loop {
             self.check_cancelled()?;
             // Build request
             let mut req = agent.request(&spec.method, &url);
-            let has_ct = spec
-                .headers
+            let has_ct = eff_headers
                 .iter()
                 .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
-            for (k, v) in &spec.headers {
+            for (k, v) in &eff_headers {
                 req = req.set(k, v);
             }
             if spec.body.is_some() && !has_ct {

@@ -356,7 +356,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Object storage** | S3, GCS, Azure Blob via DuckDB `httpfs` (MinIO / R2 / B2 via endpoint) | Available |
 | **Cloud warehouses** | MotherDuck, Snowflake (PAT or JWT RS256; **upsert** + delete propagation via MERGE), BigQuery, Redshift, Databricks SQL (**upsert** + delete propagation via MERGE), Azure Synapse, **Teradata** (ODBC), **DuckDB Quack** (concurrent writers to remote DuckDB via the May 2026 protocol) | Available (Snowflake MERGE verified live against the SQL-API emulator) |
 | **HTTP APIs** | REST (POST/PUT/PATCH batched JSON-array; configurable API-key auth header name), Webhook (one POST per row), GraphQL mutations | Available |
-| **SaaS / CRM** | Salesforce (`snk.salesforce`) - sObject Collections API: **insert / update / upsert (by external Id) / delete**, ≤200 records/request, Bearer OAuth token (same auth as `src.salesforce`). Bulk API 2.0 for migration-scale loads is planned | Available |
+| **SaaS / CRM** | Salesforce (`snk.salesforce`) - sObject Collections API: **insert / update / upsert (by external Id) / delete**, ≤200 records/request, Bearer token or OAuth 2.0 client-credentials (fresh token minted per run, same auth as `src.salesforce`). Bulk API 2.0 for migration-scale loads is planned | Available |
 | **Email (SMTP)** | Per-row SMTP send via pure-Rust `lettre` + rustls. Plain text v1; HTML + attachments follow. | Available |
 | **NoSQL** | MongoDB (insert_many batched; **upsert** via replace_one on a key, plus delete propagation via delete_one), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (`_bulk` NDJSON), Redis (pipelined SET) | Available |
 | **NoSQL** | DynamoDB | Planned |
