@@ -8720,188 +8720,36 @@
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Request",
+            "label": "Listener",
             "fields": [
               {
-                "key": "url",
-                "label": "URL",
-                "kind": "text",
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
                 "required": true,
-                "placeholder": "https://api.example.com/v1/resource"
+                "placeholder": "8000",
+                "description": "Binds 127.0.0.1 on this port (1-65535). Point a tunnel (ngrok / cloudflared) at it for public reach."
               },
               {
-                "key": "method",
-                "label": "Method",
-                "kind": "select",
-                "defaultValue": "GET",
-                "options": [
-                  {
-                    "label": "GET",
-                    "value": "GET"
-                  },
-                  {
-                    "label": "POST",
-                    "value": "POST"
-                  },
-                  {
-                    "label": "PUT",
-                    "value": "PUT"
-                  },
-                  {
-                    "label": "DELETE",
-                    "value": "DELETE"
-                  }
-                ]
-              },
-              {
-                "key": "headers",
-                "label": "Headers",
-                "kind": "key-value"
-              },
-              {
-                "key": "body",
-                "label": "Request body",
-                "kind": "textarea",
-                "rows": 4
-              }
-            ]
-          },
-          {
-            "label": "Auth",
-            "fields": [
-              {
-                "key": "authType",
-                "label": "Auth type",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Bearer token",
-                    "value": "bearer"
-                  },
-                  {
-                    "label": "API key (header)",
-                    "value": "apikey"
-                  }
-                ]
-              },
-              {
-                "key": "authToken",
-                "label": "Token / API key",
-                "kind": "text",
-                "placeholder": "••••••••"
-              },
-              {
-                "key": "authHeader",
-                "label": "API key header",
-                "kind": "text",
-                "placeholder": "X-API-Key",
-                "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
-              }
-            ]
-          },
-          {
-            "label": "Response",
-            "fields": [
-              {
-                "key": "responsePath",
-                "label": "Records JSON pointer",
-                "kind": "text",
-                "placeholder": "/data",
-                "description": "RFC 6901 JSON pointer to the array of row objects in the response. Leave empty if the response root IS the array."
-              },
-              {
-                "key": "jsonPath",
-                "label": "Records JSONPath (legacy)",
-                "kind": "text",
-                "placeholder": "$.data[*]",
-                "description": "JSONPath form for compatibility with older pipelines. Prefer the JSON pointer above."
-              }
-            ]
-          },
-          {
-            "label": "Pagination",
-            "fields": [
-              {
-                "key": "paginationType",
-                "label": "Style",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None (single-shot fetch)",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Cursor (token in response body)",
-                    "value": "cursor"
-                  },
-                  {
-                    "label": "Offset / limit",
-                    "value": "offset"
-                  },
-                  {
-                    "label": "Page number",
-                    "value": "page"
-                  },
-                  {
-                    "label": "RFC 5988 Link header (rel=\"next\")",
-                    "value": "link"
-                  }
-                ]
-              },
-              {
-                "key": "cursorNextPath",
-                "label": "Cursor JSON pointer (cursor style)",
-                "kind": "text",
-                "placeholder": "/meta/next_cursor"
-              },
-              {
-                "key": "cursorParam",
-                "label": "Cursor query parameter (cursor style)",
-                "kind": "text",
-                "placeholder": "cursor"
-              },
-              {
-                "key": "offsetParam",
-                "label": "Offset query parameter (offset style)",
-                "kind": "text",
-                "placeholder": "offset"
-              },
-              {
-                "key": "pageSize",
-                "label": "Page size (offset style)",
+                "key": "maxRequests",
+                "label": "Max requests",
                 "kind": "integer",
-                "defaultValue": 100
+                "defaultValue": 1,
+                "description": "Collect this many inbound requests, then close the listener."
               },
               {
-                "key": "totalCountPath",
-                "label": "Total-count JSON pointer (offset style)",
-                "kind": "text",
-                "placeholder": "/total_count",
-                "description": "Optional. JSON pointer to a total-row count in the response (e.g. /total_count for Redmine). When set, offset paging stops once offset + page size reaches the total, instead of relying on a short page."
-              },
-              {
-                "key": "pageParam",
-                "label": "Page query parameter (page style)",
-                "kind": "text",
-                "placeholder": "page"
-              },
-              {
-                "key": "startPage",
-                "label": "Start page (page style)",
+                "key": "timeoutMs",
+                "label": "Timeout (ms)",
                 "kind": "integer",
-                "defaultValue": 1
+                "defaultValue": 30000,
+                "description": "Global deadline for the whole collection window."
               },
               {
-                "key": "maxPages",
-                "label": "Max pages (safety cap)",
-                "kind": "integer",
-                "defaultValue": 100
+                "key": "pathFilter",
+                "label": "Path filter",
+                "kind": "text",
+                "placeholder": "/webhook",
+                "description": "Optional. Only requests whose URL starts with this path count toward Max requests; others get a 404."
               }
             ]
           }

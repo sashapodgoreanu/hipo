@@ -2319,6 +2319,51 @@ function synthStreamingSink(comp: ComponentDef): ComponentManifest {
     );
 }
 
+// src.webhook is a local HTTP listener, not an outbound REST call, so it
+// cannot share the generic API-source form (url / method / pagination /
+// auth). Without its own field set it fell through to synthApiSource and the
+// panel never surfaced `port`, so saved nodes carried REST props instead and
+// the engine rejected them with "port required" (issue #162). Field keys and
+// defaults mirror the engine's WebhookSourceSpec parse in plan/mod.rs.
+function synthWebhookSource(comp: ComponentDef): ComponentManifest {
+    return base(comp, [
+        {
+            label: 'Listener',
+            fields: [
+                {
+                    key: 'port',
+                    label: 'Port',
+                    kind: 'integer',
+                    required: true,
+                    placeholder: '8000',
+                    description: 'Binds 127.0.0.1 on this port (1-65535). Point a tunnel (ngrok / cloudflared) at it for public reach.',
+                },
+                {
+                    key: 'maxRequests',
+                    label: 'Max requests',
+                    kind: 'integer',
+                    defaultValue: 1,
+                    description: 'Collect this many inbound requests, then close the listener.',
+                },
+                {
+                    key: 'timeoutMs',
+                    label: 'Timeout (ms)',
+                    kind: 'integer',
+                    defaultValue: 30000,
+                    description: 'Global deadline for the whole collection window.',
+                },
+                {
+                    key: 'pathFilter',
+                    label: 'Path filter',
+                    kind: 'text',
+                    placeholder: '/webhook',
+                    description: 'Optional. Only requests whose URL starts with this path count toward Max requests; others get a 404.',
+                },
+            ],
+        },
+    ]);
+}
+
 function synthApiSource(comp: ComponentDef): ComponentManifest {
     return base(comp, [
         ...(comp.id === 'src.sap'
@@ -5659,6 +5704,9 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Id-specific dispatch for components whose palette group has no dedicated
     // synth path (e.g. xf.dbt sits in the Custom Code section).
     if (componentId === 'xf.dbt') return synthDbt(comp);
+    // src.webhook is a local listener, not a REST call, so it needs its own
+    // form rather than the generic src.apis one (issue #162).
+    if (componentId === 'src.webhook') return synthWebhookSource(comp);
 
     // Sources
     if (groupId === 'src.files') return synthFileSource(comp);
