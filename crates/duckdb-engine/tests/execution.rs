@@ -11253,3 +11253,61 @@ fn snk_salesforce_record_error_fails_run() {
         err
     );
 }
+
+#[test]
+fn snk_salesforce_update_remaps_idfield() {
+    // A non-default idField ("CrmId") must be mapped onto the record's `Id`
+    // key; sObject Collections update rejects records with no Id.
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx, handle) = sf_mock_server(
+        r#"[{"id":"001000000000001","success":true,"errors":[]},{"id":"001000000000002","success":true,"errors":[]}]"#,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "CrmId,Name\n001000000000001,Acme\n001000000000002,Globex\n",
+    );
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "apiVersion": "v60.0",
+                    "object": "Account",
+                    "operation": "update",
+                    "idField": "CrmId"
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "salesforce update failed: {:?}", r.error);
+
+    let req = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected 1 SF request");
+    let _ = handle.join();
+    let raw = String::from_utf8_lossy(&req);
+    let line0 = raw.lines().next().unwrap_or("");
+    assert!(line0.starts_with("PATCH "), "expected PATCH, got: {}", line0);
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    let v: Value = serde_json::from_str(body).expect("body should be JSON");
+    let recs = v["records"].as_array().expect("records array");
+    assert_eq!(recs.len(), 2);
+    // The configured id column is mapped onto `Id`, and its original key is gone.
+    assert_eq!(recs[0]["Id"], json!("001000000000001"));
+    assert!(
+        recs[0].get("CrmId").is_none(),
+        "raw id column should be renamed to Id, got: {}",
+        recs[0]
+    );
+    assert_eq!(recs[0]["attributes"]["type"], json!("Account"));
+}

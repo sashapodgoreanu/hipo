@@ -398,10 +398,32 @@ impl DuckdbEngine {
                 }
                 op => {
                     // insert / update / upsert share the records-array body.
+                    // sObject Collections update keys each record on `Id`, so a
+                    // non-default idField column is mapped onto `Id` here (delete
+                    // keys off id_field via the query string; upsert keys off the
+                    // external-id field in the URL). Without this, update with a
+                    // non-"Id" id column emits records with no Id and Salesforce
+                    // rejects every one.
                     let records: Vec<JsonValue> = chunk
                         .iter()
-                        .map(|row| salesforce_record_envelope(row, &spec.object))
-                        .collect();
+                        .map(|row| {
+                            let mut rec = salesforce_record_envelope(row, &spec.object);
+                            if op == "update" && spec.id_field != "Id" {
+                                if let Some(obj) = rec.as_object_mut() {
+                                    match obj.remove(&spec.id_field).filter(|v| !v.is_null()) {
+                                        Some(id) => {
+                                            obj.insert("Id".into(), id);
+                                        }
+                                        None => return Err(EngineError::Query(format!(
+                                            "salesforce update: row missing id field '{}'",
+                                            spec.id_field
+                                        ))),
+                                    }
+                                }
+                            }
+                            Ok(rec)
+                        })
+                        .collect::<Result<_, _>>()?;
                     let mut body = serde_json::Map::new();
                     body.insert("allOrNone".into(), JsonValue::Bool(all_or_none));
                     body.insert("records".into(), JsonValue::Array(records));
