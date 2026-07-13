@@ -419,6 +419,15 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
             if let Err(e) = duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes) {
                 return respond_err(stream, "400 Bad Request", &e);
             }
+            // Same placeholder resolution as /api/run (execute_one) and the
+            // desktop: expand ${ENV:KEY} secrets - so a connection field stored as
+            // ${ENV:...} still resolves after ref injection (#166 stage 2) - and the
+            // ${date}/${datetime} builtins, before the workspace-context pass.
+            let env_file = state.workspace.join("secrets.env");
+            if let Err(e) = crate::apply_env_pass(&mut doc, &state.workspace, &env_file) {
+                return respond_err(stream, "400 Bad Request", &e);
+            }
+            duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
             let _guard = state.run_lock.lock().unwrap_or_else(|p| p.into_inner());
@@ -531,6 +540,15 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
     if let Err(e) = duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes) {
         return respond_err(stream, "400 Bad Request", &e);
     }
+    // Same placeholder resolution as /api/run (execute_one) and the desktop:
+    // expand ${ENV:KEY} secrets - so a connection field stored as ${ENV:...}
+    // still resolves after ref injection (#166 stage 2) - and the
+    // ${date}/${datetime} builtins, before the workspace-context pass.
+    let env_file = state.workspace.join("secrets.env");
+    if let Err(e) = crate::apply_env_pass(&mut doc, &state.workspace, &env_file) {
+        return respond_err(stream, "400 Bad Request", &e);
+    }
+    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
     duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
     let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
     // Optional run-to-here target: when set, the engine runs only the subgraph
