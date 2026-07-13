@@ -222,7 +222,7 @@
       <div class="sub" style="margin-bottom:14px">Run a pipeline on an interval. The console runs schedules itself while it is open.</div>
       <div class="card" style="padding:0;overflow:hidden">
         <table>
-          <thead><tr><th>Pipeline</th><th>Last status</th><th>Schedule</th><th></th></tr></thead>
+          <thead><tr><th>Pipeline</th><th>Status</th><th>Next run</th><th>Schedule</th><th></th></tr></thead>
           <tbody id="sched-body"></tbody>
         </table>
       </div>
@@ -397,9 +397,14 @@ function renderSchedules(){
   $('sched-empty').classList.toggle('hidden', PIPES.length>0);
   $('sched-body').innerHTML=PIPES.map(p=>{
     const sc=p.schedule||{};
+    // Live status: while a run is in flight (scheduled or "Run now") the console
+    // marks the pipeline running; otherwise show its last outcome (discussion #155).
+    const eff=p.running?'running':p.lastStatus;
+    const nextHtml=p.running?'<span class="col-v">running now</span>':`<span class="col-v">${relFuture(p.nextRunAt)}</span>`;
     return `<tr>
       <td><b>${esc(p.name||p.id)}</b><div class="job-file">${esc(p.file)}</div></td>
-      <td>${p.lastStatus?pill(p.lastStatus):'<span class="muted">never</span>'}</td>
+      <td>${eff?pill(eff):'<span class="muted">never</span>'}<div class="col-k">${relTime(p.lastAt)}</div></td>
+      <td>${nextHtml}</td>
       <td><label class="muted" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="en-${esc(p.id)}" ${sc.enabled?'checked':''}> every</label>
         <input type="number" min="0" id="iv-${esc(p.id)}" value="${sc.intervalMinutes||0}"> min
         <span class="muted" style="margin:0 4px">or cron</span>
