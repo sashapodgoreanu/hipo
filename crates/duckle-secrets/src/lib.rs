@@ -62,7 +62,7 @@ pub fn workspace_key(workspace: &Path, create: bool) -> Result<[u8; 32], String>
         return Err("no workspace key".into());
     }
     let mut k = [0u8; 32];
-    getrandom::getrandom(&mut k).map_err(|e| format!("key rng: {}", e))?;
+    getrandom::fill(&mut k).map_err(|e| format!("key rng: {}", e))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create keys dir: {}", e))?;
     }
@@ -94,7 +94,7 @@ pub fn is_encrypted(s: &str) -> bool {
 pub fn encrypt_value(key: &[u8; 32], plaintext: &str) -> Result<String, String> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("cipher init: {}", e))?;
     let mut nonce_bytes = [0u8; 12];
-    getrandom::getrandom(&mut nonce_bytes).map_err(|e| format!("nonce rng: {}", e))?;
+    getrandom::fill(&mut nonce_bytes).map_err(|e| format!("nonce rng: {}", e))?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_bytes())
         .map_err(|e| format!("encrypt: {}", e))?;

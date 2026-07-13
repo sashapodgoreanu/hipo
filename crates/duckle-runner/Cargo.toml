@@ -26,7 +26,7 @@ cron = { workspace = true }
 aes-gcm = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
-getrandom = "0.2"
+getrandom = "0.3"
 ed25519-dalek = "2"
 # Self-extracting artifact payload (single-file build output). deflate-only
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.

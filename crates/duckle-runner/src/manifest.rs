@@ -55,7 +55,7 @@ fn signing_key(workspace: &Path) -> Result<SigningKey, String> {
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("create keys dir: {e}"))?;
     let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).map_err(|e| format!("generate key: {e}"))?;
+    getrandom::fill(&mut seed).map_err(|e| format!("generate key: {e}"))?;
     std::fs::write(&key_path, seed).map_err(|e| format!("write signing key: {e}"))?;
     let sk = SigningKey::from_bytes(&seed);
     let _ = std::fs::write(dir.join("manifest.pub"), B64.encode(sk.verifying_key().to_bytes()));

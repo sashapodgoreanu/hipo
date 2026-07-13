@@ -4160,7 +4160,7 @@ dependencies = [
  "duckle-duckdb-engine",
  "duckle-secrets",
  "ed25519-dalek",
- "getrandom 0.2.17",
+ "getrandom 0.3.4",
  "regex",
  "serde",
  "serde_json",
@@ -4207,7 +4207,7 @@ dependencies = [
  "base64 0.22.1",
  "duckle-duckdb-engine",
  "duckle-metadata",
- "getrandom 0.2.17",
+ "getrandom 0.3.4",
  "serde_json",
  "tempfile",
 ]

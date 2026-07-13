@@ -940,7 +940,7 @@ fn encrypt_secrets(key_map: &[(String, String)]) -> Result<String, String> {
     let key = Sha256::digest(passphrase.as_bytes());
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("cipher init: {}", e))?;
     let mut nonce_bytes = [0u8; 12];
-    getrandom::getrandom(&mut nonce_bytes).map_err(|e| format!("nonce: {}", e))?;
+    getrandom::fill(&mut nonce_bytes).map_err(|e| format!("nonce: {}", e))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plain.as_bytes())

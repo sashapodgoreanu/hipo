@@ -190,7 +190,7 @@ pub fn extract_to_cache(payload: &[u8]) -> Result<PathBuf, String> {
     }
 
     let mut rand = [0u8; 8];
-    getrandom::getrandom(&mut rand).map_err(|e| format!("rand: {}", e))?;
+    getrandom::fill(&mut rand).map_err(|e| format!("rand: {}", e))?;
     let tmp = std::env::temp_dir().join(format!(
         "duckle-artifact-{key}-tmp-{}-{}",
         std::process::id(),
