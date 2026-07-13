@@ -60,6 +60,25 @@ const EMBEDDED_LANCE: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_LANCE"));
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // #169: on Linux the webview is webkitgtk, whose GTK/GDK stack crashes at
+    // startup on several Wayland compositors - reported on KDE Plasma 6 with the
+    // NVIDIA proprietary driver - with "Error 71 (Protocol error) dispatching to
+    // Wayland display", so the window never opens. Route the toolkit through
+    // XWayland, and disable webkit's DMA-BUF renderer (which separately blanks
+    // the window on NVIDIA + newer webkitgtk). Both respect an explicit user
+    // override, and must be set before GTK initializes (before the builder).
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some()
+            && std::env::var_os("GDK_BACKEND").is_none()
+        {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
