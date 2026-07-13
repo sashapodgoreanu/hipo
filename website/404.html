@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not found - Duckle</title>
+<meta name="robots" content="noindex, follow">
+<meta name="theme-color" content="#07090f">
+<link rel="icon" type="image/svg+xml" href="/assets/img/duckle-mark.v4.svg">
+<style>
+  :root{--bg:#07090f;--card:#0d111b;--line:#1b2130;--text:#eef2f8;--muted:#96a4b6;--accent:#ff7a28;}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:radial-gradient(1200px 600px at 85% -10%, rgba(255,122,40,.12), transparent 60%),var(--bg);
+    color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
+    display:flex;align-items:center;justify-content:center;min-height:100%;padding:24px;text-align:center;}
+  .wrap{max-width:560px}
+  .brand{display:inline-flex;align-items:center;gap:12px;margin-bottom:28px}
+  .brand img{width:40px;height:40px}
+  .brand span{font-size:26px;font-weight:800;letter-spacing:-.02em}
+  .code{font-size:88px;font-weight:800;line-height:1;letter-spacing:-.03em;
+    background:linear-gradient(180deg,#ffd44d,var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;margin:0}
+  h1{font-size:24px;font-weight:700;margin:14px 0 8px}
+  p{color:var(--muted);font-size:16px;line-height:1.6;margin:0 auto 26px;max-width:440px}
+  .row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  a.btn{display:inline-block;padding:11px 20px;border-radius:10px;font-weight:600;text-decoration:none;font-size:15px}
+  a.primary{background:var(--accent);color:#1a0f06}
+  a.ghost{border:1px solid var(--line);color:var(--text)}
+  a.ghost:hover{border-color:var(--accent)}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <a class="brand" href="/"><img src="/assets/img/duckle-mark.v4.svg" alt="Duckle"><span>Duckle</span></a>
+    <p class="code">404</p>
+    <h1>This page could not be found</h1>
+    <p>The page you were looking for does not exist or has moved. Duckle is an open-source, local-first ETL/ELT studio built on DuckDB.</p>
+    <div class="row">
+      <a class="btn primary" href="/">Back to home</a>
+      <a class="btn ghost" href="/docs/index.html">Documentation</a>
+      <a class="btn ghost" href="https://github.com/slothflowlabs/duckle">GitHub</a>
+    </div>
+  </main>
+</body>
+</html>

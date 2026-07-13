@@ -4,7 +4,7 @@
 
 <h3>The local-first data studio with a built-in AI assistant.</h3>
 
-<p><b>Duckle</b> is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, describe what you need in plain English to <b>Duckie</b> (the on-device AI assistant), and execute at native speed through DuckDB. 290+ connectors, 50+ transforms, a built-in scheduler, and a chat assistant that runs entirely on your CPU. Ships as a ~65 MB single-file desktop app. No cloud, no servers, no lock-in.</p>
+<p><b>Duckle</b> is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, describe what you need in plain English to <b>Duckie</b> (the on-device AI assistant), and execute at native speed through DuckDB. 360+ components, a built-in scheduler, and a chat assistant that runs entirely on your CPU. Ships as a ~65 MB single-file desktop app. No cloud, no servers, no lock-in.</p>
 
 <a href="https://duckle.org/"><img src="docs/assets/ingest-seconds-benchmark.png" alt="Benchmark: loading a 20M-row CSV into DuckDB at each tool's best config. Duckle 15.69s, dlt 40.68s, Talend bulk 90s, Informatica bulk 100s, ingestr 411s, Airbyte about 1150s." width="820"/></a>
 
@@ -19,7 +19,7 @@
 <img alt="react" src="https://img.shields.io/badge/React%2019-20232A?logo=react&logoColor=61DAFB"/>
 <img alt="typescript" src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white"/>
 <img alt="duckdb" src="https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black"/>
-<img alt="stars" src="https://img.shields.io/github/stars/ducklelabs/duckle?style=social"/>
+<img alt="stars" src="https://img.shields.io/github/stars/slothflowlabs/duckle?style=social"/>
 </p>
 
 </div>
@@ -73,12 +73,12 @@
 **Reference**
 
 - [Capabilities matrix](#capabilities)
-- [Sources](#sources-74-available)
-- [Transforms](#transforms-126-available)
-- [Sinks](#sinks-59-available)
-- [Data quality](#data-quality-12-available)
-- [Custom code](#custom-code-7-available)
-- [Control flow](#control-flow-19-available)
+- [Sources](#sources-101-available)
+- [Transforms](#transforms-130-available)
+- [Sinks](#sinks-63-available)
+- [Data quality](#data-quality-27-available)
+- [Custom code](#custom-code-6-available)
+- [Control flow](#control-flow-18-available)
 - [Advanced settings](#advanced-settings-per-node)
 - [Engines](#engines)
 - [Configuration](#configuration)
@@ -99,7 +99,7 @@
 - [Contributing](#contributing)
 - [Sponsor Duckle](SPONSORS.md)
 - [License](#license)
-- [Releases](https://github.com/ducklelabs/duckle/releases)
+- [Releases](https://github.com/slothflowlabs/duckle/releases)
 - [Roadmap doc](docs/roadmap.md)
 - [Contributing doc](CONTRIBUTING.md)
 
@@ -116,7 +116,7 @@ A visual data pipeline studio that runs on your laptop. Drag sources, transforms
 Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs locally - no API key, no telemetry, no cloud round-trip.
-2. **290+ connectors at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **345 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** ~65 MB download. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -140,7 +140,7 @@ Fixes: Shapefile export now writes the `.prj` file from REST / JSON sources as w
 
 Under the hood: the embedded sidecar binaries are now zstd-compressed for a smaller download.
 
-Full notes: see the [v0.5.5 release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.5).
+Full notes: see the [v0.5.5 release](https://github.com/slothflowlabs/duckle/releases/tag/v0.5.5).
 
 ---
 
@@ -173,7 +173,7 @@ The sidebar on the right is **Duckie AI Assistant** - powered by **Qwen 2.5 Code
 | **Single-file binary, no bundled DB** | ~65 MB app (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **290+ connectors that work** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **345 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -211,11 +211,11 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 **Scope, stated plainly:** Duckle is a single-machine, embedded studio. If you outgrow one box, point Duckle's output at the system that scales (a warehouse, an object store, a lakehouse). It will not pretend to be a cluster.
 
-The component palette ships **330 nodes** so the roadmap is visible in the product itself:
+The component palette ships **363 nodes** so the roadmap is visible in the product itself:
 
-- **309 available** runs on the DuckDB engine today
-- **5 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
-- **16 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
+- **345 available** runs on the DuckDB engine today
+- **3 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
+- **15 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
 ---
 
@@ -257,7 +257,7 @@ Real pipelines, built and run in Duckle - not mockups.
 
 Duckle is not a CSV tool with extras. It reads a broad set of formats and sources, ships a deep transform library, and writes to files, databases, object storage, vector DBs, message buses, and email.
 
-### Sources (74 available)
+### Sources (101 available)
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -287,7 +287,7 @@ For CSV / TSV sources, the **Schema** panel accepts an optional per-column **For
 
 For JSON sources, a **Format** selector picks how the file is read (auto / array / JSON Lines / object), and a **skip malformed records** toggle drops records that fail to parse instead of failing the run.
 
-### Transforms (126 available)
+### Transforms (130 available)
 
 | Group | Operations |
 |---|---|
@@ -310,7 +310,7 @@ For JSON sources, a **Format** selector picks how the file is read (auto / array
 
 > **All 6 AI transforms ship today.** Three need a model API (LLM, Classify, Embeddings) and ride the apiKey-in-props pattern; three are pure-local (Chunk, PII Redact, Dedupe).
 
-### Data quality (12 available)
+### Data quality (27 available)
 
 Validators split their input: passing rows continue on the main port, failures route to a **reject** port you can sink, count, or inspect.
 
@@ -329,7 +329,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Record Match** | Self-join: emit pairs of rows above a similarity threshold |
 | **Address Cleanse** | Address parsing / normalization (planned - needs external lib) |
 
-### Custom code (7 available)
+### Custom code (6 available)
 
 | Capability | What it does |
 |---|---|
@@ -342,7 +342,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **JavaScript UDF** | Per-row JS transform via pure-Rust `boa` interpreter. Sandboxed. Define a `transform(row)` function. |
 | **Python / Rust UDFs** | Embedded-language stages | Planned |
 
-### Sinks (59 available)
+### Sinks (63 available)
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -367,7 +367,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 Database sinks support an optional **dead-letter (validate-before-insert)** step: rows that do not match the declared column types are split off to a dead-letter file (parquet / csv / json) and only the clean rows are inserted.
 
-### Control flow (19 available)
+### Control flow (18 available)
 
 | Component | What it does |
 |---|---|
@@ -459,7 +459,7 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/ducklelabs/duckle/releases/tag/v0.5.5):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.5.5):
 
 | OS | Asset | How to run |
 |---|---|---|
@@ -547,10 +547,10 @@ A wider tour of the workflow.
 
 | Step | What you do | Where to look |
 |---|---|---|
-| **1. Sources** | Drag a source, point it at a file / DB / cloud URL / SaaS endpoint. Click **Autodetect schema** to read columns + a sample. | [Sources reference](#sources-74-available) |
-| **2. Transforms** | Wire transforms to source output ports. Configure in the Properties panel. **Preview** tab shows live rows; **Plan** tab shows generated SQL. | [Transforms reference](#transforms-126-available) |
-| **3. Data quality** | Drop in a validator (Not-Null, Range, Regex, Uniqueness). Passing rows continue on the main port; failures route to the **reject** port. | [Data quality reference](#data-quality-12-available) |
-| **4. Sinks** | Finish with a sink (file, DB, cloud, vector DB, message bus, email). Set write mode (overwrite, append, truncate, upsert). | [Sinks reference](#sinks-59-available) |
+| **1. Sources** | Drag a source, point it at a file / DB / cloud URL / SaaS endpoint. Click **Autodetect schema** to read columns + a sample. | [Sources reference](#sources-101-available) |
+| **2. Transforms** | Wire transforms to source output ports. Configure in the Properties panel. **Preview** tab shows live rows; **Plan** tab shows generated SQL. | [Transforms reference](#transforms-130-available) |
+| **3. Data quality** | Drop in a validator (Not-Null, Range, Regex, Uniqueness). Passing rows continue on the main port; failures route to the **reject** port. | [Data quality reference](#data-quality-27-available) |
+| **4. Sinks** | Finish with a sink (file, DB, cloud, vector DB, message bus, email). Set write mode (overwrite, append, truncate, upsert). | [Sinks reference](#sinks-63-available) |
 | **5. Run** | Press **Run** to execute on DuckDB. Nodes light up stage by stage; **Output** + **Console** show row counts, timing, errors. Stop button kills mid-run. | [Run feedback](#orchestration-and-workspace) |
 | **6. Ask Duckie** | For anything you can describe in English, the AI assistant can sketch a pipeline. Iterate by editing the graph or asking follow-ups. | [Meet Duckie](#meet-duckie---the-local-ai-pipeline-assistant) |
 | **7. Reuse** | Save Connections, Context variables, and SQL Routines in the workspace; reference `${context.var}` in any field. Everything persists as plain files. | [Workspace and Git flow](#workspace-and-git-flow) |
@@ -924,7 +924,7 @@ Pick the active context from the topbar's **Context** dropdown. Switch contexts 
 **Clone and install**
 
 ```bash
-git clone https://github.com/ducklelabs/duckle
+git clone https://github.com/slothflowlabs/duckle
 cd duckle
 npm --prefix frontend install
 ```
@@ -1132,7 +1132,7 @@ See the [Contributing](#contributing) section and `crates/duckdb-engine/src/plan
 | **TLS "UnknownIssuer" / "invalid peer certificate" behind a corporate proxy** | A TLS-inspecting proxy (Zscaler, Netskope, ...) re-signs traffic with its own CA | Duckle trusts your OS certificate store on top of its bundled roots, so the proxy CA in the Windows / macOS / Linux store is honoured automatically. If the CA isn't in the store, point `DUCKLE_CA_CERT` at a PEM file containing it. Note: DuckDB's own extension fetch (`extensions.duckdb.org`) and cloud reads (S3 / GCS / Azure) run inside the DuckDB engine with its own TLS, so also allow / exempt `extensions.duckdb.org` from inspection. |
 | **REST / cloud calls fail with "Connection Failed" / timeout (os error 10060)** behind a proxy | The network requires an HTTP proxy to reach the internet, and Duckle is connecting directly | Set `HTTPS_PROXY` (and `HTTP_PROXY`) to your proxy URL, e.g. `http://user:pass@proxy:8080`, before launching Duckle - REST / cloud connectors and the updater now route through it. Use `DUCKLE_HTTPS_PROXY` if you want a Duckle-only proxy without changing global env. |
 
-If you see something not listed, please [open an issue](https://github.com/ducklelabs/duckle/issues) with steps to reproduce + the relevant log line.
+If you see something not listed, please [open an issue](https://github.com/slothflowlabs/duckle/issues) with steps to reproduce + the relevant log line.
 
 ---
 
@@ -1215,18 +1215,18 @@ Thanks goes to these wonderful people who contribute to Duckle ([emoji key](http
 <table>
   <tbody>
     <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mitslabo"><img src="https://avatars.githubusercontent.com/u/176633224?v=4?s=100" width="100px;" alt="mits"/><br /><sub><b>mits</b></sub></a><br /><a href="#infra-mitslabo" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=mitslabo" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ABChristian"><img src="https://avatars.githubusercontent.com/u/4749931?v=4?s=100" width="100px;" alt="Christian"/><br /><sub><b>Christian</b></sub></a><br /><a href="#ideas-ABChristian" title="Ideas, Planning, & Feedback">🤔</a> <a href="https://github.com/ducklelabs/duckle/commits?author=ABChristian" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=ABChristian" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/gmacc00"><img src="https://avatars.githubusercontent.com/u/46499110?v=4?s=100" width="100px;" alt="gmacc00"/><br /><sub><b>gmacc00</b></sub></a><br /><a href="#infra-gmacc00" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=gmacc00" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=gmacc00" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/stephaneheckel"><img src="https://avatars.githubusercontent.com/u/206326846?v=4?s=100" width="100px;" alt="Stéphane Heckel"/><br /><sub><b>Stéphane Heckel</b></sub></a><br /><a href="#infra-stephaneheckel" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=stephaneheckel" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=stephaneheckel" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ssnowball"><img src="https://avatars.githubusercontent.com/u/10828099?v=4?s=100" width="100px;" alt="Steven Snowball"/><br /><sub><b>Steven Snowball</b></sub></a><br /><a href="#infra-ssnowball" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=ssnowball" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=ssnowball" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Pian0610"><img src="https://avatars.githubusercontent.com/u/107343201?v=4?s=100" width="100px;" alt="Suffian0610"/><br /><sub><b>Suffian0610</b></sub></a><br /><a href="#infra-Pian0610" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=Pian0610" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=Pian0610" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/add944"><img src="https://avatars.githubusercontent.com/u/288381564?v=4?s=100" width="100px;" alt="add944"/><br /><sub><b>add944</b></sub></a><br /><a href="#infra-add944" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=add944" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=add944" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mitslabo"><img src="https://avatars.githubusercontent.com/u/176633224?v=4?s=100" width="100px;" alt="mits"/><br /><sub><b>mits</b></sub></a><br /><a href="#infra-mitslabo" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=mitslabo" title="Tests">⚠️</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ABChristian"><img src="https://avatars.githubusercontent.com/u/4749931?v=4?s=100" width="100px;" alt="Christian"/><br /><sub><b>Christian</b></sub></a><br /><a href="#ideas-ABChristian" title="Ideas, Planning, & Feedback">🤔</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=ABChristian" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=ABChristian" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/gmacc00"><img src="https://avatars.githubusercontent.com/u/46499110?v=4?s=100" width="100px;" alt="gmacc00"/><br /><sub><b>gmacc00</b></sub></a><br /><a href="#infra-gmacc00" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=gmacc00" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=gmacc00" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/stephaneheckel"><img src="https://avatars.githubusercontent.com/u/206326846?v=4?s=100" width="100px;" alt="Stéphane Heckel"/><br /><sub><b>Stéphane Heckel</b></sub></a><br /><a href="#infra-stephaneheckel" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=stephaneheckel" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=stephaneheckel" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ssnowball"><img src="https://avatars.githubusercontent.com/u/10828099?v=4?s=100" width="100px;" alt="Steven Snowball"/><br /><sub><b>Steven Snowball</b></sub></a><br /><a href="#infra-ssnowball" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=ssnowball" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=ssnowball" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Pian0610"><img src="https://avatars.githubusercontent.com/u/107343201?v=4?s=100" width="100px;" alt="Suffian0610"/><br /><sub><b>Suffian0610</b></sub></a><br /><a href="#infra-Pian0610" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=Pian0610" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=Pian0610" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/add944"><img src="https://avatars.githubusercontent.com/u/288381564?v=4?s=100" width="100px;" alt="add944"/><br /><sub><b>add944</b></sub></a><br /><a href="#infra-add944" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=add944" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=add944" title="Code">💻</a></td>
     </tr>
     <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/KNP-BI"><img src="https://avatars.githubusercontent.com/u/73139861?v=4?s=100" width="100px;" alt="KNP-BI"/><br /><sub><b>KNP-BI</b></sub></a><br /><a href="#infra-KNP-BI" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=KNP-BI" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=KNP-BI" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://www.linkedin.com/in/riwesley/"><img src="https://avatars.githubusercontent.com/u/13156216?v=4?s=100" width="100px;" alt="Richard Wesley"/><br /><sub><b>Richard Wesley</b></sub></a><br /><a href="#infra-hawkfish" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=hawkfish" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=hawkfish" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/micha9ski"><img src="https://avatars.githubusercontent.com/u/200447708?v=4?s=100" width="100px;" alt="micha9ski"/><br /><sub><b>micha9ski</b></sub></a><br /><a href="#infra-micha9ski" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/ducklelabs/duckle/commits?author=micha9ski" title="Tests">⚠️</a> <a href="https://github.com/ducklelabs/duckle/commits?author=micha9ski" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/KNP-BI"><img src="https://avatars.githubusercontent.com/u/73139861?v=4?s=100" width="100px;" alt="KNP-BI"/><br /><sub><b>KNP-BI</b></sub></a><br /><a href="#infra-KNP-BI" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=KNP-BI" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=KNP-BI" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://www.linkedin.com/in/riwesley/"><img src="https://avatars.githubusercontent.com/u/13156216?v=4?s=100" width="100px;" alt="Richard Wesley"/><br /><sub><b>Richard Wesley</b></sub></a><br /><a href="#infra-hawkfish" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=hawkfish" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=hawkfish" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/micha9ski"><img src="https://avatars.githubusercontent.com/u/200447708?v=4?s=100" width="100px;" alt="micha9ski"/><br /><sub><b>micha9ski</b></sub></a><br /><a href="#infra-micha9ski" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=micha9ski" title="Tests">⚠️</a> <a href="https://github.com/slothflowlabs/duckle/commits?author=micha9ski" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

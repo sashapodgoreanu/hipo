@@ -13,30 +13,80 @@
 <link rel="canonical" href="https://duckle.org/docs/getting-started.html" />
 <meta name="robots" content="index, follow" />
 <meta name="author" content="Duckle" />
-<meta property="og:type" content="website" />
+<meta property="og:type" content="article" />
 <meta property="og:site_name" content="Duckle" />
 <meta property="og:url" content="https://duckle.org/docs/getting-started.html" />
 <meta property="og:title" content="Install and quickstart - Duckle" />
 <meta property="og:description" content="Install Duckle and build your first pipeline on DuckDB in minutes. Download the single binary for Windows, macOS or Linux. No installer, no account, no telemetry." />
-<meta property="og:image" content="https://duckle.org/assets/img/screens/pipeline-join.png" />
-<meta property="og:image:width" content="1917" />
-<meta property="og:image:height" content="1020" />
+<meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/docs/getting-started.html" />
 <meta name="twitter:title" content="Install and quickstart - Duckle" />
 <meta name="twitter:description" content="Install Duckle and build your first pipeline on DuckDB in minutes. Download the single binary for Windows, macOS or Linux. No installer, no account, no telemetry." />
-<meta name="twitter:image" content="https://duckle.org/assets/img/screens/pipeline-join.png" />
+<meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta name="description" content="Install Duckle and build your first pipeline on DuckDB in minutes. Download the single binary for Windows, macOS or Linux. No installer, no account, no telemetry." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, local-first ETL, open source ETL, ELT tool, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, self-hosted ETL, desktop data studio" />
 <meta name="theme-color" content="#07090f" />
 <link rel="apple-touch-icon" href="../assets/img/duckle-mark.v4.svg" />
 <link rel="manifest" href="../site.webmanifest" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Home",
+      "item": "https://duckle.org/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Docs",
+      "item": "https://duckle.org/docs/index.html"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Getting started",
+      "item": "https://duckle.org/docs/getting-started.html"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Getting started with Duckle: install and build your first local-first pipeline",
+  "description": "Install Duckle and build your first pipeline on DuckDB in minutes. Download the single binary for Windows, macOS or Linux. No installer, no account, no telemetry.",
+  "author": {
+    "@type": "Organization",
+    "name": "SlothFlow Labs"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "SlothFlow Labs",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://duckle.org/assets/img/duckle-mark.v4.svg"
+    }
+  },
+  "datePublished": "2026-06-15",
+  "dateModified": "2026-07-13",
+  "mainEntityOfPage": "https://duckle.org/docs/getting-started.html",
+  "image": "https://duckle.org/assets/img/og-card.png"
+}
+</script>
 </head>
 <body>
 
 <div class="announce" id="announce" data-v="v0.5.1">
   Duckle v0.5.1 is out - a self-hosted web editor (run pipelines in your browser), GizmoSQL + Qlik QVD connectors, external AI endpoints, and a refreshed logo.
-  <a href="https://github.com/ducklelabs/duckle/releases/latest" target="_blank" rel="noopener">Read the release notes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+  <a href="https://github.com/slothflowlabs/duckle/releases/latest" target="_blank" rel="noopener">Read the release notes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
   <button class="announce-x" id="announceX" type="button" aria-label="Dismiss"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
 </div>
 <header class="nav">
@@ -75,8 +125,8 @@
       <a href="learn.html">Learn hub</a>
       <a href="../use-cases.html">Use cases</a>
       <h4>Project</h4>
-      <a href="https://github.com/ducklelabs/duckle" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/ducklelabs/duckle/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/slothflowlabs/duckle" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/slothflowlabs/duckle/releases" target="_blank" rel="noopener">Releases</a>
     </aside>
     <main class="docs-main">
 <span class="eyebrow">Getting started</span>
@@ -84,7 +134,7 @@
 <p class="lead">Duckle ships as a single-file desktop app of roughly 65 MB for Windows, macOS, and Linux. The engines it needs install on first launch, so there is nothing to set up by hand. It is free and open source under MIT OR Apache-2.0.</p>
 
 <h2>Download</h2>
-<p>Download the latest binary for your operating system from the <a href="https://github.com/ducklelabs/duckle/releases/latest" target="_blank" rel="noopener">GitHub Releases page</a>. There is no installer: Duckle is a single executable that you run directly.</p>
+<p>Download the latest binary for your operating system from the <a href="https://github.com/slothflowlabs/duckle/releases/latest" target="_blank" rel="noopener">GitHub Releases page</a>. There is no installer: Duckle is a single executable that you run directly.</p>
 <p>Each release publishes six assets, one per platform and architecture:</p>
 <table>
   <thead>
@@ -132,7 +182,7 @@ cargo build --release --manifest-path apps/desktop/Cargo.toml --features custom-
   <div class="wrap">
     <div class="legal">
       <span>&copy; 2026 Duckle by SlothFlowLabs. MIT OR Apache-2.0.</span>
-      <span><a href="../index.html">Home</a> &middot; <a href="https://github.com/ducklelabs/duckle" target="_blank" rel="noopener">GitHub</a></span>
+      <span><a href="../index.html">Home</a> &middot; <a href="https://github.com/slothflowlabs/duckle" target="_blank" rel="noopener">GitHub</a></span>
     </div>
   </div>
 </footer>

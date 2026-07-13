@@ -28,7 +28,7 @@
        duckdb.org renders a static build-time count; we render a "★" fallback and
        upgrade it to the live number via the public API, cached for an hour so we
        do not hammer the rate limit on every page view. */
-    var REPO = "ducklelabs/duckle";
+    var REPO = "slothflowlabs/duckle";
     var countEl = document.getElementById("ghCount");
     function fmt(n) {
         if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";

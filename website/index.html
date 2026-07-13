@@ -4,21 +4,21 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Duckle - Open-source ETL you can see end to end, built on DuckDB</title>
-<meta name="description" content="Duckle is an open-source desktop ETL/ELT studio with a built-in local AI assistant. Build visual pipelines and run them at native DuckDB speed. 329 components, a scheduler, and an MCP server. No cloud, no servers, no lock-in." />
+<meta name="description" content="Duckle is an open-source desktop ETL/ELT studio with a built-in local AI assistant. Build visual pipelines and run them at native DuckDB speed. 360+ components, a scheduler, and an MCP server. No cloud, no servers, no lock-in." />
 <meta name="keywords" content="visual ETL tool, DuckDB ETL, local-first ETL, open source ETL, ELT tool, data pipeline builder, dbt GUI, dbt on DuckDB, DuckLake, Quack DuckDB, no-code data pipeline, Fivetran alternative, Airbyte alternative, Talend alternative, self-hosted ETL, desktop data studio" />
 <meta property="og:title" content="Duckle - Open-source ETL you can see end to end" />
-<meta property="og:description" content="Visual pipelines, 329 connectors and transforms, a local AI assistant, native DuckDB speed. Open source. No cloud, no servers, no lock-in." />
-<meta property="og:image" content="https://duckle.org/assets/img/screens/pipeline-join.png" />
-<meta property="og:image:width" content="1917" />
-<meta property="og:image:height" content="1020" />
+<meta property="og:description" content="Visual pipelines, 360+ components, a local AI assistant, native DuckDB speed. Open source. No cloud, no servers, no lock-in." />
+<meta property="og:image" content="https://duckle.org/assets/img/og-card.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://duckle.org/" />
 <meta property="og:site_name" content="Duckle" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:url" content="https://duckle.org/" />
 <meta name="twitter:title" content="Duckle - Open-source ETL you can see end to end" />
-<meta name="twitter:description" content="Visual pipelines, 329 connectors and transforms, a local AI assistant, native DuckDB speed. Open source. No cloud, no servers, no lock-in." />
-<meta name="twitter:image" content="https://duckle.org/assets/img/screens/pipeline-join.png" />
+<meta name="twitter:description" content="Visual pipelines, 360+ components, a local AI assistant, native DuckDB speed. Open source. No cloud, no servers, no lock-in." />
+<meta name="twitter:image" content="https://duckle.org/assets/img/og-card.png" />
 <meta name="robots" content="index, follow" />
 <meta name="author" content="Duckle" />
 <link rel="canonical" href="https://duckle.org/" />
@@ -36,26 +36,51 @@
   "@context": "https://schema.org",
   "@graph": [
     {
+      "@type": "Organization",
+      "@id": "https://duckle.org/#org",
+      "name": "SlothFlow Labs",
+      "url": "https://duckle.org/",
+      "logo": "https://duckle.org/assets/img/duckle-mark.v4.svg",
+      "sameAs": ["https://github.com/slothflowlabs/duckle"]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://duckle.org/#website",
+      "name": "Duckle",
+      "url": "https://duckle.org/",
+      "publisher": { "@id": "https://duckle.org/#org" }
+    },
+    {
       "@type": "SoftwareApplication",
       "name": "Duckle",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Windows, macOS, Linux",
-      "description": "Open-source, local-first ETL/ELT studio built on DuckDB. Build pipelines visually, run them locally, and ship them as a single binary.",
+      "description": "Open-source, local-first ETL/ELT studio built on DuckDB. Build data pipelines visually with 360+ components (345 available today), run them offline at native DuckDB speed, and ship them as a single binary.",
       "url": "https://duckle.org/",
-      "downloadUrl": "https://github.com/ducklelabs/duckle/releases/latest",
-      "softwareVersion": "0.5.1",
+      "downloadUrl": "https://github.com/slothflowlabs/duckle/releases/latest",
+      "softwareVersion": "0.5.5",
       "license": "MIT OR Apache-2.0",
       "isAccessibleForFree": true,
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
       "author": { "@type": "Person", "name": "Sourav Roy" },
-      "codeRepository": "https://github.com/ducklelabs/duckle",
-      "keywords": "ETL, ELT, DuckDB, DuckLake, data pipeline, local-first, open source"
-    },
-    {
-      "@type": "WebSite",
-      "name": "Duckle",
-      "url": "https://duckle.org/"
+      "publisher": { "@id": "https://duckle.org/#org" },
+      "codeRepository": "https://github.com/slothflowlabs/duckle",
+      "keywords": "ETL, ELT, DuckDB, DuckLake, data pipeline, local-first, self-hosted, dbt, CDC, MCP, open source"
     }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "Is Duckle free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Duckle is open source under MIT or Apache-2.0. There is no per-row, per-connector, or per-seat billing, and nothing to self-host or operate." } },
+    { "@type": "Question", "name": "What engine does Duckle run on?", "acceptedAnswer": { "@type": "Answer", "text": "Duckle runs on DuckDB, an embedded columnar engine. Visual pipelines compile to SQL and execute locally at native DuckDB speed, with no external warehouse or server in the loop." } },
+    { "@type": "Question", "name": "Does Duckle need the cloud or a server?", "acceptedAnswer": { "@type": "Answer", "text": "No. Duckle is a local-first desktop application that runs fully offline. There is no account and no telemetry, which makes it suitable for air-gapped and compliance-sensitive work." } },
+    { "@type": "Question", "name": "How many components does Duckle have?", "acceptedAnswer": { "@type": "Answer", "text": "Duckle ships 363 components, of which 345 are available today, spanning sources, transforms, sinks, data-quality checks, control-flow nodes, and code runners for databases, warehouses, lakehouses, object storage, streaming, NoSQL, and SaaS APIs." } },
+    { "@type": "Question", "name": "Can Duckle run dbt?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Duckle runs dbt on DuckDB with a visual GUI, using a fast build engine by default and falling back to dbt-core when needed, so you can build, test, and schedule dbt projects without leaving the studio." } },
+    { "@type": "Question", "name": "Does Duckle have an AI assistant?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Duckie is an on-device AI assistant that generates pipelines from plain English with no API key and no telemetry. Duckle also ships an MCP server so external AI agents can list, generate, validate, and run pipelines." } }
   ]
 }
 </script>
@@ -64,7 +89,7 @@
 
 <div class="announce" id="announce" data-v="v0.5.4">
   Duckle v0.5.4 is out - native SAP sources, a faster xf.dbt loop, custom OpenAI-compatible AI endpoints, multi-column Cast, and portable cross-OS pipeline artifacts.
-  <a href="https://github.com/ducklelabs/duckle/releases/latest" target="_blank" rel="noopener">Read the release notes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+  <a href="https://github.com/slothflowlabs/duckle/releases/latest" target="_blank" rel="noopener">Read the release notes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
   <button class="announce-x" id="announceX" type="button" aria-label="Dismiss"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
 </div>
 
@@ -82,7 +107,7 @@
           <div class="mlbl">The platform</div>
           <a href="#product"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span><b>Visual canvas</b><span>Drag, wire, run. Compiles to readable SQL.</span></span></a>
           <a href="#duckie"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M12 7V4M9 13h.01M15 13h.01"/></svg></span><span><b>Duckie AI</b><span>Describe a pipeline; it builds it, locally.</span></span></a>
-          <a href="docs/components.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span><span><b>329 components</b><span>Sources, transforms, sinks, quality, control.</span></span></a>
+          <a href="docs/components.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span><span><b>360+ components</b><span>Sources, transforms, sinks, quality, control.</span></span></a>
           <a href="docs/automation.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg></span><span><b>Schedule &amp; deploy</b><span>Cron, headless runner, MCP server.</span></span></a>
         </div>
       </div>
@@ -117,12 +142,12 @@
           <div class="mlbl">Resources</div>
           <a href="docs/learn.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span><span><b>Learn hub</b><span>ETL vs ELT, CDC, local-first, RAG.</span></span></a>
           <a href="docs/index.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg></span><span><b>Documentation</b><span>Quickstart, guides, reference.</span></span></a>
-          <a href="docs/components.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span><b>Component reference</b><span>All 329 sources, transforms, sinks.</span></span></a>
+          <a href="docs/components.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span><b>Component reference</b><span>All 363 sources, transforms, sinks.</span></span></a>
           <a href="docs/integrations.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg></span><span><b>Integrations directory</b><span>Every connector, by category.</span></span></a>
           <a href="docs/automation.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg></span><span><b>Automation &amp; MCP</b><span>Scheduler, headless runner, MCP server.</span></span></a>
           <a href="docs/ai-duckie.html"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="12" rx="2"/><path d="M12 7V4M9 13h.01M15 13h.01"/></svg></span><span><b>Duckie AI guide</b><span>The local assistant and AI transforms.</span></span></a>
-          <a href="https://github.com/ducklelabs/duckle" target="_blank" rel="noopener"><span class="mi"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span><span><b>GitHub</b><span>Source, issues, discussions.</span></span></a>
-          <a href="https://github.com/ducklelabs/duckle/releases" target="_blank" rel="noopener"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7M7 10l5 5 5-5M12 15V3"/></svg></span><span><b>Releases</b><span>Changelog and downloads.</span></span></a>
+          <a href="https://github.com/slothflowlabs/duckle" target="_blank" rel="noopener"><span class="mi"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span><span><b>GitHub</b><span>Source, issues, discussions.</span></span></a>
+          <a href="https://github.com/slothflowlabs/duckle/releases" target="_blank" rel="noopener"><span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7M7 10l5 5 5-5M12 15V3"/></svg></span><span><b>Releases</b><span>Changelog and downloads.</span></span></a>
         </div>
       </div>
     </nav>
@@ -147,7 +172,7 @@
         <p class="lead">Duckle is a local-first ETL studio with a built-in AI assistant. Connect 160+ sources and destinations, build pipelines visually or describe them in plain English, and run them at native DuckDB speed. No cloud, no servers, no lock-in.</p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-pill btn-lg" href="#download">Start for free</a>
-          <a class="btn btn-outline btn-lg" href="https://github.com/ducklelabs/duckle" target="_blank" rel="noopener">
+          <a class="btn btn-outline btn-lg" href="https://github.com/slothflowlabs/duckle" target="_blank" rel="noopener">
             <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.23.41-2.7-.94-2.7-.94-.36-.93-.9-1.18-.9-1.18-.73-.5.06-.49.06-.49.81.06 1.24.84 1.24.84.72 1.23 1.88.87 2.34.67.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
             View on GitHub
           </a>
@@ -242,7 +267,7 @@
 <section class="statband">
   <div class="wrap">
     <div class="row">
-      <div class="sb"><b>329</b><span>components, all on DuckDB</span></div>
+      <div class="sb"><b>363</b><span>components, all on DuckDB</span></div>
       <div class="sb"><b>104 / 59</b><span>sources / destinations</span></div>
       <div class="sb"><b>5M rows</b><span>loaded in about 1 second</span></div>
       <div class="sb"><b>100%</b><span>local - data never leaves</span></div>
@@ -396,7 +421,7 @@
       <h2>Build your first pipeline in 60 seconds</h2>
       <p class="lead center">Free and open source, dual-licensed MIT OR Apache-2.0. Windows, macOS and Linux. No account, no telemetry.</p>
       <div class="hero-cta" style="justify-content:center;">
-        <a class="btn btn-primary btn-lg" href="https://github.com/ducklelabs/duckle/releases/latest" target="_blank" rel="noopener">Download latest release</a>
+        <a class="btn btn-primary btn-lg" href="https://github.com/slothflowlabs/duckle/releases/latest" target="_blank" rel="noopener">Download latest release</a>
         <a class="btn btn-ghost btn-lg" href="docs/getting-started.html">Quickstart guide</a>
       </div>
     </div>
@@ -418,7 +443,7 @@
       <div><h4>Product</h4><a href="#product">Visual canvas</a><a href="#duckie">Duckie AI</a><a href="docs/components.html">Components</a><a href="#download">Download</a></div>
       <div><h4>Solutions</h4><a href="use-cases.html#join">Cross-system joins</a><a href="use-cases.html#snowflake">Warehouse savings</a><a href="use-cases.html#cdc">Change data capture</a><a href="use-cases.html#ai">Data prep for AI</a></div>
       <div><h4>Resources</h4><a href="docs/index.html">Documentation</a><a href="docs/learn.html">Learn hub</a><a href="use-cases.html">Use cases</a><a href="docs/integrations.html">Integrations</a></div>
-      <div><h4>Project</h4><a href="https://github.com/ducklelabs/duckle" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/ducklelabs/duckle/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/ducklelabs/duckle/issues" target="_blank" rel="noopener">Issues</a><a href="https://duckdb.org" target="_blank" rel="noopener">DuckDB</a></div>
+      <div><h4>Project</h4><a href="https://github.com/slothflowlabs/duckle" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/slothflowlabs/duckle/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/slothflowlabs/duckle/issues" target="_blank" rel="noopener">Issues</a><a href="https://duckdb.org" target="_blank" rel="noopener">DuckDB</a></div>
     </div>
     <div class="legal">
       <span>&copy; 2026 Duckle by SlothFlowLabs. MIT OR Apache-2.0.</span>
