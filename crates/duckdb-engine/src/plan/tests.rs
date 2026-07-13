@@ -1777,6 +1777,57 @@
     }
 
     #[test]
+    fn partial_run_loads_spatial_into_geometry_consumers() {
+        // #168: a partial ("Run from here") run executes each stage in its own
+        // process. A snk.parquet reading a stored GEOMETRY column must LOAD
+        // spatial itself, or DuckDB autoloads it only after binding the column
+        // and reconstructs the CRS as WKT2 -> the GeoParquet V1 writer rejects
+        // it ("only supports PROJJSON CRS definitions"). So every stage geometry
+        // flows into must carry the spatial load, propagated from the source.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"Shp","componentId":"src.spatial","properties":{"path":"/tmp/cities.shp"}}},
+                {"id":"f","position":{"x":0,"y":0},"data":{"label":"Filter","componentId":"xf.filter","properties":{"predicate":"1=1"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"Parquet","componentId":"snk.parquet","properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"s","target":"f","data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+        let compiled = compile_partial(&doc, "k").unwrap();
+        for id in ["s", "f", "k"] {
+            let sql = &compiled.stages.iter().find(|s| s.node_id == id).unwrap().sql;
+            assert!(sql.contains("LOAD spatial"), "stage {id} must load spatial: {sql}");
+        }
+        // The parquet sink itself has no spatial prelude, so the load can only
+        // have come from the downstream-taint pass.
+        let sink = &compiled.stages.iter().find(|s| s.node_id == "k").unwrap().sql;
+        assert!(sink.contains("INSTALL spatial; LOAD spatial;"), "sink prelude: {sink}");
+    }
+
+    #[test]
+    fn partial_run_does_not_load_spatial_without_geometry() {
+        // Guard against a false positive: a plain CSV -> Parquet partial run must
+        // NOT pull in the ~50 MB spatial extension.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"Csv","componentId":"src.csv","properties":{"path":"/tmp/in.csv","hasHeader":true}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"Parquet","componentId":"snk.parquet","properties":{"path":"/tmp/out.parquet"}}}
+              ],
+              "edges":[{"id":"e1","source":"s","target":"k","data":{"connectionType":"main"}}]
+            }"#,
+        );
+        let compiled = compile_partial(&doc, "k").unwrap();
+        for st in &compiled.stages {
+            assert!(!st.sql.contains("spatial"), "non-geo stage {} must not load spatial: {}", st.node_id, st.sql);
+        }
+    }
+
+    #[test]
     fn cap_preview_query_wraps_per_dialect() {
         // #148: inspect caps a driver fetch with the dialect's own row limit.
         let q = "SELECT * FROM orders";

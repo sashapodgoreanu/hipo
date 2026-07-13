@@ -777,6 +777,44 @@ fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<Comp
         }
     }
 
+    // #168: a persisted GEOMETRY column only round-trips its CRS in PROJJSON
+    // form (what GeoParquet V1 requires) when the spatial extension is loaded
+    // *before* the column is bound. A batched single-session run loads spatial
+    // once via the source stage's prelude, so it covers the whole session and a
+    // downstream snk.parquet writes GeoParquet fine. A partial ("Run from here")
+    // run executes each stage in its own CLI process: the sink process never
+    // loaded spatial, so DuckDB autoloads it only *after* binding the stored
+    // geometry and reconstructs the CRS as WKT2, which the GeoParquet V1 writer
+    // rejects ("only supports PROJJSON CRS definitions"). Load spatial in every
+    // stage that geometry flows into so a per-stage run matches the batched one.
+    {
+        // Seed: stages whose own prelude already loads spatial (spatial-family
+        // sources/transforms, ST_-referencing SQL) - geometry originates here.
+        let mut geom_tainted: HashSet<String> = stages
+            .iter()
+            .filter(|s| s.sql.contains("LOAD spatial"))
+            .map(|s| s.node_id.clone())
+            .collect();
+        // Propagate downstream along data edges: every consumer of a geometry
+        // relation reads that stored GEOMETRY column and needs spatial too.
+        loop {
+            let mut grew = false;
+            for e in &data_edges {
+                if geom_tainted.contains(&e.source) && geom_tainted.insert(e.target.clone()) {
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        for s in stages.iter_mut() {
+            if geom_tainted.contains(&s.node_id) && !s.sql.contains("LOAD spatial") {
+                s.sql.insert_str(0, "INSTALL spatial; LOAD spatial; ");
+            }
+        }
+    }
+
     // Leaves = data-flow nodes that nothing else (still in the plan) consumes
     // from. Edges into excluded parallelize-branch nodes don't count, so a
     // parallelize node whose only consumers are its branches stays a leaf.
