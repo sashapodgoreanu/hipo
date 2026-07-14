@@ -137,6 +137,10 @@ function ResolvedHint({ value }: { value: unknown }) {
     const lines = refs.map(key => {
         if (secretKeys.has(key)) return `\${${key}} = •••• (secret)`;
         if (Object.prototype.hasOwnProperty.call(vars, key)) return `\${${key}} = ${vars[key]}`;
+        // ${ENV:NAME} is resolved from the OS environment by the engine at run
+        // time (issue #137). The editor can't read OS env vars, so report the
+        // source instead of a misleading "(not set)".
+        if (/^ENV:/i.test(key)) return `\${${key}} = (from the OS environment at run time)`;
         return `\${${key}} = (not set)`;
     });
 
