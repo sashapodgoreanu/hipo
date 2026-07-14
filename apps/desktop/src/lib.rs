@@ -96,17 +96,19 @@ pub fn run() {
             // (first run installs it via the setup screen); the engine
             // just errors clearly until then.
             //
-            // ALSO publish the path as DUCKLE_DUCKDB_BIN. The engine's
-            // primary execution path takes the binary as a constructor
-            // arg, but rest_source_apply (used by REST-shaped sources:
-            // Oracle, SQL Server, Snowflake, Databricks, Synapse,
-            // BigQuery, and the various SaaS aliases that materialize
-            // their inline result set) is a free helper that reads the
-            // env var directly. Without this set, those sources fail
-            // with "DUCKLE_DUCKDB_BIN not set" while plain file flows
-            // work fine. See issue #2.
+            // Resolve the engine binary, honoring an externally-set
+            // DUCKLE_DUCKDB_BIN first (issue #179) so a user-supplied DuckDB
+            // wins over the bundled one, then publish the resolved path back to
+            // DUCKLE_DUCKDB_BIN. The engine's primary execution path takes the
+            // binary as a constructor arg, but rest_source_apply (used by
+            // REST-shaped sources: Oracle, SQL Server, Snowflake, Databricks,
+            // Synapse, BigQuery, and the various SaaS aliases that materialize
+            // their inline result set) is a free helper that reads the env var
+            // directly. Without this set, those sources fail with
+            // "DUCKLE_DUCKDB_BIN not set" while plain file flows work fine. See
+            // issue #2.
             if let Ok(dir) = app.path().app_data_dir() {
-                let bin = engine_manager::duckdb_path(&dir);
+                let bin = resolve_duckdb_bin(&dir);
                 std::env::set_var("DUCKLE_DUCKDB_BIN", &bin);
                 let _ = DUCKDB_BIN.set(bin);
 
@@ -259,6 +261,24 @@ static DUCKDB_ENGINE: OnceLock<DuckdbEngine> = OnceLock::new();
 /// `for_new_run`), so cancelling the interactive run never touches concurrent
 /// scheduler runs, and a finished run can't be cancelled by a stale request.
 static CURRENT_RUN: std::sync::Mutex<Option<DuckdbEngine>> = std::sync::Mutex::new(None);
+
+/// Resolve the DuckDB CLI the desktop should drive. An externally-set
+/// `DUCKLE_DUCKDB_BIN` takes precedence, so a user can point Duckle at a
+/// system-installed DuckDB, a specific version, or a custom binary (embedded
+/// scenarios); otherwise the bundled/downloaded engine path is used. Issue #179.
+fn resolve_duckdb_bin(app_data: &std::path::Path) -> PathBuf {
+    pick_duckdb_bin(std::env::var_os("DUCKLE_DUCKDB_BIN"), app_data)
+}
+
+/// Pure precedence logic behind [`resolve_duckdb_bin`], split out so it can be
+/// tested without mutating the process environment: a non-empty override wins,
+/// otherwise the bundled engine path.
+fn pick_duckdb_bin(env_override: Option<std::ffi::OsString>, app_data: &std::path::Path) -> PathBuf {
+    env_override
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| engine_manager::duckdb_path(app_data))
+}
 
 /// The shared engine, pointed at the downloaded DuckDB CLI. Cheap to
 /// build (just holds a path); cached so the cancel flag is shared
@@ -699,7 +719,7 @@ async fn seed_sample_workspace(app: tauri::AppHandle, workspace: String) -> Resu
     // sample pipelines down regardless and only treats data generation (which
     // needs DuckDB) as best effort, so a not-yet-installed engine no longer
     // blocks seeding (which would leave the new workspace on the blank default).
-    let duckdb = engine_manager::duckdb_path(&dir);
+    let duckdb = resolve_duckdb_bin(&dir);
     let ws = std::path::PathBuf::from(&workspace);
     tokio::task::spawn_blocking(move || samples::seed(&ws, &duckdb))
         .await
@@ -1435,7 +1455,7 @@ fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, St
     }
 
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let duckdb = engine_manager::duckdb_path(&app_data);
+    let duckdb = resolve_duckdb_bin(&app_data);
     let runner = stage_panel_runner(&app_data)?;
     let port = pick_panel_port();
 
@@ -1772,4 +1792,29 @@ fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, St
         write_err(e)
     })?;
     Ok(target.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    // Issue #179: an externally-set DUCKLE_DUCKDB_BIN must win over the bundled
+    // engine path, and an empty value must be ignored (fall back to bundled).
+    #[test]
+    fn external_duckdb_bin_wins_over_bundled_179() {
+        let app_data = Path::new("/tmp/duckle-app-data");
+        let bundled = engine_manager::duckdb_path(app_data);
+
+        // A non-empty override is used verbatim.
+        assert_eq!(
+            pick_duckdb_bin(Some(OsString::from("/usr/local/bin/duckdb")), app_data),
+            PathBuf::from("/usr/local/bin/duckdb")
+        );
+        // An empty override is ignored -> bundled path.
+        assert_eq!(pick_duckdb_bin(Some(OsString::new()), app_data), bundled);
+        // No override -> bundled path (unchanged default behavior).
+        assert_eq!(pick_duckdb_bin(None, app_data), bundled);
+    }
 }
