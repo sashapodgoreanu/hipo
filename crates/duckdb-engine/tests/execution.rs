@@ -3393,15 +3393,17 @@ fn geo_distance_computes_point_distance() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
     // Seed a parquet with GEOMETRY columns via duckdb_exec so the type
-    // survives into the pipeline (CSV would coerce to varchar).
+    // survives into the pipeline (CSV would coerce to varchar). A projected
+    // metre CRS (EPSG:3857) is assigned so #177's CRS-aware Distance picks the
+    // planar function - the CRS survives the parquet round-trip in the type.
     let parquet = out_path(tmp.path(), "geoms.parquet");
     duckdb_exec(
         ":memory:",
         &format!(
             "INSTALL spatial; LOAD spatial; \
              COPY (SELECT * FROM (VALUES \
-                 ('a', ST_Point(3, 4)), \
-                 ('b', ST_Point(6, 8)) \
+                 ('a', ST_SetCRS(ST_Point(3, 4), 'EPSG:3857')), \
+                 ('b', ST_SetCRS(ST_Point(6, 8), 'EPSG:3857')) \
              ) t(name, loc)) TO '{}' (FORMAT PARQUET)",
             parquet
         ),
