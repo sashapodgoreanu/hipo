@@ -458,7 +458,10 @@ export const PALETTE: Category[] = [
                 id: 'xf.geo',
                 label: 'Geospatial',
                 components: [
-                    xf('geo.distance', 'Spatial Distance', 'available', 'Distance from each row to a target point (ST_Distance)'),
+                    xf('geo.distance', 'Spatial Distance', 'available', 'Distance from each row to a target geometry; auto-picks planar or spheroid from the CRS'),
+                    xf('geo.length', 'Spatial Length', 'available', 'Length of each line; auto-picks planar or spheroid metres from the CRS'),
+                    xf('geo.perimeter', 'Spatial Perimeter', 'available', 'Perimeter of each polygon; auto-picks planar or spheroid metres from the CRS'),
+                    xf('geo.area', 'Spatial Area', 'available', 'Area of each polygon; auto-picks planar or spheroid metres from the CRS'),
                     xf('geo.buffer', 'Spatial Buffer', 'available', 'A buffered geometry around each row (ST_Buffer)'),
                     xf('geo.intersects', 'Spatial Intersects', 'available', 'Boolean: does each row overlap a target geometry? (ST_Intersects)'),
                     xf('geo.flip', 'Flip Coordinates', 'available', 'Swap X/Y of every vertex to fix lat,lon vs lon,lat order (ST_FlipCoordinates)'),

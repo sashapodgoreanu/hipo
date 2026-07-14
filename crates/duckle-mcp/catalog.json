@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 364,
+  "componentCount": 367,
   "components": [
     {
       "id": "src.csv",
@@ -24313,7 +24313,7 @@
       "label": "Spatial Distance",
       "kind": "transform",
       "availability": "available",
-      "summary": "Distance from each row to a target point (ST_Distance)",
+      "summary": "Distance from each row to a target geometry; auto-picks planar or spheroid from the CRS",
       "ports": {
         "inputs": [
           {
@@ -24340,7 +24340,7 @@
         "id": "xf.geo.distance",
         "kind": "transform",
         "label": "Spatial Distance",
-        "description": "Distance from each row to a target point (ST_Distance)",
+        "description": "Distance from each row to a target geometry; auto-picks planar or spheroid from the CRS",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -24358,13 +24358,247 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "POINT(0 0)",
-                "description": "Well-Known Text. Distance units come from the input SRS (degrees for WGS84, metres for projected)."
+                "description": "Well-Known Text. The measurement function is chosen from the input CRS: geographic (degrees) uses the spheroid distance (metres); projected (metres/feet) uses the planar distance. Geometry with no CRS is rejected."
               },
               {
                 "key": "outputColumn",
                 "label": "Output column",
                 "kind": "text",
                 "defaultValue": "distance"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.geo.length",
+      "label": "Spatial Length",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Length of each line; auto-picks planar or spheroid metres from the CRS",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.geo.length",
+        "kind": "transform",
+        "label": "Spatial Length",
+        "description": "Length of each line; auto-picks planar or spheroid metres from the CRS",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Spatial length",
+            "fields": [
+              {
+                "key": "geomColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "required": true
+              },
+              {
+                "key": "outputColumn",
+                "label": "Output column",
+                "kind": "text",
+                "defaultValue": "length",
+                "description": "Length of each line geometry. Geographic CRS returns metres (spheroid); projected CRS returns the CRS linear unit. No CRS is rejected."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.geo.perimeter",
+      "label": "Spatial Perimeter",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Perimeter of each polygon; auto-picks planar or spheroid metres from the CRS",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.geo.perimeter",
+        "kind": "transform",
+        "label": "Spatial Perimeter",
+        "description": "Perimeter of each polygon; auto-picks planar or spheroid metres from the CRS",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Spatial perimeter",
+            "fields": [
+              {
+                "key": "geomColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "required": true
+              },
+              {
+                "key": "outputColumn",
+                "label": "Output column",
+                "kind": "text",
+                "defaultValue": "perimeter",
+                "description": "Perimeter of each polygon. Geographic CRS returns metres (spheroid); projected CRS returns the CRS linear unit. No CRS is rejected."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.geo.area",
+      "label": "Spatial Area",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Area of each polygon; auto-picks planar or spheroid metres from the CRS",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.geo.area",
+        "kind": "transform",
+        "label": "Spatial Area",
+        "description": "Area of each polygon; auto-picks planar or spheroid metres from the CRS",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Spatial area",
+            "fields": [
+              {
+                "key": "geomColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "required": true
+              },
+              {
+                "key": "outputColumn",
+                "label": "Output column",
+                "kind": "text",
+                "defaultValue": "area",
+                "description": "Area of each polygon. Geographic CRS returns square metres (spheroid); projected CRS returns squared CRS linear unit. No CRS is rejected."
               }
             ]
           }

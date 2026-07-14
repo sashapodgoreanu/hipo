@@ -5568,12 +5568,52 @@ function synthGeoTransform(comp: ComponentDef): ComponentManifest {
                         kind: 'text',
                         required: true,
                         placeholder: 'POINT(0 0)',
-                        description: 'Well-Known Text. Distance units come from the input SRS (degrees for WGS84, metres for projected).',
+                        description: 'Well-Known Text. The measurement function is chosen from the input CRS: geographic (degrees) uses the spheroid distance (metres); projected (metres/feet) uses the planar distance. Geometry with no CRS is rejected.',
                     },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'distance' },
                 ],
             },
         ], 'upstream');
+    }
+    // Issue #177: CRS-aware Length / Perimeter / Area. Each auto-selects the
+    // spheroidal function for a geographic CRS (degrees) or the planar one for a
+    // projected CRS (metres/feet), and errors when the geometry has no CRS.
+    const measure = (label: string, out: string, blurb: string) =>
+        base(comp, [
+            {
+                label,
+                fields: [
+                    { key: 'geomColumn', label: 'Geometry column', kind: 'column', required: true },
+                    {
+                        key: 'outputColumn',
+                        label: 'Output column',
+                        kind: 'text',
+                        defaultValue: out,
+                        description: blurb,
+                    },
+                ],
+            },
+        ], 'upstream');
+    if (comp.id === 'xf.geo.length') {
+        return measure(
+            'Spatial length',
+            'length',
+            'Length of each line geometry. Geographic CRS returns metres (spheroid); projected CRS returns the CRS linear unit. No CRS is rejected.',
+        );
+    }
+    if (comp.id === 'xf.geo.perimeter') {
+        return measure(
+            'Spatial perimeter',
+            'perimeter',
+            'Perimeter of each polygon. Geographic CRS returns metres (spheroid); projected CRS returns the CRS linear unit. No CRS is rejected.',
+        );
+    }
+    if (comp.id === 'xf.geo.area') {
+        return measure(
+            'Spatial area',
+            'area',
+            'Area of each polygon. Geographic CRS returns square metres (spheroid); projected CRS returns squared CRS linear unit. No CRS is rejected.',
+        );
     }
     if (comp.id === 'xf.geo.buffer') {
         return base(comp, [

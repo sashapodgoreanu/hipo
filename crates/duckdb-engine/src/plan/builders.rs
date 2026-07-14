@@ -300,6 +300,9 @@ pub(crate) fn build_view_sql(
         "xf.hash" => build_hash(inputs, props),
         "xf.ip.parse" => build_ip_parse(inputs, props),
         "xf.geo.distance" => build_geo_distance(inputs, props),
+        "xf.geo.length" => build_geo_length(inputs, props),
+        "xf.geo.perimeter" => build_geo_perimeter(inputs, props),
+        "xf.geo.area" => build_geo_area(inputs, props),
         "xf.geo.buffer" => build_geo_buffer(inputs, props),
         "xf.geo.flip" => build_geo_flip(inputs, props),
         "xf.geo.intersects" => build_geo_intersects(inputs, props),
@@ -4810,9 +4813,18 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         // the first-launch DUCKDB_EXTENSIONS pre-fetch so the install
         // stays small. INSTALL runs lazily on first use, then LOAD on
         // every subsequent run.
+        // CRS-aware spatial measurements (issue #177) use the *_Spheroid
+        // functions, which warn (to stderr) about axis order unless it is pinned.
+        // SET geometry_always_xy assumes [lon, lat] - the GeoParquet / de-facto
+        // standard - so the measurement is deterministic and warning-free.
+        "xf.geo.distance"
+        | "xf.geo.length"
+        | "xf.geo.perimeter"
+        | "xf.geo.area" => {
+            return "INSTALL spatial; LOAD spatial; SET geometry_always_xy = true; ".into();
+        }
         "src.spatial"
         | "snk.spatial"
-        | "xf.geo.distance"
         | "xf.geo.buffer"
         | "xf.geo.flip"
         | "xf.geo.intersects"
@@ -5794,8 +5806,59 @@ pub(crate) fn build_text_search_spec(node_id: &str, inputs: &NodeInputs, props: 
 
 /// Spatial Distance: add a column with the distance from each row's
 /// geometry to a fixed target point (WKT). Uses the spatial extension's
-/// ST_Distance over CAST geometries. Units come from the SRS of the
-/// input geometry (degrees for plain WGS84, metres for projected SRS).
+/// CRS-aware spatial measurement (issue #177): pick the planar or the
+/// spheroidal DuckDB function based on the geometry's Coordinate Reference
+/// System, and stop with an informative error when the geometry has no CRS.
+///
+/// The CRS lives in the column *type* (`GEOMETRY('EPSG:4326')`), not in the
+/// value: `CAST(g AS GEOMETRY)` and `ST_GeomFromText(...)` both strip it, and
+/// `ST_CRS(VARCHAR)` is a bind error. So the CRS name is read from `typeof(col)`
+/// (bind-safe for GEOMETRY, plain GEOMETRY and VARCHAR alike) and matched
+/// against `duckdb_coordinate_systems()` to resolve the unit. `degree` selects
+/// the spheroidal function, any other linear unit selects the planar one, and a
+/// missing/unresolved CRS raises `error(...)` at the first row (empty input is
+/// left untouched). The measurement itself runs over `CAST(col AS GEOMETRY)`,
+/// which only needs coordinates, not the CRS.
+///
+/// `arg_tail` is appended inside the function call after the cast geometry -
+/// `""` for the single-argument measurements, `, ST_GeomFromText('...')` for
+/// Distance.
+fn crs_aware_measure(
+    upstream: &str,
+    geom_column: &str,
+    output: &str,
+    planar_fn: &str,
+    spheroid_fn: &str,
+    arg_tail: &str,
+    label: &str,
+) -> String {
+    let col = quote_ident(geom_column);
+    let out = quote_ident(output);
+    let up = quote_ident(upstream);
+    format!(
+        "WITH __geo_cu AS (\
+           SELECT lower(json_extract_string(projjson, '$.coordinate_system.axis[0].unit')) AS unit \
+           FROM duckdb_coordinate_systems() \
+           WHERE crs_name = regexp_extract(typeof((SELECT {col} FROM {up} LIMIT 1)), 'GEOMETRY\\(''([^'']*)''\\)', 1)\
+         ) \
+         SELECT __g.*, CASE \
+           WHEN __u.unit IS NULL THEN error('{label}: input geometry does not have a valid Coordinate Reference System (CRS). Assign a CRS (e.g. load from GeoParquet/Shapefile) before performing spatial measurements.') \
+           WHEN __u.unit = 'degree' THEN {sph}(CAST(__g.{col} AS GEOMETRY){tail}) \
+           ELSE {pla}(CAST(__g.{col} AS GEOMETRY){tail}) END AS {out} \
+         FROM {up} __g LEFT JOIN __geo_cu __u ON TRUE",
+        col = col,
+        up = up,
+        label = label,
+        sph = spheroid_fn,
+        pla = planar_fn,
+        tail = arg_tail,
+        out = out,
+    )
+}
+
+/// CRS-aware Distance to a fixed target geometry (issue #177). Chooses
+/// ST_Distance (planar) or ST_Distance_Spheroid (geographic) from the input's
+/// CRS unit.
 pub(crate) fn build_geo_distance(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.distance"))?;
     let column = string_prop(props, "geomColumn")
@@ -5807,12 +5870,78 @@ pub(crate) fn build_geo_distance(inputs: &NodeInputs, props: &JsonValue) -> Resu
     let output = string_prop(props, "outputColumn")
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "distance".into());
-    Ok(format!(
-        "SELECT *, ST_Distance(CAST({col} AS GEOMETRY), ST_GeomFromText('{target}')) AS {out} FROM {up}",
-        col = quote_ident(&column),
-        target = target.replace('\'', "''"),
-        out = quote_ident(&output),
-        up = quote_ident(upstream)
+    let tail = format!(", ST_GeomFromText('{}')", target.replace('\'', "''"));
+    Ok(crs_aware_measure(
+        upstream,
+        &column,
+        &output,
+        "ST_Distance",
+        "ST_Distance_Spheroid",
+        &tail,
+        "xf.geo.distance",
+    ))
+}
+
+/// CRS-aware Length of each (multi)linestring (issue #177): ST_Length /
+/// ST_Length_Spheroid picked from the input's CRS unit.
+pub(crate) fn build_geo_length(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.length"))?;
+    let column = string_prop(props, "geomColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Geo Length needs a geometry column".to_string())?;
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "length".into());
+    Ok(crs_aware_measure(
+        upstream,
+        &column,
+        &output,
+        "ST_Length",
+        "ST_Length_Spheroid",
+        "",
+        "xf.geo.length",
+    ))
+}
+
+/// CRS-aware Perimeter of each (multi)polygon (issue #177): ST_Perimeter /
+/// ST_Perimeter_Spheroid picked from the input's CRS unit.
+pub(crate) fn build_geo_perimeter(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.perimeter"))?;
+    let column = string_prop(props, "geomColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Geo Perimeter needs a geometry column".to_string())?;
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "perimeter".into());
+    Ok(crs_aware_measure(
+        upstream,
+        &column,
+        &output,
+        "ST_Perimeter",
+        "ST_Perimeter_Spheroid",
+        "",
+        "xf.geo.perimeter",
+    ))
+}
+
+/// CRS-aware Area of each (multi)polygon (issue #177): ST_Area /
+/// ST_Area_Spheroid picked from the input's CRS unit.
+pub(crate) fn build_geo_area(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.area"))?;
+    let column = string_prop(props, "geomColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Geo Area needs a geometry column".to_string())?;
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "area".into());
+    Ok(crs_aware_measure(
+        upstream,
+        &column,
+        &output,
+        "ST_Area",
+        "ST_Area_Spheroid",
+        "",
+        "xf.geo.area",
     ))
 }
 
@@ -8441,6 +8570,41 @@ mod geom_dq_tests {
     fn spatial_extension_is_force_loaded() {
         for id in ["qa.geomvalidate", "qa.geomrepair", "qa.geomempty"] {
             assert!(attach_prelude(id, &json!({})).contains("LOAD spatial"), "{} missing spatial prelude", id);
+        }
+    }
+
+    #[test]
+    fn crs_aware_measurements_pick_planar_or_spheroid() {
+        // Issue #177: each measurement resolves the CRS unit from typeof(col),
+        // errors when there is none, and picks the planar/spheroidal function.
+        let cases = [
+            ("xf.geo.length", build_geo_length as fn(&NodeInputs, &JsonValue) -> Result<String, String>, "ST_Length", "ST_Length_Spheroid", "length"),
+            ("xf.geo.perimeter", build_geo_perimeter, "ST_Perimeter", "ST_Perimeter_Spheroid", "perimeter"),
+            ("xf.geo.area", build_geo_area, "ST_Area", "ST_Area_Spheroid", "area"),
+        ];
+        for (id, f, planar, spheroid, out) in cases {
+            let sql = f(&one_input(), &json!({"geomColumn": "geom"})).unwrap();
+            assert!(sql.contains("duckdb_coordinate_systems()"), "{id}: no CRS lookup");
+            assert!(sql.contains("regexp_extract(typeof("), "{id}: no typeof CRS probe");
+            assert!(sql.contains("does not have a valid Coordinate Reference System"), "{id}: no no-CRS error");
+            assert!(sql.contains(&format!("{spheroid}(CAST(")), "{id}: missing {spheroid}");
+            // Planar arm must be the bare function, not a prefix of the spheroid one.
+            assert!(sql.contains(&format!("ELSE {planar}(CAST(")), "{id}: missing planar {planar}");
+            assert!(sql.contains(&format!("AS \"{out}\"")), "{id}: wrong output column");
+        }
+        // Distance carries a second (target) geometry argument.
+        let dist = build_geo_distance(
+            &one_input(),
+            &json!({"geomColumn": "geom", "targetWkt": "POINT(0 0)"}),
+        )
+        .unwrap();
+        assert!(dist.contains("ST_Distance_Spheroid(CAST(__g.\"geom\" AS GEOMETRY), ST_GeomFromText('POINT(0 0)'))"));
+        assert!(dist.contains("ELSE ST_Distance(CAST(__g.\"geom\" AS GEOMETRY), ST_GeomFromText('POINT(0 0)'))"));
+        // The measurements pin axis order so the *_Spheroid functions do not warn.
+        for id in ["xf.geo.distance", "xf.geo.length", "xf.geo.perimeter", "xf.geo.area"] {
+            let p = attach_prelude(id, &json!({}));
+            assert!(p.contains("LOAD spatial"), "{id} missing spatial prelude");
+            assert!(p.contains("geometry_always_xy"), "{id} missing axis-order pin");
         }
     }
 }

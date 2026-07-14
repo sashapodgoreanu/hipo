@@ -3027,6 +3027,69 @@ fn spatial_source_reads_geojson() {
 }
 
 #[test]
+fn geo_measurements_are_crs_aware() {
+    // Issue #177: Length/Perimeter/Area/Distance auto-select the spheroidal or
+    // planar DuckDB function from the geometry's CRS, and reject geometry with
+    // no CRS. This exercises the whole path end-to-end: ST_Read attaches
+    // EPSG:4326 to the GeoJSON geometry, the CRS survives the source stage's
+    // v1.5.0 materialization, and the transform reads it back from the column
+    // type. GDAL-backed spatial is ~50 MB; opt in with DUCKLE_TEST_SPATIAL=1.
+    if std::env::var("DUCKLE_TEST_SPATIAL").ok().as_deref() != Some("1") {
+        eprintln!("skipping: set DUCKLE_TEST_SPATIAL=1 to run spatial tests");
+        return;
+    }
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // (a) Geographic CRS (degrees) -> spheroid length in metres. A 1-degree
+    // line at the equator is ~111.3 km, NOT ~1 (which a planar measurement of
+    // the raw degrees would give).
+    let geojson = write_file(
+        tmp.path(),
+        "line.geojson",
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":1},"geometry":{"type":"LineString","coordinates":[[0,0],[1,0]]}}]}"#,
+    );
+    let out = out_path(tmp.path(), "len.csv");
+    let d = doc(
+        json!([
+            node("r", "src.spatial", json!({ "path": geojson })),
+            node("m", "xf.geo.length", json!({ "geomColumn": "geom", "outputColumn": "len" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "r", "m"), main_edge("e2", "m", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "geo length failed: {:?}", result.error);
+    let len: f64 = scalar_string(&format!("SELECT CAST(len AS VARCHAR) FROM read_csv_auto('{}')", out))
+        .parse()
+        .unwrap();
+    assert!(
+        (111_000.0..111_500.0).contains(&len),
+        "expected spheroid length ~111319 m, got {len}"
+    );
+
+    // (b) No CRS (a plain VARCHAR WKT column) -> informative error, not a
+    // wrong planar number. The typeof-based probe is bind-safe on VARCHAR.
+    let csv = write_file(tmp.path(), "wkt.csv", "id,geom\n1,\"LINESTRING(0 0, 1 0)\"\n");
+    let out2 = out_path(tmp.path(), "err.csv");
+    let d2 = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("m", "xf.geo.length", json!({ "geomColumn": "geom", "outputColumn": "len" })),
+            node("k", "snk.csv", json!({ "path": out2, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "m"), main_edge("e2", "m", "k")]),
+    );
+    let r2 = engine.execute_pipeline(&d2);
+    assert_ne!(r2.status, "ok", "expected no-CRS geometry to be rejected");
+    assert!(
+        r2.error.as_deref().unwrap_or_default().contains("Coordinate Reference System"),
+        "expected CRS error, got {:?}",
+        r2.error
+    );
+}
+
+#[test]
 fn text_search_ranks_by_bm25() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();
