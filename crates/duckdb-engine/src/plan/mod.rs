@@ -3377,6 +3377,7 @@ fn build_stage(
             pagination: RestPagination::None,
             max_pages: 1,
             oauth: None,
+            declared_schema: node.data.schema.clone(),
         });
         (String::new(), StageKind::View, None)
     } else if matches!(
@@ -3604,6 +3605,7 @@ fn build_stage(
             pagination,
             max_pages,
             oauth,
+            declared_schema: node.data.schema.clone(),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.snowflake" {

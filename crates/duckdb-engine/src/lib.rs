@@ -2635,15 +2635,86 @@ fn materialize_jsonobjects_as_table(
     node_id: &str,
     rows: &[JsonValue],
 ) -> Result<(), EngineError> {
+    materialize_jsonobjects_as_table_typed(bin, db, node_id, rows, None)
+}
+
+/// Like `materialize_jsonobjects_as_table`, but carries the node's declared
+/// schema so an EMPTY `rows` slice produces a typed 0-row relation with the
+/// real columns instead of a single `json` column (issue #170). `None` schema
+/// -> an empty result is a clear source-level error rather than a misleading
+/// binder error on the next node.
+fn materialize_jsonobjects_as_table_typed(
+    bin: &Path,
+    db: &Path,
+    node_id: &str,
+    rows: &[JsonValue],
+    empty_schema: Option<&[duckle_metadata::Column]>,
+) -> Result<(), EngineError> {
     // Bulk-Vec path. Most REST connectors collect a bounded response
     // (a single API call's worth of rows) and hand it in here. For
     // sources that pull millions of rows from a database, use
     // JsonLinesWriter directly so the rows never collect in RAM.
-    let mut writer = JsonLinesWriter::open(node_id)?;
+    let mut writer = JsonLinesWriter::open_with_schema(node_id, empty_schema.map(|s| s.to_vec()))?;
     for row in rows {
         writer.write_row(row)?;
     }
     writer.finalize_into_table(bin, db, node_id)
+}
+
+/// Materialize an EMPTY result set (0 rows) for a node that streamed no rows
+/// through a JsonLinesWriter. With a declared schema, creates a typed 0-row
+/// relation so downstream SQL binds the real columns; without one, returns a
+/// clear source-level error instead of the misleading single-`json` column
+/// read_json_auto produces over an empty file (issue #170).
+fn materialize_empty_result(
+    bin: &Path,
+    db: &Path,
+    node_id: &str,
+    schema: Option<&[duckle_metadata::Column]>,
+) -> Result<(), EngineError> {
+    match schema {
+        Some(cols) if !cols.is_empty() => {
+            let select_list = cols
+                .iter()
+                .map(|c| {
+                    format!(
+                        "NULL::{} AS {}",
+                        plan::data_type_to_duckdb_sql(&c.data_type),
+                        plan::quote_ident(&c.name)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT {} LIMIT 0",
+                plan::quote_ident(node_id),
+                select_list
+            );
+            apply_duckdb_sql(bin, db, &sql)
+        }
+        _ => Err(EngineError::Query(format!(
+            "{}: query returned 0 records and no schema is declared to type an empty result",
+            node_id
+        ))),
+    }
+}
+
+/// Materialize an empty (0-row) table shaped exactly like `from_view`, for a
+/// transform whose upstream produced no rows. Preserves the upstream columns so
+/// downstream SQL still binds, instead of erroring or emitting a single `json`
+/// column (issue #170).
+fn materialize_empty_like_view(
+    bin: &Path,
+    db: &Path,
+    node_id: &str,
+    from_view: &str,
+) -> Result<(), EngineError> {
+    let sql = format!(
+        "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} LIMIT 0",
+        plan::quote_ident(node_id),
+        plan::quote_ident(from_view)
+    );
+    apply_duckdb_sql(bin, db, &sql)
 }
 
 /// Streaming NDJSON writer used by source loops that don't want to
@@ -2658,16 +2729,37 @@ fn materialize_jsonobjects_as_table(
 pub(crate) struct JsonLinesWriter {
     writer: std::io::BufWriter<std::fs::File>,
     path: PathBuf,
+    /// Rows written so far. When 0 at finalize time the NDJSON file is empty and
+    /// read_json_auto would type the node as a single `json` column, breaking
+    /// every downstream column reference; the finalizer builds a typed 0-row
+    /// relation from `empty_schema` (or errors clearly) instead (issue #170).
+    rows_written: usize,
+    /// The node's declared output columns, used ONLY to type an empty result.
+    /// None -> an empty result is a clear source-level error rather than a
+    /// misleading single-`json` column.
+    empty_schema: Option<Vec<duckle_metadata::Column>>,
 }
 
 impl JsonLinesWriter {
     pub(crate) fn open(node_id: &str) -> Result<Self, EngineError> {
+        Self::open_with_schema(node_id, None)
+    }
+
+    /// Like `open`, but carries the node's declared schema so an EMPTY result
+    /// set materializes as a typed 0-row relation with the real columns instead
+    /// of a single `json` column (issue #170).
+    pub(crate) fn open_with_schema(
+        node_id: &str,
+        empty_schema: Option<Vec<duckle_metadata::Column>>,
+    ) -> Result<Self, EngineError> {
         let path = unique_rest_tmp_path(node_id);
         let file = std::fs::File::create(&path)
             .map_err(|e| EngineError::Query(format!("rest source: create tmp file: {}", e)))?;
         Ok(Self {
             writer: std::io::BufWriter::with_capacity(64 * 1024, file),
             path,
+            rows_written: 0,
+            empty_schema,
         })
     }
 
@@ -2677,7 +2769,9 @@ impl JsonLinesWriter {
             .map_err(|e| EngineError::Query(format!("rest source: JSON encode: {}", e)))?;
         self.writer
             .write_all(b"\n")
-            .map_err(|e| EngineError::Query(format!("rest source: write tmp file: {}", e)))
+            .map_err(|e| EngineError::Query(format!("rest source: write tmp file: {}", e)))?;
+        self.rows_written += 1;
+        Ok(())
     }
 
     pub(crate) fn finalize_into_table(
@@ -2692,6 +2786,16 @@ impl JsonLinesWriter {
             .map_err(|e| EngineError::Query(format!("rest source: flush tmp file: {}", e)))?;
         // Drop the buffer (closes file handle) before DuckDB reads it.
         drop(self.writer);
+        // Empty result set (issue #170): the NDJSON file has no rows, so
+        // read_json_auto would type the node as a single `json` column and every
+        // downstream column reference would fail with a confusing binder error.
+        // Instead build a typed 0-row relation from the node's declared schema,
+        // or fail with a clear source-level message when none exists.
+        if self.rows_written == 0 {
+            let r = materialize_empty_result(bin, db, node_id, self.empty_schema.as_deref());
+            let _ = std::fs::remove_file(&self.path);
+            return r;
+        }
         // sample_size=-1 makes read_json_auto scan every row for type
         // inference instead of only the first ~20480. Without it, a column
         // that is null across the sample window (typed JSON, then recovered by
@@ -4391,6 +4495,89 @@ mod tests {
         let child = run_b.clone();
         run_b.request_cancel();
         assert!(child.check_cancelled().is_err(), "a clone shares the run's flag");
+    }
+
+    #[test]
+    fn empty_result_types_from_schema_or_errors_170() {
+        // #170: an empty result set must NOT materialize as a single `json`
+        // column (which breaks every downstream column reference). It must
+        // become a typed 0-row relation from the declared schema, mirror the
+        // upstream view for a transform, or fail with a clear source message.
+        use super::{
+            materialize_empty_like_view, materialize_jsonobjects_as_table,
+            materialize_jsonobjects_as_table_typed,
+        };
+        use duckle_metadata::Column;
+
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let col = |name: &str, dt: DataType| Column {
+            name: name.into(),
+            data_type: dt,
+            nullable: true,
+            primary_key: None,
+            format: None,
+        };
+        let scalar = |db: &std::path::Path, sql: &str| -> String {
+            let out = std::process::Command::new(&bin)
+                .arg(db)
+                .arg("-noheader")
+                .arg("-list")
+                .arg("-c")
+                .arg(sql)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+
+        // 1. Empty rows + declared schema -> typed 0-row table; downstream
+        // column references bind instead of the #170 "Candidate bindings: json".
+        let db1 = dir.path().join("a.db");
+        let schema = vec![col("uid", DataType::Int64), col("name", DataType::String)];
+        materialize_jsonobjects_as_table_typed(&bin, &db1, "n", &[], Some(&schema)).unwrap();
+        assert_eq!(scalar(&db1, "SELECT count(*) FROM n"), "0");
+        assert_eq!(scalar(&db1, "SELECT count(uid) FROM n"), "0");
+        assert_eq!(
+            scalar(&db1, "SELECT string_agg(name, ',' ORDER BY cid) FROM pragma_table_info('n')"),
+            "uid,name"
+        );
+
+        // 2. Empty rows + no schema -> clear source-level error, not a json col.
+        let db2 = dir.path().join("b.db");
+        let err = materialize_jsonobjects_as_table(&bin, &db2, "n", &[]).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("0 records") && msg.contains("no schema"),
+            "unexpected error: {msg}"
+        );
+
+        // 3. Non-empty rows still materialize normally.
+        let db3 = dir.path().join("c.db");
+        let rows = vec![serde_json::json!({"uid": 1, "name": "a"})];
+        materialize_jsonobjects_as_table(&bin, &db3, "n", &rows).unwrap();
+        assert_eq!(scalar(&db3, "SELECT count(*) FROM n"), "1");
+
+        // 4. Empty transform upstream -> table shaped like the upstream view.
+        let db4 = dir.path().join("d.db");
+        std::process::Command::new(&bin)
+            .arg(&db4)
+            .arg("-c")
+            .arg("CREATE TABLE up AS SELECT 1::INTEGER AS a, 'x'::VARCHAR AS b LIMIT 0;")
+            .output()
+            .unwrap();
+        materialize_empty_like_view(&bin, &db4, "n", "up").unwrap();
+        assert_eq!(scalar(&db4, "SELECT count(*) FROM n"), "0");
+        assert_eq!(
+            scalar(&db4, "SELECT string_agg(name, ',' ORDER BY cid) FROM pragma_table_info('n')"),
+            "a,b"
+        );
     }
 
     #[test]

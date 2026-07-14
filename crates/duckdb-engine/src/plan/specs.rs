@@ -1300,6 +1300,11 @@ pub struct RestSourceSpec {
     /// `Authorization: Bearer <token>` before the request loop, overriding any
     /// static auth header. None for every other REST source.
     pub oauth: Option<SalesforceOAuth>,
+    /// #170: the node's declared output schema, when the user declared one. Used
+    /// ONLY to type an EMPTY result set (a REST / SaaS query that matched no
+    /// records) so downstream SQL sees the real columns instead of a single
+    /// `json` column. None -> an empty result is a clear source-level error.
+    pub declared_schema: Option<Vec<duckle_metadata::Column>>,
 }
 
 /// src.databricks: SQL Statement Execution API read. Same shape as

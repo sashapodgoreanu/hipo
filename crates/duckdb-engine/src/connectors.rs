@@ -4707,7 +4707,7 @@ impl DuckdbEngine {
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
         if rows.is_empty() {
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!(
                 "ai.embed: 0 upstream rows -> {}",
                 spec.node_id
@@ -5314,7 +5314,33 @@ impl DuckdbEngine {
         let total = mailbox.exists as u64;
         if total == 0 {
             let _ = session.logout();
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            // #170: type the empty result with src.email's fixed output columns
+            // (see the per-message row below) so downstream SQL binds them
+            // instead of a single `json` column.
+            let schema = [
+                ("uid", duckle_metadata::DataType::Int64),
+                ("from", duckle_metadata::DataType::String),
+                ("to", duckle_metadata::DataType::String),
+                ("subject", duckle_metadata::DataType::String),
+                ("date", duckle_metadata::DataType::String),
+                ("body_text", duckle_metadata::DataType::String),
+            ]
+            .iter()
+            .map(|(name, dt)| duckle_metadata::Column {
+                name: (*name).to_string(),
+                data_type: *dt,
+                nullable: true,
+                primary_key: None,
+                format: None,
+            })
+            .collect::<Vec<_>>();
+            materialize_jsonobjects_as_table_typed(
+                &self.bin,
+                db,
+                &spec.node_id,
+                &[],
+                Some(schema.as_slice()),
+            )?;
             return Ok(format!(
                 "email: 0 messages in {} -> {}",
                 spec.mailbox, spec.node_id
@@ -5394,7 +5420,7 @@ impl DuckdbEngine {
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
         if rows.is_empty() {
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!(
                 "code.javascript: 0 upstream rows -> {}",
                 spec.node_id
@@ -5547,7 +5573,7 @@ impl DuckdbEngine {
             &format!("SELECT * FROM {};", plan::quote_ident(&spec.from_view)),
         )?;
         if rows.is_empty() {
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("code.python: 0 upstream rows -> {}", spec.node_id));
         }
         let safe: String = spec
@@ -5639,6 +5665,12 @@ impl DuckdbEngine {
             Some(db),
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
+        if rows.is_empty() {
+            // #170: empty upstream -> empty output shaped like upstream, so
+            // downstream binds the real columns instead of erroring.
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
+            return Ok(format!("ai.dedupe: 0 upstream rows -> {}", spec.node_id));
+        }
         if rows.len() > AI_DEDUPE_MAX_ROWS {
             return Err(EngineError::Config(format!(
                 "ai.dedupe compares every row against all kept rows (O(N^2)); {} input rows \
@@ -5715,7 +5747,7 @@ impl DuckdbEngine {
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
         if rows.is_empty() {
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("ai.classify: 0 upstream rows -> {}", spec.node_id));
         }
         let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
@@ -5802,7 +5834,7 @@ impl DuckdbEngine {
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
         if rows.is_empty() {
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("ai.llm: 0 upstream rows -> {}", spec.node_id));
         }
         let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
@@ -5876,6 +5908,12 @@ impl DuckdbEngine {
             Some(db),
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
+        if rows.is_empty() {
+            // #170: empty upstream -> empty output shaped like upstream, so
+            // downstream binds the real columns instead of erroring.
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
+            return Ok(format!("ai.pii: 0 upstream rows -> {}", spec.node_id));
+        }
         // Compile regex set once per stage (not once per row).
         let patterns = pii_patterns(&spec.types);
         let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
@@ -5917,6 +5955,12 @@ impl DuckdbEngine {
             Some(db),
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
+        if rows.is_empty() {
+            // #170: empty upstream -> empty output shaped like upstream, so
+            // downstream binds the real columns instead of erroring.
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
+            return Ok(format!("ai.chunk: 0 upstream rows -> {}", spec.node_id));
+        }
         let mut out: Vec<JsonValue> = Vec::new();
         for row in rows.iter() {
             self.check_cancelled()?;
@@ -5987,7 +6031,7 @@ impl DuckdbEngine {
             &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
         )?;
         if rows.is_empty() {
-            materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &[])?;
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("wasm: 0 upstream rows -> {}", spec.node_id));
         }
         let engine = wasmi::Engine::default();
@@ -7702,7 +7746,13 @@ impl DuckdbEngine {
                 spec.max_pages,
             ));
         }
-        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &all_rows)?;
+        materialize_jsonobjects_as_table_typed(
+            &self.bin,
+            db,
+            &spec.node_id,
+            &all_rows,
+            spec.declared_schema.as_deref(),
+        )?;
         Ok(format!(
             "rest: materialized {} rows ({} page(s)) into {}",
             all_rows.len(),
