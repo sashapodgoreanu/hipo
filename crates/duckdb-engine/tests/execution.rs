@@ -3090,6 +3090,87 @@ fn geo_measurements_are_crs_aware() {
 }
 
 #[test]
+fn jq_transform_applies_filter() {
+    // Issue #173: xf.jq runs a jq filter over a JSON column per row via the
+    // pure-Rust jaq engine (no external jq). One result -> scalar, several ->
+    // JSON array, none -> null. Row count is preserved.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Scalar extraction + missing-key -> null. Row 4 has no `v`.
+    let csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "id,payload\n1,\"{\"\"v\"\":10}\"\n2,\"{\"\"v\"\":20}\"\n3,\"{\"\"v\"\":30}\"\n4,\"{}\"\n",
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("j", "xf.jq", json!({ "column": "payload", "filter": ".v", "outputColumn": "result" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "j"), main_edge("e2", "j", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "jq failed: {:?}", r.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 4, "row count must be preserved");
+    let vals = scalar_string(&format!(
+        "SELECT string_agg(coalesce(CAST(result AS VARCHAR), 'NULL'), ',' ORDER BY id) FROM read_csv_auto('{}')",
+        out
+    ));
+    assert_eq!(vals, "10,20,30,NULL", "got {}", vals);
+
+    // A filter that yields several results is folded into a JSON array.
+    let csv2 = write_file(tmp.path(), "arr.csv", "id,payload\n1,\"{\"\"tags\"\":[\"\"a\"\",\"\"b\"\"]}\"\n");
+    let out2 = out_path(tmp.path(), "arr_out.csv");
+    let d2 = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv2, "hasHeader": true })),
+            node("j", "xf.jq", json!({ "column": "payload", "filter": ".tags[]", "outputColumn": "out" })),
+            node("k", "snk.csv", json!({ "path": out2, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "j"), main_edge("e2", "j", "k")]),
+    );
+    let r2 = engine.execute_pipeline(&d2);
+    assert_eq!(r2.status, "ok", "jq array failed: {:?}", r2.error);
+    let arr = scalar_string(&format!("SELECT CAST(out AS VARCHAR) FROM read_csv_auto('{}')", out2));
+    assert!(arr.contains('a') && arr.contains('b') && arr.contains('['), "expected a JSON array, got {}", arr);
+
+    // A syntactically invalid filter fails the run up front (before any row).
+    let d3 = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("j", "xf.jq", json!({ "column": "payload", "filter": ".v |" })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "bad.csv"), "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "j"), main_edge("e2", "j", "k")]),
+    );
+    let r3 = engine.execute_pipeline(&d3);
+    assert_ne!(r3.status, "ok", "an invalid jq filter must fail");
+
+    // A row that errors under the filter is skipped to null when On error =
+    // null. `.v` indexing a bare string (the un-parseable payload) errors.
+    let csv4 = write_file(tmp.path(), "bad.csv", "id,payload\n1,\"not json\"\n");
+    let out4 = out_path(tmp.path(), "lenient.csv");
+    let d4 = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv4, "hasHeader": true })),
+            node("j", "xf.jq", json!({ "column": "payload", "filter": ".v", "outputColumn": "result", "onError": "null" })),
+            node("k", "snk.csv", json!({ "path": out4, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "j"), main_edge("e2", "j", "k")]),
+    );
+    let r4 = engine.execute_pipeline(&d4);
+    assert_eq!(r4.status, "ok", "onError=null should not fail: {:?}", r4.error);
+    let v4 = scalar_string(&format!(
+        "SELECT coalesce(CAST(result AS VARCHAR), 'NULL') FROM read_csv_auto('{}')",
+        out4
+    ));
+    assert_eq!(v4, "NULL", "bad row should be null under onError=null, got {}", v4);
+}
+
+#[test]
 fn text_search_ranks_by_bm25() {
     let engine = engine_or_skip!();
     let tmp = tempfile::tempdir().unwrap();

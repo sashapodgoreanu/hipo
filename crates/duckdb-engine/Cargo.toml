@@ -146,6 +146,14 @@ wasmi = "0.40"
 # engine calls it per row, marshalling JSON in / out via the boa
 # JsValue<->serde_json bridge.
 boa_engine = "0.19"
+# Pure-Rust jq for xf.jq (GitHub #173). jaq is a jq clone with no C libjq and
+# no subprocess: the user's jq filter is parsed and interpreted in-process, then
+# applied per row to a JSON column. This is exactly the "no subprocess overhead"
+# path the issue asks for. Pinned to the 1.x interpret API.
+jaq-interpret = "1.5"
+jaq-parse = "1.0"
+jaq-core = "1.5"
+jaq-std = "1.5"
 # Used by xf.ai.pii for regex-based PII detection (emails, phones,
 # SSNs, credit cards). Already in our dep graph transitively but
 # pinned explicitly here so it's stable across upstream churn.

@@ -201,6 +201,7 @@ pub enum RuntimeSpec {
     AiLlm(AiLlmSpec),
     AiClassify(AiClassifySpec),
     AiDedupe(AiDedupeSpec),
+    Jq(JqSpec),
 }
 
 // Connector / transform spec type definitions live in plan/specs.rs and
@@ -1066,6 +1067,7 @@ fn build_stage(
     let mut ai_embed: Option<AiEmbedSpec> = None;
     let mut wasm: Option<WasmSpec> = None;
     let mut javascript: Option<JavaScriptSpec> = None;
+    let mut jq: Option<JqSpec> = None;
     let mut python: Option<PythonSpec> = None;
     let mut ai_chunk: Option<AiChunkSpec> = None;
     let mut ai_pii: Option<AiPiiSpec> = None;
@@ -3743,6 +3745,32 @@ fn build_stage(
             script,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "xf.jq" {
+        // Per-row jq filter over a JSON column (GitHub #173), evaluated in the
+        // pure-Rust jaq engine. Runs as an isolated runtime spec (no SQL) like
+        // the other in-engine per-row transforms.
+        let from_view = inputs
+            .main()
+            .ok_or_else(|| EngineError::Config(format!("{}: upstream input required", component_id)))?;
+        let column = string_prop(&props, "column")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: a JSON column is required", component_id)))?;
+        let filter = string_prop(&props, "filter")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: a jq filter is required", component_id)))?;
+        jq = Some(JqSpec {
+            node_id: node.id.clone(),
+            from_view: from_view.to_string(),
+            column,
+            filter,
+            output_column: string_prop(&props, "outputColumn")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "jq".into()),
+            on_error: string_prop(&props, "onError")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "fail".into()),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "code.python" {
         // Per-row Python transform. Script must define process(row) -> dict.
         // The scripts-group manifest stores the body under `code`; accept `script`
@@ -4401,6 +4429,7 @@ fn build_stage(
         .or_else(|| ai_llm.map(RuntimeSpec::AiLlm))
         .or_else(|| ai_classify.map(RuntimeSpec::AiClassify))
         .or_else(|| ai_dedupe.map(RuntimeSpec::AiDedupe))
+        .or_else(|| jq.map(RuntimeSpec::Jq))
         ;
     // Free the ATTACH alias so the next batched stage can re-ATTACH it (see
     // attach_alias above). Only stages that embed the ATTACH in their own SQL

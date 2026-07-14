@@ -4013,6 +4013,31 @@ function synthJsonTransform(comp: ComponentDef): ComponentManifest {
             },
         ], 'declared');
     }
+    if (id === 'xf.jq') {
+        return base(comp, [{ label: 'jq filter', fields: [
+            col,
+            {
+                key: 'filter',
+                label: 'jq filter',
+                kind: 'textarea',
+                required: true,
+                placeholder: '.items[] | select(.active) | {id, name: (.name | ascii_upcase)}',
+                description: 'A jq program applied to the JSON column of each row (evaluated in-process, no external jq). One result is stored as-is, several as a JSON array, none as null.',
+            },
+            { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'jq' },
+            {
+                key: 'onError',
+                label: 'On error',
+                kind: 'select',
+                defaultValue: 'fail',
+                options: [
+                    { value: 'fail', label: 'Fail the run' },
+                    { value: 'null', label: 'Emit null and continue' },
+                ],
+                description: 'What to do when a row is not valid JSON or the filter errors on it.',
+            },
+        ] }], 'upstream');
+    }
     // parse / stringify
     return base(comp, [{ label: 'JSON operation', fields: [col, outColField()] }], 'upstream');
 }

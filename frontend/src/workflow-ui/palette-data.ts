@@ -410,6 +410,7 @@ export const PALETTE: Category[] = [
                     xf('json.path', 'JSONPath Extract', 'available'),
                     xf('json.merge', 'Merge Objects', 'available'),
                     xf('json.array_agg', 'Array Aggregate', 'available', 'Collapse rows into a JSON array per group (json_group_array)'),
+                    xf('jq', 'jq Filter', 'available', 'Transform a JSON column with a jq program (in-process jaq, no external jq)'),
                 ],
             },
             {

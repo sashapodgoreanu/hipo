@@ -904,6 +904,24 @@ pub struct JavaScriptSpec {
     pub script: String,
 }
 
+/// xf.jq: apply a jq filter to a JSON column per row (GitHub #173). The filter
+/// is compiled once with the pure-Rust `jaq` engine (no C libjq, no subprocess)
+/// and evaluated against each row's `column` value. Row count is preserved 1:1:
+/// the filter's output stream is folded into the `output_column` as a single
+/// value when it yields one result, a JSON array when it yields several, and
+/// null when it yields none. On a parse/eval error `on_error` decides whether
+/// the stage fails or the row's output is null.
+#[derive(Debug, Clone)]
+pub struct JqSpec {
+    pub node_id: String,
+    pub from_view: String,
+    pub column: String,
+    pub filter: String,
+    pub output_column: String,
+    /// "fail" (default) aborts the stage on a bad row; "null" emits null instead.
+    pub on_error: String,
+}
+
 /// code.python: per-row transform via a real Python 3 interpreter (shelled out,
 /// so the user gets the full language + installed packages). The script defines
 /// `process(row)` returning a dict (the output row); returning None drops the

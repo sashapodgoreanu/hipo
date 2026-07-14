@@ -5557,6 +5557,116 @@ impl DuckdbEngine {
         ))
     }
 
+    /// xf.jq: apply a jq filter to a JSON column per row via the pure-Rust
+    /// `jaq` engine (GitHub #173). No C libjq, no subprocess: the filter is
+    /// compiled once and interpreted in-process against each row's column
+    /// value. Row count is preserved 1:1 - the output stream folds into the
+    /// output column as one value (1 result), a JSON array (>1) or null (0).
+    pub(crate) fn run_jq(&self, db: &Path, spec: &JqSpec) -> Result<String, EngineError> {
+        use jaq_interpret::{Ctx, FilterT, ParseCtx, RcIter, Val};
+        self.check_cancelled()?;
+
+        // Compile the filter ONCE, up front, so a bad program fails the stage
+        // immediately instead of once per row.
+        let mut defs = ParseCtx::new(Vec::new());
+        defs.insert_natives(jaq_core::core());
+        defs.insert_defs(jaq_std::std());
+        let (parsed, parse_errs) = jaq_parse::parse(&spec.filter, jaq_parse::main());
+        if !parse_errs.is_empty() {
+            let msg = parse_errs
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(EngineError::Config(format!(
+                "xf.jq: could not parse filter `{}`: {}",
+                spec.filter, msg
+            )));
+        }
+        let parsed = parsed
+            .ok_or_else(|| EngineError::Config("xf.jq: empty jq filter".into()))?;
+        let filter = defs.compile(parsed);
+        if !defs.errs.is_empty() {
+            let msg = defs
+                .errs
+                .iter()
+                .map(|(e, _)| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(EngineError::Config(format!(
+                "xf.jq: could not compile filter `{}`: {}",
+                spec.filter, msg
+            )));
+        }
+
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT * FROM {};", quote_ident(&spec.from_view)),
+        )?;
+        if rows.is_empty() {
+            materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
+            return Ok(format!("xf.jq: 0 upstream rows -> {}", spec.node_id));
+        }
+
+        let lenient = spec.on_error.eq_ignore_ascii_case("null");
+        let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+        for row in rows.iter() {
+            self.check_cancelled()?;
+            // Extract the target column's JSON value. A DuckDB JSON column
+            // arrives already-nested; a VARCHAR column carrying JSON text
+            // arrives as a string, so parse it when it parses (and otherwise
+            // feed jq the raw string, which is a valid jq input).
+            let input = match row.get(&spec.column) {
+                Some(JsonValue::String(s)) => {
+                    serde_json::from_str::<JsonValue>(s).unwrap_or_else(|_| JsonValue::String(s.clone()))
+                }
+                Some(v) => v.clone(),
+                None => JsonValue::Null,
+            };
+
+            let inputs = RcIter::new(core::iter::empty());
+            let mut results: Vec<JsonValue> = Vec::new();
+            let mut row_err: Option<String> = None;
+            for r in filter.run((Ctx::new(Vec::new(), &inputs), Val::from(input))) {
+                match r {
+                    Ok(v) => results.push(JsonValue::from(v)),
+                    Err(e) => {
+                        row_err = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+            let value = if let Some(e) = row_err {
+                if lenient {
+                    JsonValue::Null
+                } else {
+                    return Err(EngineError::Query(format!(
+                        "xf.jq: filter failed on a row (column `{}`): {}. Set On error to 'null' to skip such rows.",
+                        spec.column, e
+                    )));
+                }
+            } else {
+                match results.len() {
+                    0 => JsonValue::Null,
+                    1 => results.pop().unwrap(),
+                    _ => JsonValue::Array(results),
+                }
+            };
+
+            // Enrich the row in place: keep every upstream column, add/replace
+            // the output column with the jq result.
+            let mut obj = match row {
+                JsonValue::Object(m) => m.clone(),
+                _ => serde_json::Map::new(),
+            };
+            obj.insert(spec.output_column.clone(), value);
+            out.push(JsonValue::Object(obj));
+        }
+        let count = out.len();
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &out)?;
+        Ok(format!("xf.jq: transformed {} row(s) into {}", count, spec.node_id))
+    }
+
     /// code.python: per-row transform via a real Python 3 interpreter (shelled
     /// out, so the user gets the full language + installed packages). The script
     /// defines process(row) -> dict; the engine wraps it in a harness that reads
