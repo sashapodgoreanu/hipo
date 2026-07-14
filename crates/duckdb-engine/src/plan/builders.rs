@@ -301,6 +301,7 @@ pub(crate) fn build_view_sql(
         "xf.ip.parse" => build_ip_parse(inputs, props),
         "xf.geo.distance" => build_geo_distance(inputs, props),
         "xf.geo.buffer" => build_geo_buffer(inputs, props),
+        "xf.geo.flip" => build_geo_flip(inputs, props),
         "xf.geo.intersects" => build_geo_intersects(inputs, props),
         "xf.num.round" | "xf.num.abs" | "xf.num.mod" | "xf.num.power" | "xf.num.sqrt"
         | "xf.num.log" => build_numeric(inputs, props, component_id),
@@ -4813,6 +4814,7 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         | "snk.spatial"
         | "xf.geo.distance"
         | "xf.geo.buffer"
+        | "xf.geo.flip"
         | "xf.geo.intersects"
         | "xf.join.spatial"
         // Geometry DQ tools (issue #158) call ST_IsValid / ST_MakeValid / ST_IsEmpty.
@@ -5833,6 +5835,24 @@ pub(crate) fn build_geo_buffer(inputs: &NodeInputs, props: &JsonValue) -> Result
         col = quote_ident(&column),
         distance = distance,
         out = quote_ident(&output),
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Flip Coordinates (issue #178): swap the X/Y of every vertex in the geometry
+/// column (fixes lat,lon data stored as lon,lat and vice versa) via
+/// `ST_FlipCoordinates`, replacing the geometry in place with `SELECT * REPLACE`
+/// so all other attributes pass through untouched. CAST accepts a native
+/// GEOMETRY column (no-op) or a VARCHAR WKT column (parsed).
+pub(crate) fn build_geo_flip(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.flip"))?;
+    let column = string_prop(props, "geomColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Flip Coordinates needs a geometry column".to_string())?;
+    let col = quote_ident(&column);
+    Ok(format!(
+        "SELECT * REPLACE (ST_FlipCoordinates(CAST({col} AS GEOMETRY)) AS {col}) FROM {up}",
+        col = col,
         up = quote_ident(upstream)
     ))
 }
@@ -7665,12 +7685,46 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
 
 pub(crate) fn build_parquet_sink(props: &JsonValue, from_view: &str) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
-    let compression = string_prop(props, "compression").unwrap_or_else(|| "ZSTD".into());
+    // #174: the UI exposes "None" as a compression option, but DuckDB only
+    // accepts UNCOMPRESSED for "no compression" - a literal NONE / None / ""
+    // fails with "Expected compression argument to be any of [uncompressed,
+    // ...]". Normalize any none-ish value to UNCOMPRESSED.
+    let compression = {
+        let c = string_prop(props, "compression").unwrap_or_else(|| "ZSTD".into());
+        let c = c.trim();
+        if c.is_empty() || c.eq_ignore_ascii_case("none") {
+            "UNCOMPRESSED".to_string()
+        } else {
+            c.to_string()
+        }
+    };
     let partition = columns_from_props(props, "partitionBy").unwrap_or_default();
     let mut options = vec![
         "FORMAT PARQUET".to_string(),
         format!("COMPRESSION '{}'", sql_escape(&compression)),
     ];
+    // #175: optional COMPRESSION_LEVEL. DuckDB (1.5.4) accepts a level ONLY for
+    // the ZSTD codec ("Compression level is only supported for the ZSTD
+    // compression codec"), so emit it only for ZSTD and ignore it otherwise -
+    // an unsupported combination would fail the whole write.
+    if compression.eq_ignore_ascii_case("ZSTD") {
+        let level = props.get("compressionLevel").and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        });
+        if let Some(n) = level {
+            options.push(format!("COMPRESSION_LEVEL {}", n));
+        }
+    }
+    // #175: optional Parquet format version. V1 (DuckDB's default) preserves
+    // maximum downstream compatibility; only emit PARQUET_VERSION when the user
+    // opts into V2, so absent / V1 keeps the default untouched.
+    if let Some(v) = string_prop(props, "parquetVersion") {
+        let v = v.trim();
+        if v.eq_ignore_ascii_case("v2") || v == "2" {
+            options.push("PARQUET_VERSION V2".to_string());
+        }
+    }
     // Forward the "Row group size" UI field. Without it DuckDB falls back to
     // its internal default (~122,880 rows); a larger value (e.g. 1,000,000)
     // cuts per-row-group metadata overhead on big writes. Accept a number or a

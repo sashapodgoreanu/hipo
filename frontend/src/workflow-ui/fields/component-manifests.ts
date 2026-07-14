@@ -1072,6 +1072,24 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                         ],
                     },
                     {
+                        key: 'compressionLevel',
+                        label: 'Compression level',
+                        kind: 'integer',
+                        visibleWhen: { key: 'compression', equals: 'zstd' },
+                        description: 'ZSTD only (1-22). Leave empty to let DuckDB pick its default. Higher = smaller files, slower writes.',
+                    },
+                    {
+                        key: 'parquetVersion',
+                        label: 'Parquet version',
+                        kind: 'select',
+                        defaultValue: 'v1',
+                        options: [
+                            { label: 'V1 (maximum compatibility)', value: 'v1' },
+                            { label: 'V2 (newer encodings)', value: 'v2' },
+                        ],
+                        description: 'V1 is the most widely compatible. V2 enables newer Parquet encodings for smaller files.',
+                    },
+                    {
                         key: 'rowGroupSize',
                         label: 'Row group size',
                         kind: 'integer',

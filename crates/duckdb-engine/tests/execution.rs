@@ -192,6 +192,37 @@ fn csv_filter_parquet_end_to_end() {
 }
 
 #[test]
+fn parquet_sink_compression_options() {
+    // #174: "None" compression must write an UNCOMPRESSED parquet, not fail with
+    // "Expected compression argument to be any of [...]". #175: ZSTD with an
+    // explicit compression level and PARQUET_VERSION V2 must also write cleanly.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n");
+    for (label, opts) in [
+        ("none", json!({ "compression": "none" })),
+        (
+            "zstd_level_v2",
+            json!({ "compression": "zstd", "compressionLevel": 9, "parquetVersion": "v2" }),
+        ),
+    ] {
+        let out = out_path(tmp.path(), &format!("out_{}.parquet", label));
+        let mut sink = opts.as_object().unwrap().clone();
+        sink.insert("path".into(), json!(out));
+        let d = doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("k", "snk.parquet", Value::Object(sink)),
+            ]),
+            json!([main_edge("e1", "s", "k")]),
+        );
+        let result = engine.execute_pipeline(&d);
+        assert_eq!(result.status, "ok", "{}: {:?}", label, result.error);
+        assert_eq!(count(&format!("read_parquet('{}')", out)), 2, "{}", label);
+    }
+}
+
+#[test]
 fn csv_distinct_parquet_reports_rows() {
     // Mirrors a user pipeline (CSV -> Distinct -> Parquet) that reported
     // "0 rows written" despite RUN SUCCEEDED. Verify the batched executor
@@ -3250,6 +3281,53 @@ fn geo_distance_computes_point_distance() {
         out
     ));
     assert_eq!(a, "5.0", "got {}", a);
+}
+
+#[test]
+fn geo_flip_swaps_xy_coordinates() {
+    // #178: xf.geo.flip swaps the X/Y of every vertex (fixes lat,lon data
+    // stored as lon,lat). Gated behind DUCKLE_TEST_SPATIAL like the other
+    // GDAL-backed spatial tests.
+    if std::env::var("DUCKLE_TEST_SPATIAL").ok().as_deref() != Some("1") {
+        eprintln!("skipping: set DUCKLE_TEST_SPATIAL=1 to run spatial tests");
+        return;
+    }
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let parquet = out_path(tmp.path(), "geoms.parquet");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "INSTALL spatial; LOAD spatial; \
+             COPY (SELECT ST_Point(1, 2) AS loc) TO '{}' (FORMAT PARQUET)",
+            parquet
+        ),
+    );
+    let out = out_path(tmp.path(), "flipped.parquet");
+    let d = doc(
+        json!([
+            node("s", "src.parquet", json!({ "path": parquet })),
+            node("g", "xf.geo.flip", json!({ "geomColumn": "loc" })),
+            node("k", "snk.parquet", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "s", "g"), main_edge("e2", "g", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "geo_flip failed: {:?}", result.error);
+    // POINT(1 2) -> POINT(2 1): X and Y are swapped.
+    let xy = duckdb_json(&format!(
+        "INSTALL spatial; LOAD spatial; \
+         SELECT ST_X(loc) AS x, ST_Y(loc) AS y FROM read_parquet('{}')",
+        out
+    ));
+    assert_eq!(
+        xy.first().and_then(|r| r.get("x")).and_then(|v| v.as_f64()),
+        Some(2.0)
+    );
+    assert_eq!(
+        xy.first().and_then(|r| r.get("y")).and_then(|v| v.as_f64()),
+        Some(1.0)
+    );
 }
 
 #[test]

@@ -5587,6 +5587,22 @@ function synthGeoTransform(comp: ComponentDef): ComponentManifest {
             },
         ], 'upstream');
     }
+    if (comp.id === 'xf.geo.flip') {
+        return base(comp, [
+            {
+                label: 'Flip coordinates',
+                fields: [
+                    {
+                        key: 'geomColumn',
+                        label: 'Geometry column',
+                        kind: 'column',
+                        required: true,
+                        description: 'Swaps the X/Y of every vertex (fixes lat,lon data stored as lon,lat and vice versa). The geometry column is replaced in place; all other columns pass through.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.geo.intersects') {
         return base(comp, [
             {

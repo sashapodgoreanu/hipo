@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 363,
+  "componentCount": 364,
   "components": [
     {
       "id": "src.csv",
@@ -24534,6 +24534,78 @@
                 "label": "Output column",
                 "kind": "text",
                 "defaultValue": "intersects"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.geo.flip",
+      "label": "Flip Coordinates",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Swap X/Y of every vertex to fix lat,lon vs lon,lat order (ST_FlipCoordinates)",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.geo.flip",
+        "kind": "transform",
+        "label": "Flip Coordinates",
+        "description": "Swap X/Y of every vertex to fix lat,lon vs lon,lat order (ST_FlipCoordinates)",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Flip coordinates",
+            "fields": [
+              {
+                "key": "geomColumn",
+                "label": "Geometry column",
+                "kind": "column",
+                "required": true,
+                "description": "Swaps the X/Y of every vertex (fixes lat,lon data stored as lon,lat and vice versa). The geometry column is replaced in place; all other columns pass through."
               }
             ]
           }

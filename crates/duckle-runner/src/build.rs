@@ -766,7 +766,7 @@ fn needed_extensions(doc: &PipelineDoc) -> std::collections::BTreeSet<String> {
             "src.iceberg" | "snk.iceberg" => &["iceberg"],
             "src.delta" => &["delta"],
             "src.spatial" | "snk.spatial" | "xf.join.spatial" | "xf.geo.distance"
-            | "xf.geo.buffer" | "xf.geo.intersects" => &["spatial"],
+            | "xf.geo.buffer" | "xf.geo.intersects" | "xf.geo.flip" => &["spatial"],
             "xf.ai.vector_search" => &["vss"],
             "xf.ai.text_search" => &["fts"],
             "xf.ip.parse" => &["inet"],
