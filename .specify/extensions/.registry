@@ -17,6 +17,73 @@
       },
       "registered_skills": [],
       "installed_at": "2026-07-15T08:01:33.385894+00:00"
+    },
+    "agent-context": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:9a1dc02d2d0139bb03860392ecacef79183be2c442feda2f9ccaa4e5907b1e47",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.agent-context.update"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-07-15T09:35:54.177762+00:00"
+    },
+    "bug": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:1d0da5458f3c18ff08cf1602d88cecc33fad07068208951fb7128090cfa90c90",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.bug.assess",
+          "speckit.bug.fix",
+          "speckit.bug.test"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-07-15T09:35:55.362843+00:00"
+    },
+    "git": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:89711dec9716473fba4afc54f7224bcb28ebd3c55fb5aaa30df854ab02b07a75",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-07-15T09:36:00.004364+00:00"
+    },
+    "repoindex": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:9cdda95b31e5f1e50b1749c3c5bd61ca07f0f5609bc66b44c652854c233a7c07",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "codex": [
+          "speckit.repoindex.overview",
+          "speckit.repoindex-overview",
+          "speckit.repoindex.architecture",
+          "speckit.repoindex-architecture",
+          "speckit.repoindex.module",
+          "speckit.repoindex-module"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-07-15T09:53:48.669589+00:00"
     }
   }
 }
