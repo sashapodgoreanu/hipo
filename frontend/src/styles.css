@@ -264,6 +264,86 @@ textarea:focus-visible {
     background: var(--bg-4);
 }
 
+/* Frameless-window resize grips (#182). With decorations off, Linux has no
+   native resize border; these thin edge/corner strips forward the drag to the
+   OS via Tauri's startResizeDragging. The wrapper is inert; only the strips
+   capture the pointer, so the rest of the UI is untouched. */
+.win-resize {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    pointer-events: none;
+}
+
+.win-resize > div {
+    position: fixed;
+    pointer-events: auto;
+}
+
+.win-resize-n {
+    top: 0;
+    left: 6px;
+    right: 6px;
+    height: 5px;
+    cursor: ns-resize;
+}
+
+.win-resize-s {
+    bottom: 0;
+    left: 6px;
+    right: 6px;
+    height: 5px;
+    cursor: ns-resize;
+}
+
+.win-resize-w {
+    top: 6px;
+    bottom: 6px;
+    left: 0;
+    width: 5px;
+    cursor: ew-resize;
+}
+
+.win-resize-e {
+    top: 6px;
+    bottom: 6px;
+    right: 0;
+    width: 5px;
+    cursor: ew-resize;
+}
+
+.win-resize-nw {
+    top: 0;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+}
+
+.win-resize-ne {
+    top: 0;
+    right: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nesw-resize;
+}
+
+.win-resize-sw {
+    bottom: 0;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nesw-resize;
+}
+
+.win-resize-se {
+    bottom: 0;
+    right: 0;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+}
+
 /* Engine option: coming-soon (disabled) -------------------------------- */
 .engine-option.is-coming-soon {
     opacity: 0.5;

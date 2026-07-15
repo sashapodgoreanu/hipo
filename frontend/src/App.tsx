@@ -47,6 +47,7 @@ import EngineSetupModal from './workflow-ui/EngineSetupModal';
 import ChatPanel from './workflow-ui/ChatPanel';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
+import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
 import { engineStatus, seedSampleWorkspace } from './tauri-bridge';
 import { copyText, saveTextFile } from './tauri-io';
 import { writeClipboard, readClipboard, instantiateClipboard } from './clipboard';
@@ -2211,6 +2212,7 @@ export default function App() {
     return (
         <RunStatusContext.Provider value={runResult?.nodes ?? {}}>
         <div className="app">
+            <WindowResizeHandles />
             <header
                 className="topbar"
                 data-tauri-drag-region
