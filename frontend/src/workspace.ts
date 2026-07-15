@@ -18,6 +18,7 @@ const METADATA_FILE = 'duckle.json';
 const REPOSITORY_FILE = 'repository.json';
 const PIPELINES_DIR = 'pipelines';
 const CONNECTIONS_DIR = 'connections';
+const DATA_SOURCES_DIR = 'data-sources';
 const CONTEXTS_DIR = 'contexts';
 const ROUTINES_DIR = 'routines';
 const DOCS_DIR = 'docs';
@@ -27,6 +28,7 @@ const DASHBOARDS_DIR = 'dashboards';
 const PAYLOAD_DIR_BY_TYPE: Record<string, string> = {
     pipeline: PIPELINES_DIR,
     connection: CONNECTIONS_DIR,
+    data_source: DATA_SOURCES_DIR,
     context: CONTEXTS_DIR,
     routine: ROUTINES_DIR,
     doc: DOCS_DIR,
@@ -469,4 +471,67 @@ export const saveWorkspace = saveAll;
 // Expose for cleanup utilities.
 export async function listPipelineFiles(path: string): Promise<string[]> {
     return readDirEntries(joinPath(path, PIPELINES_DIR));
+}
+
+/** Pure pipeline migration helpers used by Data Source rename/delete flows. */
+export function propagateDataSourceAliasRename<T>(
+    pipelineData: Record<string, T>,
+    oldAlias: string,
+    newAlias: string,
+): Record<string, T> {
+    if (!oldAlias || oldAlias === newAlias) return pipelineData;
+    const escaped = oldAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const token = new RegExp(`\\b${escaped}\\b`, 'gi');
+    const replaceSql = (sql: string): string => {
+        let out = '';
+        let quote: string | null = null;
+        for (let i = 0; i < sql.length; i += 1) {
+            const ch = sql[i];
+            if ((ch === "'" || ch === '"') && sql[i - 1] !== '\\') {
+                quote = quote === ch ? null : quote ?? ch;
+                out += ch;
+            } else {
+                out += quote ? ch : ch;
+            }
+        }
+        if (!quote) return out.replace(token, newAlias);
+        // Preserve quoted literals by replacing only unquoted spans.
+        let result = '';
+        let start = 0;
+        let active: string | null = null;
+        for (let i = 0; i < sql.length; i += 1) {
+            const ch = sql[i];
+            if ((ch === "'" || ch === '"') && sql[i - 1] !== '\\') {
+                if (!active) { result += sql.slice(start, i).replace(token, newAlias); active = ch; }
+                else { result += sql.slice(start, i + 1); active = null; }
+                start = i + 1;
+            }
+        }
+        return result + (active ? sql.slice(start) : sql.slice(start).replace(token, newAlias));
+    };
+    return Object.fromEntries(Object.entries(pipelineData).map(([id, pipeline]) => {
+        const value = pipeline as unknown as { nodes?: Array<{ data?: { componentId?: string; properties?: Record<string, unknown> } }> };
+        const nodes = value.nodes?.map(node => {
+            if (node.data?.componentId !== 'src.query') return node;
+            const props = node.data.properties ?? {};
+            const sql = typeof props.sql === 'string' ? replaceSql(props.sql) : props.sql;
+            return { ...node, data: { ...node.data, properties: { ...props, sql } } };
+        });
+        return [id, nodes ? ({ ...value, nodes } as unknown as T) : pipeline];
+    }));
+}
+
+export function invalidateDataSourceRefs<T>(pipelineData: Record<string, T>, dataSourceId: string): Record<string, T> {
+    return Object.fromEntries(Object.entries(pipelineData).map(([id, pipeline]) => {
+        const value = pipeline as unknown as { nodes?: Array<{ data?: { componentId?: string; properties?: Record<string, unknown> } }> };
+        const nodes = value.nodes?.map(node => {
+            if (node.data?.componentId !== 'src.query') return node;
+            const props = node.data.properties ?? {};
+            const refs = Array.isArray(props.dataSourceRefs) ? props.dataSourceRefs.map(String) : [];
+            if (!refs.includes(dataSourceId)) return node;
+            const invalid = Array.isArray(props.invalidDataSourceRefs) ? props.invalidDataSourceRefs.map(String) : [];
+            return { ...node, data: { ...node.data, properties: { ...props, invalidDataSourceRefs: [...new Set([...invalid, dataSourceId])] } } };
+        });
+        return [id, nodes ? ({ ...value, nodes } as unknown as T) : pipeline];
+    }));
 }

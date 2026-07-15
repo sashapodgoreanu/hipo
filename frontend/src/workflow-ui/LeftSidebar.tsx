@@ -16,6 +16,7 @@ type Props = {
     onNewPipeline: (parentId: string) => void;
     onNewFolder: (parentId: string) => void;
     onNewConnection: (parentId: string) => void;
+    onNewDataSource: (parentId: string) => void;
     onNewContext: (parentId: string) => void;
     onNewDocument: (parentId: string) => void;
     onNewRoutine: (parentId: string) => void;
@@ -39,6 +40,7 @@ export default function LeftSidebar({
     onNewPipeline,
     onNewFolder,
     onNewConnection,
+    onNewDataSource,
     onNewContext,
     onNewDocument,
     onNewRoutine,
@@ -92,6 +94,7 @@ export default function LeftSidebar({
                         onNewPipeline={onNewPipeline}
                         onNewFolder={onNewFolder}
                         onNewConnection={onNewConnection}
+                        onNewDataSource={onNewDataSource}
                         onNewContext={onNewContext}
                         onNewDocument={onNewDocument}
                         onNewRoutine={onNewRoutine}

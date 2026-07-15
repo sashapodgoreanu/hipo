@@ -139,6 +139,7 @@ export const PALETTE: Category[] = [
                     src('db2', 'IBM DB2', 'planned'),
                     src('sqlite', 'SQLite', 'available', 'Read SQLite tables'),
                     src('duckdb', 'DuckDB', 'available', 'Read a table from a DuckDB file'),
+                    src('query', 'Query Source', 'available', 'Read-only SQL over shared Data Sources'),
                     src('clickhouse', 'ClickHouse', 'available', 'Read ClickHouse via the HTTP interface (POST SELECT ... FORMAT JSON). User/password auth via X-ClickHouse-User / X-ClickHouse-Key headers.'),
                     src('cockroach', 'CockroachDB', 'available', 'Read from CockroachDB via the DuckDB postgres extension'),
                     src('adbc', 'ADBC (Arrow)', 'available', 'Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options.'),

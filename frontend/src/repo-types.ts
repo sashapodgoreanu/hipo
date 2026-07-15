@@ -3,6 +3,7 @@ export type RepoItemType =
     | 'folder'
     | 'pipeline'
     | 'connection'
+    | 'data_source'
     | 'context'
     | 'routine'
     | 'doc'
@@ -74,6 +75,19 @@ export type ConnectionPayload = {
     notes?: string;
 };
 
+/** Workspace-owned catalog reference. Secrets remain in the referenced Connection. */
+export type DataSourceKind = 'duckdb' | 'postgres';
+
+export type DataSourcePayload = {
+    kind: DataSourceKind;
+    sqlAlias: string;
+    connectionRef: string;
+    readOnly?: boolean;
+    defaultCatalog?: string;
+    defaultSchema?: string;
+    options?: Record<string, string>;
+};
+
 export type ContextVariable = {
     key: string;
     value: string;
@@ -99,6 +113,7 @@ export type RoutinePayload = {
 
 export type RepoPayload =
     | ConnectionPayload
+    | DataSourcePayload
     | ContextPayload
     | DocumentPayload
     | RoutinePayload

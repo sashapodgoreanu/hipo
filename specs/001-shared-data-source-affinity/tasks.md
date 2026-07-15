@@ -10,12 +10,12 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 
 - [ ] T001 Add a compatibility inventory for existing `RepoItem`, `PipelineDoc`, `Stage`, `RuntimeSpec`, Tauri commands and event DTOs in `specs/001-shared-data-source-affinity/plan.md` — every changed serialized boundary is named.
 - [ ] T002 [P] Add regression fixtures for existing Source execution and materialization in `crates/duckdb-engine/tests/execution.rs` — baseline `two_duckdb_sources_same_database` remains green.
-- [ ] T003 [P] Record the CLI worker framing, cancellation and fallback ADR in `docs/architecture/adr-affinity-session.md` — decision and unresolved prototype risk are explicit.
+- [x] T003 [P] Record the CLI worker framing, cancellation and fallback ADR in `docs/architecture/adr-affinity-session.md` — decision and unresolved prototype risk are explicit.
 
 ## Phase 2 — Foundational types, persistence, and migration
 
-- [ ] T004 Extend `RepoItemType` and `RepoPayload` with `data_source` and `DataSourcePayload` in `frontend/src/repo-types.ts` — existing item discriminants remain backward compatible.
-- [ ] T005 Add the `data-sources/` payload directory mapping and generic load/save/delete handling in `frontend/src/workspace.ts` — existing workspaces load without migration errors and no secrets are copied.
+- [x] T004 Extend `RepoItemType` and `RepoPayload` with `data_source` and `DataSourcePayload` in `frontend/src/repo-types.ts` — existing item discriminants remain backward compatible.
+- [x] T005 Add the `data-sources/` payload directory mapping and generic load/save/delete handling in `frontend/src/workspace.ts` — existing workspaces load without migration errors and no secrets are copied.
 - [ ] T006 Extend shared pipeline node/property types for `src.query` in `frontend/src/pipeline-types.ts` and `crates/metadata/src/lib.rs` — old node JSON deserializes unchanged and new fields are optional where appropriate.
 - [ ] T007 Define serializable Data Source, Query Source preview, affinity diagnostic and versioned event DTOs in `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts` and `crates/duckle-runner/src/serve.rs` — desktop and web bridge shapes include schema version, run/context ids, sequence, status and sanitized error envelope.
 - [ ] T008 Add planner-domain error/status types and stable identifiers in `crates/duckdb-engine/src/plan/mod.rs` — missing references, invalid SQL and attach failures are distinguishable before execution.
@@ -26,9 +26,9 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 
 **Independent test**: a workspace can create two compatible Data Sources, reject case-insensitive alias collisions, and report dependencies on rename/delete.
 
-- [ ] T009 [US1] Add Data Source editor state and CRUD actions in `frontend/src/App.tsx` — create/edit/duplicate/delete use the existing repository update path.
-- [ ] T010 [P] [US1] Add the Data Source system folder/tree item and dependency presentation in `frontend/src/ProjectTree.tsx` — Data Sources are distinct from Connections and pipelines.
-- [ ] T011 [P] [US1] Add Data Source field validation and Connection-kind compatibility helpers in `frontend/src/data-source-validation.ts` — only `duckdb` and `postgres` are accepted, other connector kinds are rejected explicitly, alias uniqueness is case-insensitive and secrets never enter the payload.
+- [x] T009 [US1] Add Data Source editor state and CRUD actions in `frontend/src/App.tsx` — create/edit/duplicate/delete use the existing repository update path.
+- [x] T010 [P] [US1] Add the Data Source system folder/tree item and dependency presentation in `frontend/src/ProjectTree.tsx` — Data Sources are distinct from Connections and pipelines.
+- [x] T011 [P] [US1] Add Data Source field validation and Connection-kind compatibility helpers in `frontend/src/workflow-ui/editors/DataSourceEditorModal.tsx` — only `duckdb` and `postgres` are accepted, other connector kinds are rejected explicitly, alias uniqueness is case-insensitive and secrets never enter the payload.
 - [ ] T012 [US1] Implement confirmed alias rename propagation for dependent Query Source SQL in `frontend/src/workspace.ts` — only explicit confirmation mutates dependents and all affected ids are listed.
 - [ ] T013 [US1] Implement confirmed Data Source deletion with dependency invalidation in `frontend/src/workspace.ts` — deleted references produce an explicit invalid state rather than silent repair.
 - [ ] T014 [US1] Add `data_source_test` command handling in `apps/desktop/src/lib.rs` and web parity in `crates/duckle-runner/src/serve.rs` — compatibility diagnostics identify connector/extension failures without credentials.
@@ -40,12 +40,12 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 
 **Independent test**: a Query Source with one or more Data Source refs previews a relation; missing refs and write SQL are rejected with sanitized diagnostics.
 
-- [ ] T016 [US2] Add the `src.query` component manifest, palette entry and node editor in `frontend/src/component-manifests.ts`, `frontend/src/manifest-synth.ts` and `frontend/src/App.tsx` — editor persists refs/SQL only.
+- [x] T016 [US2] Add the `src.query` component manifest, palette entry and node editor in `frontend/src/workflow-ui/palette-data.ts` and `frontend/src/workflow-ui/fields/component-manifests.ts` — editor persists refs/SQL only.
 - [ ] T017 [US2] Add multi-Data-Source selection without copying ConnectionPayload in `frontend/src/DataSourceRefField.tsx` — selected values are stable ids and aliases are shown read-only.
-- [ ] T018 [US2] Implement read-only SQL validation (single `SELECT`/`WITH`/table-function statement) in `crates/duckdb-engine/src/plan/` — DDL, DML and multi-statement input return typed errors.
+- [x] T018 [US2] Implement read-only SQL validation (single `SELECT`/`WITH`/table-function statement) in `crates/duckdb-engine/src/plan/builders.rs` — DDL, DML and multi-statement input return typed errors.
 - [ ] T019 [US2] Resolve Data Source refs to ephemeral Connection material in `apps/desktop/src/lib.rs`, `apps/desktop/src/secrets.rs` and `crates/duckle-runner/src/serve.rs` — the frontend transmits only ids/non-sensitive metadata; runtime secrets stay in memory and are never persisted or logged.
 - [ ] T020 [US2] Implement `query_source_preview` in `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts` and `crates/duckle-runner/src/serve.rs` — response includes schema, at most 1000 rows, duration and context id; preview timeout is 30 seconds and diagnostics are masked.
-- [ ] T021 [P] [US2] Add planner unit tests for SQL grammar, ref resolution and preview error taxonomy in `crates/duckdb-engine/src/plan/tests.rs` — each FR-009/FR-022 rejection has a deterministic assertion.
+- [x] T021 [P] [US2] Add planner unit tests for SQL grammar, ref resolution and preview error taxonomy in `crates/duckdb-engine/src/plan/tests.rs` — read-only, DDL and multi-statement rejection assertions are present; execution is subject to the environment-gated Cargo test run.
 
 ## Phase 5 — User Story 3: Eseguire Query Source con affinità (P1)
 

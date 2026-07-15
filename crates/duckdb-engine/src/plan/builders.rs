@@ -202,6 +202,7 @@ pub(crate) fn build_view_sql(
         "src.json" | "src.jsonl" => Ok(build_json_source(props)),
         "src.sqlite" => Ok(build_sqlite_source(props)),
         "src.duckdb" => Ok(build_duckdb_source(props)),
+        "src.query" => build_query_source(props),
         "src.ducklake.diff" => Ok(build_ducklake_diff(props)),
         "src.s3" | "src.gcs" | "src.azureblob" | "src.http"
         | "src.minio" | "src.r2" | "src.b2" => {
@@ -4671,6 +4672,34 @@ pub(crate) fn build_duckdb_source(props: &JsonValue) -> String {
     } else {
         "SELECT 1 AS placeholder LIMIT 0".into()
     }
+}
+
+/// Build a shared Data Source query. The workspace resolver is responsible for
+/// attaching the referenced catalogs; this builder deliberately handles only
+/// the read-only SQL contract and never interpolates credentials.
+pub(crate) fn build_query_source(props: &JsonValue) -> Result<String, String> {
+    let raw = string_prop(props, "sql").ok_or_else(|| "src.query requires SQL".to_string())?;
+    let sql = raw.trim();
+    if sql.is_empty() {
+        return Err("src.query requires SQL".to_string());
+    }
+    let without_trailing = sql.trim_end_matches(';').trim();
+    if without_trailing.contains(';') {
+        return Err("src.query accepts one SQL statement only".to_string());
+    }
+    let lower = without_trailing.to_ascii_lowercase();
+    if !(lower.starts_with("select ")
+        || lower == "select"
+        || lower.starts_with("with ")
+        || lower.starts_with("with\n"))
+    {
+        return Err("src.query accepts read-only SELECT or WITH SQL only".to_string());
+    }
+    let forbidden = ["insert ", "update ", "delete ", "merge ", "create ", "alter ", "drop ", "truncate ", "copy "];
+    if forbidden.iter().any(|token| lower.contains(token)) {
+        return Err("src.query rejects DDL and DML statements".to_string());
+    }
+    Ok(format!("({without_trailing})"))
 }
 
 /// ATTACH statements for external-database nodes. The aliases are fixed

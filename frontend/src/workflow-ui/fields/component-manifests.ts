@@ -631,6 +631,25 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
         ],
     },
 
+    'src.query': {
+        id: 'src.query',
+        kind: 'source',
+        label: 'Query Source',
+        description: 'Execute read-only SQL against shared Data Sources.',
+        schemaSource: 'autodetect',
+        sections: [
+            {
+                label: 'Query',
+                fields: [
+                    { key: 'dataSourceRefs', label: 'Data Source ids', kind: 'expression', required: true, rows: 2, placeholder: 'ds_sales, ds_customers' },
+                    { key: 'sql', label: 'Read-only SQL', kind: 'expression', required: true, rows: 8, placeholder: 'SELECT * FROM sales.orders' },
+                    { key: 'previewLimit', label: 'Preview rows (max 1000)', kind: 'number', defaultValue: 1000 },
+                ],
+            },
+        ],
+        ports: { inputs: [], outputs: [{ id: 'main', label: 'out', type: 'main' }] },
+    },
+
     'src.json': {
         id: 'src.json',
         kind: 'source',

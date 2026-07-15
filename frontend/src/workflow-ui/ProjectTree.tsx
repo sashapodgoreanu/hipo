@@ -6,6 +6,7 @@ import {
     ChevronRight,
     Code2,
     Copy,
+    Database,
     FileCog,
     FileText,
     Folder,
@@ -35,6 +36,7 @@ type Props = {
     onNewPipeline: (parentId: string) => void;
     onNewFolder: (parentId: string) => void;
     onNewConnection: (parentId: string) => void;
+    onNewDataSource: (parentId: string) => void;
     onNewContext: (parentId: string) => void;
     onNewDocument: (parentId: string) => void;
     onNewRoutine: (parentId: string) => void;
@@ -51,7 +53,7 @@ type Props = {
 
 // Built-in top-level containers. They anchor the tree, so they cannot be
 // dragged (they stay put), but they are still valid drop targets.
-const SYSTEM_IDS = new Set(['root', 'pipelines', 'connections', 'contexts', 'routines', 'docs', 'dives', 'dashboards']);
+const SYSTEM_IDS = new Set(['root', 'pipelines', 'connections', 'data-sources', 'contexts', 'routines', 'docs', 'dives', 'dashboards']);
 
 // MIME used to carry the dragged repo-item id for a tree reparent. Distinct
 // from `application/duckle-context` (drag a context onto the canvas), so both
@@ -63,6 +65,7 @@ const TYPE_LABEL: Record<RepoItemType, string> = {
     folder: 'Folder',
     pipeline: 'Pipeline',
     connection: 'Connection',
+    data_source: 'Data Source',
     context: 'Context',
     routine: 'Routine',
     doc: 'Document',
@@ -81,6 +84,8 @@ function TypeIcon({ type, isOpen }: { type: RepoItemType; isOpen: boolean }) {
             return <Workflow size={size} />;
         case 'connection':
             return <Plug size={size} />;
+        case 'data_source':
+            return <Database size={size} />;
         case 'context':
             return <Variable size={size} />;
         case 'routine':
@@ -100,6 +105,7 @@ export default function ProjectTree(props: Props) {
         onNewPipeline,
         onNewFolder,
         onNewConnection,
+        onNewDataSource,
         onNewContext,
         onNewDocument,
         onNewRoutine,
@@ -211,6 +217,7 @@ export default function ProjectTree(props: Props) {
         const root = item.type === 'project' ? null : rootFolderOf(item.id) ?? item.id;
         const isPipelinesScope = item.id === 'pipelines' || root === 'pipelines';
         const isConnectionsScope = item.id === 'connections' || root === 'connections';
+        const isDataSourcesScope = item.id === 'data-sources' || root === 'data-sources';
         const isContextsScope = item.id === 'contexts' || root === 'contexts';
         const isRoutinesScope = item.id === 'routines' || root === 'routines';
         const isDocsScope = item.id === 'docs' || root === 'docs';
@@ -234,6 +241,15 @@ export default function ProjectTree(props: Props) {
                 label: 'New connection…',
                 icon: <FileCog size={ICON_SIZE} />,
                 onClick: () => onNewConnection(item.id),
+            });
+        }
+        if (item.type === 'project' || isDataSourcesScope) {
+            newItems.push({
+                kind: 'item',
+                key: 'new-data-source',
+                label: 'New data source…',
+                icon: <Database size={ICON_SIZE} />,
+                onClick: () => onNewDataSource(item.id === 'root' || item.type === 'project' ? 'data-sources' : item.id),
             });
         }
         if (item.type === 'project' || isContextsScope) {

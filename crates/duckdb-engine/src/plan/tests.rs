@@ -60,6 +60,18 @@
     }
 
     #[test]
+    fn query_source_accepts_read_only_sql_and_rejects_writes() {
+        use serde_json::json;
+        assert_eq!(
+            builders::build_query_source(&json!({"sql": "SELECT * FROM sales.orders;"}))
+                .unwrap(),
+            "(SELECT * FROM sales.orders)"
+        );
+        assert!(builders::build_query_source(&json!({"sql": "CREATE TABLE x AS SELECT 1"})).is_err());
+        assert!(builders::build_query_source(&json!({"sql": "SELECT 1; SELECT 2"})).is_err());
+    }
+
+    #[test]
     fn map_without_lookups_is_unchanged() {
         // No lookups + no lookup refs: behaves like the original mapper.
         let doc = pipeline_from_json(

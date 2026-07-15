@@ -93,6 +93,7 @@ import VisualMapperModal, {
     type LookupConfig,
 } from './canvas/VisualMapperModal';
 import ConnectionEditorModal from './workflow-ui/editors/ConnectionEditorModal';
+import DataSourceEditorModal from './workflow-ui/editors/DataSourceEditorModal';
 import ContextEditorModal from './workflow-ui/editors/ContextEditorModal';
 import DocumentEditorModal from './workflow-ui/editors/DocumentEditorModal';
 import RoutineEditorModal from './workflow-ui/editors/RoutineEditorModal';
@@ -100,6 +101,7 @@ import type { Column } from './pipeline-types';
 import type { ComponentDef, NodeKind as PaletteKind } from './workflow-ui/palette-data';
 import type {
     ConnectionPayload,
+    DataSourcePayload,
     ContextPayload,
     DocumentPayload,
     RoutinePayload,
@@ -289,6 +291,7 @@ const INITIAL_REPO: RepoItem[] = [
     { id: 'root', name: 'Duckle Project', type: 'project' },
     { id: 'pipelines', name: 'Pipelines', type: 'folder', parentId: 'root' },
     { id: 'connections', name: 'Connections', type: 'folder', parentId: 'root' },
+    { id: 'data-sources', name: 'Data Sources', type: 'folder', parentId: 'root' },
     { id: 'contexts', name: 'Contexts', type: 'folder', parentId: 'root' },
     { id: 'routines', name: 'Routines', type: 'folder', parentId: 'root' },
     { id: 'docs', name: 'Documentation', type: 'folder', parentId: 'root' },
@@ -2041,6 +2044,7 @@ export default function App() {
     // Repo-item editor modal state (connections / contexts / docs / routines)
     type EditorState =
         | { kind: 'connection'; itemId: string | null; parentId: string }
+        | { kind: 'data_source'; itemId: string | null; parentId: string }
         | { kind: 'context'; itemId: string | null; parentId: string }
         | { kind: 'document'; itemId: string | null; parentId: string }
         | { kind: 'routine'; itemId: string | null; parentId: string }
@@ -2051,6 +2055,10 @@ export default function App() {
 
     const handleNewConnection = useCallback(
         (parentId: string) => setRepoEditor({ kind: 'connection', itemId: null, parentId }),
+        [],
+    );
+    const handleNewDataSource = useCallback(
+        (parentId: string) => setRepoEditor({ kind: 'data_source', itemId: null, parentId }),
         [],
     );
     const handleNewContext = useCallback(
@@ -2081,6 +2089,8 @@ export default function App() {
                 itemId: item.id,
                 parentId: item.parentId ?? 'connections',
             });
+        else if (item.type === 'data_source')
+            setRepoEditor({ kind: 'data_source', itemId: item.id, parentId: item.parentId ?? 'data-sources' });
         else if (item.type === 'context')
             setRepoEditor({
                 kind: 'context',
@@ -2120,7 +2130,7 @@ export default function App() {
 
     const upsertRepoItem = useCallback(
         (
-            type: 'connection' | 'context' | 'doc' | 'routine' | 'dive' | 'dashboard',
+            type: 'connection' | 'data_source' | 'context' | 'doc' | 'routine' | 'dive' | 'dashboard',
             name: string,
             payload: unknown,
         ) => {
@@ -2158,6 +2168,10 @@ export default function App() {
 
     const handleSaveConnection = useCallback(
         (name: string, payload: ConnectionPayload) => upsertRepoItem('connection', name, payload),
+        [upsertRepoItem],
+    );
+    const handleSaveDataSource = useCallback(
+        (name: string, payload: DataSourcePayload) => upsertRepoItem('data_source', name, payload),
         [upsertRepoItem],
     );
     const handleSaveContext = useCallback(
@@ -2445,6 +2459,7 @@ export default function App() {
                     onNewPipeline={openNewPipelineModal}
                     onNewFolder={handleNewFolderInRepo}
                     onNewConnection={handleNewConnection}
+                    onNewDataSource={handleNewDataSource}
                     onNewContext={handleNewContext}
                     onNewDocument={handleNewDocument}
                     onNewRoutine={handleNewRoutine}
@@ -2683,6 +2698,15 @@ export default function App() {
                 <ConnectionEditorModal
                     item={editingRepoItem}
                     onSave={handleSaveConnection}
+                    onCancel={() => setRepoEditor(null)}
+                />
+            ) : null}
+            {repoEditor?.kind === 'data_source' ? (
+                <DataSourceEditorModal
+                    item={editingRepoItem}
+                    connections={repo.filter(i => i.type === 'connection')}
+                    dataSources={repo.filter(i => i.type === 'data_source')}
+                    onSave={handleSaveDataSource}
                     onCancel={() => setRepoEditor(null)}
                 />
             ) : null}
