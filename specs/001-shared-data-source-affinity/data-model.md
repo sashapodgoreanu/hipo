@@ -7,7 +7,7 @@
 | Campo | Tipo | Invariante |
 |---|---|---|
 | `sqlAlias` | string | obbligatorio, identificatore DuckDB, unique case-insensitive nel workspace |
-| `kind` | enum | `duckdb`, `sqlite`, `postgres`, `mysql`, `mariadb`, `ducklake` |
+| `kind` | enum | `duckdb`, `postgres` nella prima release |
 | `connectionRef` | RepoItem id | deve puntare a Connection compatibile |
 | `readOnly` | bool | default `true`; non concede scrittura al connector |
 | `defaultCatalog`, `defaultSchema` | string? | opzionali |

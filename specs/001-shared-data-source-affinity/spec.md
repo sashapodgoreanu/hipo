@@ -42,6 +42,16 @@ continuare a funzionare senza configurare Data Source.
   contesto di proseguire.
 - Q: Quale SQL può eseguire una Query Source? → A: Solo SQL di lettura (`SELECT`,
   `WITH` e funzioni/tabella DuckDB), senza DDL, DML o statement multipli.
+- Q: Quali Data Source sono supportati nella prima release? → A: Solo `duckdb` e
+  `postgres`; gli altri connector restano esclusi dal nuovo tipo Data Source e
+  continuano a usare gli Source esistenti.
+- Q: Come gestire connector non supportati come Data Source? → A: Rifiutare il
+  tipo Data Source con errore esplicito; gli Source esistenti restano disponibili.
+- Q: Quale obiettivo prestazionale adottare? → A: Definire budget per preview e
+  cleanup e un limite di righe, lasciando variabile la latenza dei connector
+  remoti.
+- Q: Quali valori usare per i budget? → A: 30 secondi per preview, 10 secondi
+  per cleanup e massimo 1000 righe restituite.
 
 La persistenza dei Data Source riutilizza il modello workspace esistente,
 separandoli logicamente da Connection e pipeline senza introdurre un registry
@@ -132,21 +142,23 @@ report indica Data Source e Query Source di ciascun contesto.
   Connection reference, read-only predefinito, catalogo/schema opzionali e opzioni
   specifiche.
 - **FR-003**: L’alias SQL è univoco senza distinzione maiuscole/minuscole, valido
-  per DuckDB e stabile nel tempo.
+  per DuckDB e stabile nel tempo; usa la forma di identificatore
+  `[A-Za-z_][A-Za-z0-9_]*` e non può coincidere con una parola riservata DuckDB.
 - **FR-004**: La modifica di un alias usato richiede conferma esplicita, mostra le
-  Query Source dipendenti e aggiorna automaticamente il loro testo SQL.
+  Query Source dipendenti e aggiorna automaticamente i riferimenti identificativi
+  nel testo SQL, senza modificare commenti o stringhe letterali.
 - **FR-004a**: L’eliminazione di un Data Source usato da Query Source dipendenti
   richiede conferma esplicita, mostra le dipendenze e marca le Query Source come
   non valide dopo l’eliminazione.
 - **FR-005**: Il sistema verifica la compatibilità tra Data Source e Connection.
 - **FR-006**: Le credenziali non sono copiate in Data Source o Query Source.
-- **FR-007**: La palette offre `src.query` con selezione multipla, editor SQL,
+- **FR-007**: La palette offre `src.query` con selezione multipla non vuota, editor SQL,
   alias, preview, schema, durata, cancellazione ed errori.
 - **FR-008**: Query Source salva `dataSourceRefs`, SQL, limite preview, schema
   rilevato e impostazioni supportate.
 - **FR-009**: Riferimenti mancanti, alias duplicati, Connection mancanti/non
-  compatibili, tipo non supportato, estensione/ATTACH falliti e SQL non valido
-  sono rifiutati prima dell’esecuzione dipendente.
+  compatibili, tipo diverso da `duckdb` o `postgres`, estensione/ATTACH falliti
+  e SQL non valido sono rifiutati prima dell’esecuzione dipendente.
 - **FR-010**: Prima del run si analizzano solo sottografo, Data Source,
   Connection, estensioni e gruppi realmente necessari.
 - **FR-011**: Query Source che condividono almeno un Data Source usano lo stesso
@@ -163,14 +175,21 @@ report indica Data Source e Query Source di ciascun contesto.
   affinity group, il planner deve dichiarare se la sessione viene
   sospesa/ripresa oppure se il gruppo è non supportato; non è ammesso degradare
   silenziosamente a sessioni differenti.
+- **FR-016b**: Una sessione `session-suspending` resta proprietaria del proprio
+  processo DuckDB e dei relativi attachment. Prima di sospendere, il worker
+  materializza le relazioni necessarie e registra lo stato del contesto. Durante
+  la sospensione nessun altro worker può usare quel contesto. La ripresa deve
+  riutilizzare lo stesso processo; se il processo è terminato, gli attachment
+  sono invalidi e il gruppo fallisce senza degradare a processi per-stage.
 - **FR-017**: Un’esecuzione parziale considera solo il sottografo selezionato.
 - **FR-018**: La diagnostica espone contesto, Data Source, Query Source,
   estensioni, attachment, durate, stato ed errori sanitizzati.
 - **FR-019**: Cancellazione e cleanup non lasciano processi o file temporanei della
   run.
-- **FR-020**: Il primo rilascio supporta DuckDB, SQLite, PostgreSQL, MySQL/MariaDB
-  e DuckLake quando compatibili con le estensioni disponibili; gli altri Source
-  restano invariati.
+- **FR-020**: Il primo rilascio del tipo Data Source supporta soltanto `duckdb` e
+  `postgres` quando compatibili con le estensioni disponibili; SQLite,
+  MySQL/MariaDB, DuckLake e gli altri connector restano esclusi dal tipo Data
+  Source e continuano a usare gli Source esistenti.
 - **FR-021**: Un errore di Query Source marca la Query Source e i downstream
   dipendenti come falliti, ma consente ai rami indipendenti dello stesso contesto
   di proseguire secondo il DAG.
@@ -202,7 +221,7 @@ report indica Data Source e Query Source di ciascun contesto.
 **Serialized format changed?** Sì: nuovi repository item Data Source e proprietà
 per `src.query`; il formato dei Source esistenti non viene riscritto.
 
-**Migration / fallback**: nessuna migrazione automatica dei Source legacy.
+**Migration / fallback**: nessuna migrazione automatica dei Source esistenti.
 Pipeline esistenti continuano a usare i Source attuali; un rename confermato di
 un alias aggiorna invece il SQL delle Query Source dipendenti. Riferimenti Data
 Source non risolvibili producono errore prima del run.
@@ -236,6 +255,9 @@ automaticamente i Source esistenti.
   viene rifiutato prima dell’esecuzione dipendente.
 - Il 100% degli errori di test contenenti credenziali note è privo del valore
   sensibile in UI e history.
+- Preview completa entro 30 secondi, cleanup entro 10 secondi e la preview non
+  restituisce più di 1000 righe; la latenza di attach/query remota è diagnosticata
+  ma non trattata come SLA rigido.
 - Query Source valide rendono il risultato disponibile ai nodi downstream nella
   stessa run anche con stage non SQL in rami differenti.
 - Le pipeline esistenti non richiedono modifiche per continuare a funzionare.
@@ -249,5 +271,6 @@ automaticamente i Source esistenti.
 - **Gap**: non esistono Data Source, Query Source, gruppi di affinità o sessione
   DuckDB persistente condivisa tra più stage.
 - **Gap**: non esiste un tipo unico per Component, Engine o StageResult.
-- **Decisione necessaria nel plan**: modalità concreta della sessione condivisa e
-  coordinamento con stage intermedi esterni.
+- **Decisione risolta nel plan**: la sessione condivisa usa un worker DuckDB CLI
+  per `AffinityGroup`; gli stage intermedi sono classificati come
+  `session-preserving`, `session-suspending` o `unsupported`.

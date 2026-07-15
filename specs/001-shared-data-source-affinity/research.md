@@ -31,7 +31,7 @@ explicitly accepted invalid references after deletion. Existing `App.tsx`
 delete/rename flows do not currently perform dependency analysis, so these
 operations must become dependency-aware for `data_source` items.
 
-**Compatibility**: no automatic conversion of legacy Source nodes is performed.
+**Compatibility**: no automatic conversion of existing Source nodes is performed.
 
 ## Decision 3: Query Source contract
 
@@ -105,14 +105,13 @@ only adjustment.
 
 ## Decision 7: first-release Data Source types
 
-**Decision**: support DuckDB, SQLite, PostgreSQL, MySQL/MariaDB and DuckLake
-where the existing DuckDB extensions and Connection kinds can represent them.
-Keep REST, Kafka, Oracle, SQL Server and other non-catalog Source behavior in
-their existing components.
+**Decision**: support only DuckDB and PostgreSQL Data Sources in the first
+release. Keep SQLite, MySQL/MariaDB, DuckLake, REST, Kafka, Oracle, SQL Server
+and other connector behavior in their existing Source components.
 
-**Rationale**: these initial types can be attached as DuckDB catalogs; the
-feature explicitly excludes connectors that cannot be represented by an
-attachment/catalog in the first release.
+**Rationale**: these two types are the explicitly supported initial scope; the
+feature avoids expanding the Data Source contract until additional connector
+compatibility is specified and tested.
 
 ## Confirmed gaps and follow-up
 

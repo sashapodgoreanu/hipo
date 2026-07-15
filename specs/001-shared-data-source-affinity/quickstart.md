@@ -1,6 +1,6 @@
 # Quickstart di validazione
 
-Prerequisiti: Rust/Cargo, Node/npm, DuckDB CLI configurato in `DUCKLE_DUCKDB_BIN` (o disponibile nel path), e un workspace con una Connection valida. Le verifiche non richiedono modifiche al codice.
+Prerequisiti: Rust/Cargo, Node/npm, DuckDB CLI configurato in `DUCKLE_DUCKDB_BIN` (o disponibile nel path), e un workspace con una Connection valida. Nella prima release i Data Source supportano soltanto `duckdb` e `postgres`; gli altri connector restano disponibili tramite gli Source esistenti. Le verifiche non richiedono modifiche al codice.
 
 1. Crea due Data Source (`sales`, `customers`) che riferiscono Connection compatibili e due nodi `src.query` che condividono `sales`.
 2. Esegui la pipeline: gli eventi devono mostrare un solo `contextId`, un attach per Data Source e due relazioni materializzate.

@@ -19,7 +19,7 @@ Il repository oggi persiste Connection come payload cifrato, compila `PipelineDo
 
 ## Constitution Check
 
-- [x] Preserva contratti serializzati: nuovi campi opzionali/nuovi item e nessuna riscrittura dei Source legacy.
+- [x] Preserva contratti serializzati: nuovi campi opzionali/nuovi item e nessuna riscrittura dei Source esistenti.
 - [x] Mantiene separati frontend, IPC, planner ed executor; il frontend non replica la semantica SQL/affinità.
 - [x] Documenta materializzazione, RuntimeSpec, segreti e impatto di sicurezza nei contratti e nel quickstart.
 - [x] Nessuna nuova dipendenza/plugin/estensione obbligatoria; le estensioni sono quelle già supportate dal motore.
@@ -41,7 +41,7 @@ Il repository oggi persiste Connection come payload cifrato, compila `PipelineDo
 
 ### Domain and JSON contracts
 
-`RepoItemType` aggiunge `data_source`; `RepoPayload` aggiunge `DataSourcePayload` con `sqlAlias`, `kind`, `connectionRef`, `readOnly`, catalog/schema e opzioni. L’identità autorevole resta `RepoItem.id`; il payload non contiene credenziali. `PAYLOAD_DIR_BY_TYPE` usa `data-sources/`.
+`RepoItemType` aggiunge `data_source`; `RepoPayload` aggiunge `DataSourcePayload` con `sqlAlias`, `kind` (`duckdb` o `postgres` nella prima release), `connectionRef`, `readOnly`, catalog/schema e opzioni. L’identità autorevole resta `RepoItem.id`; il payload non contiene credenziali. `PAYLOAD_DIR_BY_TYPE` usa `data-sources/`.
 
 `src.query` salva soltanto `dataSourceRefs`, SQL read-only, limite preview e metadati di schema. Il rename confermato aggiorna SQL dipendente; la delete confermata marca i riferimenti non validi. La validazione è case-insensitive sugli alias e rifiuta multi-statement, DDL e DML.
 
@@ -49,11 +49,19 @@ Il repository oggi persiste Connection come payload cifrato, compila `PipelineDo
 
 Il planner risolve il sottografo selezionato, valida Connection/estensioni e costruisce un grafo bipartito. Ogni componente connessa diventa un `AffinityGroup` run-local con Data Source deduplicati e Query Source ordinate dal DAG.
 
-Il nuovo worker mantiene un processo DuckDB CLI per gruppo, applica estensioni/secret temporanei, esegue `ATTACH` una volta e materializza ogni risultato nel database temporaneo della run. Il planner classifica ogni stage intermedio come `session-preserving`, `session-suspending` o `unsupported`; gli stage non supportati producono un errore di compilazione e non degradano silenziosamente a sessioni differenti. Lo scheduler coordina gli stage compatibili e non introduce parallelismo su uno stesso database finché non è definita una sincronizzazione sicura. Un errore di contesto blocca il gruppo dipendente; un errore Query Source propaga solo ai downstream, lasciando rami indipendenti eseguibili. Cancellation chiude il worker e attiva il cleanup esistente.
+Il nuovo worker mantiene un processo DuckDB CLI per gruppo, applica estensioni/secret temporanei, esegue `ATTACH` una volta e materializza ogni risultato nel database temporaneo della run. Il planner classifica ogni stage intermedio come `session-preserving`, `session-suspending` o `unsupported`:
+
+- `session-preserving`: lo stage può essere eseguito mentre il worker resta attivo;
+- `session-suspending`: il worker resta vivo ma non accetta statement concorrenti; prima della sospensione materializza gli output richiesti e salva lo stato del contesto; la ripresa usa lo stesso processo e verifica gli attachment;
+- `unsupported`: lo stage non può attraversare il gruppo e produce errore di compilazione.
+
+Il worker mantiene ownership del processo, database temporaneo, attachment e secret temporanei per tutta la vita dell’`AffinityGroup`. La terminazione inattesa del processo invalida il gruppo e non consente fallback per-stage. Lo scheduler coordina gli stage compatibili e non introduce parallelismo su uno stesso database finché non è definita una sincronizzazione sicura. Un errore di contesto blocca il gruppo dipendente; un errore Query Source propaga solo ai downstream, lasciando rami indipendenti eseguibili. Cancellation chiude il worker e attiva il cleanup esistente.
 
 ### Frontend and IPC
 
 La UI aggiunge palette/editor `src.query`, selezione multipla e dipendenze. Il frontend invia solo riferimenti e metadati non sensibili; la risoluzione autorevole Data Source → Connection → secret avviene nel servizio Rust del desktop o nel boundary autenticato del runner. Il DTO runtime contiene secret solo in memoria e non viene persistito, loggato o restituito al frontend. Si aggiungono comandi `data_source_test` e `query_source_preview` (input: workspace/run DTO, id o node; output: schema/righe/durata/diagnostica sanitizzata) e gli eventi `affinity_context_started`, `data_source_attached`, `query_source_finished`, `affinity_context_finished`. Tauri e web SSE mantengono lo stesso schema serializzabile.
+
+I nuovi comandi IPC devono usare capability, permission e scope minimi per preview/test; non ampliano filesystem, rete o process spawning oltre le capability già necessarie al runner.
 
 ### Secrets, security, and operations
 
@@ -67,6 +75,7 @@ Nessuna migrazione automatica dei Source. Vecchie pipeline ignorano gli item Dat
 
 - Unit: alias/SQL read-only, componenti connesse transitive, deduplicazione attach, stati di errore e sanitizzazione.
 - Integration: worker DuckDB, attach una volta, interleaving DAG, partial run, cancellation/cleanup e regressione `two_duckdb_sources_same_database`.
+- Performance: preview entro 30 secondi, cleanup entro 10 secondi e massimo 1000 righe; la latenza remota resta diagnostica e non SLA.
 - Frontend: `npm --prefix frontend run lint` e `npm --prefix frontend run build`; nessun framework test esistente da assumere.
 - Desktop/IPC: serializzazione command/eventi e parity web bridge; gap E2E documentato (nessuna suite rilevata).
 - Commands: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets --exclude duckle-lance`; `cargo test --workspace --exclude duckle-lance`.

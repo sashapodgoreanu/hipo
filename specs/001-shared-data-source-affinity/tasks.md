@@ -15,9 +15,9 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 ## Phase 2 — Foundational types, persistence, and migration
 
 - [ ] T004 Extend `RepoItemType` and `RepoPayload` with `data_source` and `DataSourcePayload` in `frontend/src/repo-types.ts` — existing item discriminants remain backward compatible.
-- [ ] T005 Add the `data-sources/` payload directory mapping and generic load/save/delete handling in `frontend/src/workspace.ts` — legacy workspaces load without migration errors and no secrets are copied.
+- [ ] T005 Add the `data-sources/` payload directory mapping and generic load/save/delete handling in `frontend/src/workspace.ts` — existing workspaces load without migration errors and no secrets are copied.
 - [ ] T006 Extend shared pipeline node/property types for `src.query` in `frontend/src/pipeline-types.ts` and `crates/metadata/src/lib.rs` — old node JSON deserializes unchanged and new fields are optional where appropriate.
-- [ ] T007 Define serializable Data Source, Query Source preview, affinity diagnostic and event DTOs in `apps/desktop/src/lib.rs` and `frontend/src/tauri-bridge.ts` — desktop and web bridge shapes are identical and sanitized.
+- [ ] T007 Define serializable Data Source, Query Source preview, affinity diagnostic and versioned event DTOs in `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts` and `crates/duckle-runner/src/serve.rs` — desktop and web bridge shapes include schema version, run/context ids, sequence, status and sanitized error envelope.
 - [ ] T008 Add planner-domain error/status types and stable identifiers in `crates/duckdb-engine/src/plan/mod.rs` — missing references, invalid SQL and attach failures are distinguishable before execution.
 
 ## Phase 3 — User Story 1: Gestire Data Source condivisi (P1)
@@ -28,7 +28,7 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 
 - [ ] T009 [US1] Add Data Source editor state and CRUD actions in `frontend/src/App.tsx` — create/edit/duplicate/delete use the existing repository update path.
 - [ ] T010 [P] [US1] Add the Data Source system folder/tree item and dependency presentation in `frontend/src/ProjectTree.tsx` — Data Sources are distinct from Connections and pipelines.
-- [ ] T011 [P] [US1] Add Data Source field validation and Connection-kind compatibility helpers in `frontend/src/data-source-validation.ts` — alias uniqueness is case-insensitive and secrets never enter the payload.
+- [ ] T011 [P] [US1] Add Data Source field validation and Connection-kind compatibility helpers in `frontend/src/data-source-validation.ts` — only `duckdb` and `postgres` are accepted, other connector kinds are rejected explicitly, alias uniqueness is case-insensitive and secrets never enter the payload.
 - [ ] T012 [US1] Implement confirmed alias rename propagation for dependent Query Source SQL in `frontend/src/workspace.ts` — only explicit confirmation mutates dependents and all affected ids are listed.
 - [ ] T013 [US1] Implement confirmed Data Source deletion with dependency invalidation in `frontend/src/workspace.ts` — deleted references produce an explicit invalid state rather than silent repair.
 - [ ] T014 [US1] Add `data_source_test` command handling in `apps/desktop/src/lib.rs` and web parity in `crates/duckle-runner/src/serve.rs` — compatibility diagnostics identify connector/extension failures without credentials.
@@ -44,7 +44,7 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 - [ ] T017 [US2] Add multi-Data-Source selection without copying ConnectionPayload in `frontend/src/DataSourceRefField.tsx` — selected values are stable ids and aliases are shown read-only.
 - [ ] T018 [US2] Implement read-only SQL validation (single `SELECT`/`WITH`/table-function statement) in `crates/duckdb-engine/src/plan/` — DDL, DML and multi-statement input return typed errors.
 - [ ] T019 [US2] Resolve Data Source refs to ephemeral Connection material in `apps/desktop/src/lib.rs`, `apps/desktop/src/secrets.rs` and `crates/duckle-runner/src/serve.rs` — the frontend transmits only ids/non-sensitive metadata; runtime secrets stay in memory and are never persisted or logged.
-- [ ] T020 [US2] Implement `query_source_preview` in `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts` and `crates/duckle-runner/src/serve.rs` — response includes schema, bounded rows, duration and context id with masking.
+- [ ] T020 [US2] Implement `query_source_preview` in `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts` and `crates/duckle-runner/src/serve.rs` — response includes schema, at most 1000 rows, duration and context id; preview timeout is 30 seconds and diagnostics are masked.
 - [ ] T021 [P] [US2] Add planner unit tests for SQL grammar, ref resolution and preview error taxonomy in `crates/duckdb-engine/src/plan/tests.rs` — each FR-009/FR-022 rejection has a deterministic assertion.
 
 ## Phase 5 — User Story 3: Eseguire Query Source con affinità (P1)
@@ -54,13 +54,13 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 **Independent test**: direct and transitive shared refs yield one context/session; independent branches continue and intermediate applicable stages do not split affinity.
 
 - [ ] T022 [US3] Define `AffinityGroup`/`AffinityPlan` and bipartite connected-component construction in `crates/duckdb-engine/src/plan/affinity.rs` — only the selected subgraph contributes groups and ordering is stable.
-- [ ] T023 [US3] Extend `Stage`/`CompiledPipeline` metadata for group membership and materialization boundaries in `crates/duckdb-engine/src/plan/mod.rs` — legacy stages compile with no affinity metadata.
+- [ ] T023 [US3] Extend `Stage`/`CompiledPipeline` metadata for group membership and materialization boundaries in `crates/duckdb-engine/src/plan/mod.rs` — existing stages compile with no affinity metadata.
 - [ ] T024 [US3] Implement the persistent DuckDB CLI worker, statement framing and attach-once lifecycle in `crates/duckdb-engine/src/affinity_session.rs` — extension setup, sanitized stderr, cancellation and cleanup are bounded.
-- [ ] T025 [US3] Define the stage compatibility matrix in `crates/duckdb-engine/src/plan/affinity.rs` and integrate group scheduling in `crates/duckdb-engine/src/lib.rs` — retry, wait, control flow and RuntimeSpec are classified as session-preserving, session-suspending or unsupported; compatible Query Sources share one session while unrelated branches remain schedulable.
+- [ ] T025 [US3] Define the stage compatibility matrix in `crates/duckdb-engine/src/plan/affinity.rs` and integrate group scheduling in `crates/duckdb-engine/src/lib.rs` — `session-preserving` stages run with the worker active; `session-suspending` stages materialize required outputs, preserve process/attachment ownership, block concurrent statements and resume in the same process; process termination invalidates the group; `unsupported` stages fail compilation without per-stage fallback.
 - [ ] T026 [US3] Materialize Query Source results into the run database and expose downstream relations in `crates/duckdb-engine/src/plan/specs.rs` and `crates/duckdb-engine/src/lib.rs` — VIEW/TABLE choice follows documented consumer rules.
-- [ ] T027 [US3] Emit affinity lifecycle events and diagnostics from `crates/duckdb-engine/src/lib.rs` and `apps/desktop/src/lib.rs` — context, attachments, durations and sanitized statuses are observable in desktop/web.
+- [ ] T027 [US3] Emit versioned affinity lifecycle events and diagnostics from `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs` and `crates/duckle-runner/src/serve.rs` — context, attachments, durations, sequence ordering, duplicate tolerance and sanitized statuses are observable in desktop/web.
 - [ ] T028 [P] [US3] Add connected-component, attach-once and transitive-affinity unit tests in `crates/duckdb-engine/src/plan/tests.rs` — direct, transitive and independent cases are covered.
-- [ ] T029 [P] [US3] Add service-gated DuckDB integration tests in `crates/duckdb-engine/tests/execution.rs` — interleaved stages, partial runs, cancellation and cleanup verify the same-session contract.
+- [ ] T029 [P] [US3] Add service-gated DuckDB integration tests in `crates/duckdb-engine/tests/execution.rs` — interleaved stages, partial runs, session suspension/resume in the same process, worker termination without fallback, cancellation and cleanup verify the same-session contract.
 
 ## Phase 6 — User Story 4: Errore, cancellazione e sicurezza (P1)
 
@@ -71,7 +71,7 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 - [ ] T030 [US4] Replace whole-loop first-error behavior with dependency-aware failure states in `crates/duckdb-engine/src/lib.rs` — FR-021 propagation and independent branch continuation are explicit.
 - [ ] T031 [US4] Add secret redaction for attach/create-secret statements, stderr, history and events in `crates/duckdb-engine/src/` and `apps/desktop/src/secrets.rs` — known credential values cannot appear in diagnostics.
 - [ ] T032 [US4] Review Tauri capabilities, permissions, scopes and CSP for new preview/test channels in `apps/desktop/capabilities/` and `apps/desktop/tauri.conf.json` — only required IPC/network/process access is granted.
-- [ ] T033 [P] [US4] Add failure, partial-attach rollback, masking and cleanup tests in `crates/duckdb-engine/tests/` — tests cover attach failure after the first attachment, invalid SQL, cancellation, worker termination and artifact removal.
+- [ ] T033 [P] [US4] Add failure, partial-attach rollback, masking and cleanup tests in `crates/duckdb-engine/tests/` — tests cover attach failure after the first attachment, invalid SQL, cancellation, worker termination, cleanup within 10 seconds and artifact removal.
 
 ## Phase 7 — Polish and cross-cutting verification
 
@@ -80,7 +80,7 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 - [ ] T036 [P] Run `cargo clippy --workspace --all-targets --exclude duckle-lance` in CI parity mode — optional platform limitations are recorded.
 - [ ] T037 [P] Run `cargo test --workspace --exclude duckle-lance` with required DuckDB/service environment — skipped suites and reasons are recorded.
 - [ ] T038 [P] Run `npm --prefix frontend run lint` and `npm --prefix frontend run build` — frontend contract/type checks pass.
-- [ ] T039 Review all acceptance criteria and update `specs/001-shared-data-source-affinity/checklists/requirements.md` — every FR and known coverage gap has traceability.
+- [ ] T039 Review all acceptance criteria and update every checklist under `specs/001-shared-data-source-affinity/checklists/` — every FR and known coverage gap has traceability, and no checklist remains incomplete without an explicit accepted gap.
 
 ## Parallel execution examples
 
