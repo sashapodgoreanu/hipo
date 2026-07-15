@@ -1,0 +1,6 @@
+catalogs:
+  - name: "community-approved"
+    url: "https://raw.githubusercontent.com/github/spec-kit/main/extensions/catalog.community.json"
+    priority: 5
+    install_allowed: true
+    description: "Spec Kit community extensions approved for installation in this project"
