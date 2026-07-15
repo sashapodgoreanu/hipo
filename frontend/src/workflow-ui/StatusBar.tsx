@@ -3,7 +3,7 @@ import { Bug } from 'lucide-react';
 import type { EngineId } from './EngineSelector';
 import { openExternal } from '../tauri-io';
 
-const DISCORD_INVITE = 'https://discord.gg/VbSVt7Etx';
+const DISCORD_INVITE = 'https://discord.com/invite/rUeAStJbWb';
 
 const ENGINE_LABEL: Record<EngineId, string> = {
     duckdb: 'DuckDB',

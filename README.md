@@ -28,7 +28,7 @@
 
 <a href="https://trendshift.io/repositories/54176?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-54176" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/54176/daily?language=Rust" alt="slothflowlabs%2Fduckle | Trendshift" width="250" height="55"/></a>
 
-<a href="https://discord.gg/VbSVt7Etx"><img src="docs/assets/discord-cta-v2.svg" alt="Join the Duckle community on Discord" width="340"/></a>
+<a href="https://discord.com/invite/rUeAStJbWb"><img src="docs/assets/discord-cta-v2.svg" alt="Join the Duckle community on Discord" width="340"/></a>
 
 <p><sub><a href="https://github.com/slothflowlabs/duckle/stargazers"><b>Star Duckle</b></a> if it looks useful. It genuinely helps other data engineers find the project.</sub></p>
 
