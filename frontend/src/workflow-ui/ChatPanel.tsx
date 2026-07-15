@@ -6,6 +6,7 @@ import {
     chatSend,
     engineInstall,
     engineStatus,
+    settingsGetAi,
     type ChatMessage,
     type EngineStatus,
     type InstallProgress,
@@ -28,7 +29,7 @@ type SetupState =
     | { phase: 'checking' }
     | { phase: 'not-installed'; engine: EngineStatus }
     | { phase: 'installing'; progress: InstallProgress | null }
-    | { phase: 'ready' }
+    | { phase: 'ready'; external: boolean }
     | { phase: 'install-failed'; error: string };
 
 const EXAMPLE_PROMPTS = [
@@ -51,6 +52,16 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
     useEffect(() => {
         let cancelled = false;
         (async () => {
+            // #183: when the workspace points the assistant at an external
+            // OpenAI-compatible endpoint (Settings > AI), chat_send routes
+            // there and the local model is never used - so skip the local
+            // download gate entirely instead of prompting to install it.
+            const ai = await settingsGetAi(getWorkspacePath() ?? '');
+            if (cancelled) return;
+            if (ai.baseUrl) {
+                setSetup({ phase: 'ready', external: true });
+                return;
+            }
             const list = await engineStatus();
             const llama = list.find(e => e.id === 'llamacpp');
             if (cancelled) return;
@@ -59,7 +70,7 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
                 return;
             }
             setSetup(llama.installed
-                ? { phase: 'ready' }
+                ? { phase: 'ready', external: false }
                 : { phase: 'not-installed', engine: llama });
         })();
         return () => {
@@ -73,7 +84,7 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
             await engineInstall('llamacpp', p => {
                 setSetup({ phase: 'installing', progress: p });
             });
-            setSetup({ phase: 'ready' });
+            setSetup({ phase: 'ready', external: false });
         } catch (err) {
             setSetup({ phase: 'install-failed', error: String(err) });
         }
@@ -162,7 +173,7 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
                 <div className="chat-panel-title">
                     <Sparkles size={14} aria-hidden="true" />
                     <span>{t('chat.title')}</span>
-                    {setup.phase === 'ready' ? (
+                    {setup.phase === 'ready' && !setup.external ? (
                         <span className="chat-panel-tag">{t('chat.localTag')}</span>
                     ) : null}
                 </div>
