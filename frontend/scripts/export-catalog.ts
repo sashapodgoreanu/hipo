@@ -9,17 +9,24 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ALL_COMPONENTS } from '../src/workflow-ui/palette-data';
-import { synthesizeManifest, portsForComponent } from '../src/workflow-ui/fields/manifest-synth';
+import { getManifest } from '../src/workflow-ui/fields/component-manifests';
+import { portsForComponent } from '../src/workflow-ui/fields/manifest-synth';
 
-const components = ALL_COMPONENTS.map((c) => ({
-    id: c.id,
-    label: c.label,
-    kind: c.kind,
-    availability: c.availability,
-    summary: c.summary ?? '',
-    ports: portsForComponent(c),
-    manifest: synthesizeManifest(c.id) ?? null,
-}));
+const components = ALL_COMPONENTS.map((c) => {
+    // Explicit manifests override the generic synthesized definition. This is
+    // essential for components such as src.query, whose fields and ports do
+    // not follow the standard source topology.
+    const manifest = getManifest(c.id) ?? null;
+    return {
+        id: c.id,
+        label: c.label,
+        kind: c.kind,
+        availability: c.availability,
+        summary: c.summary ?? '',
+        ports: manifest?.ports ?? portsForComponent(c),
+        manifest,
+    };
+});
 
 const catalog = {
     version: '1',

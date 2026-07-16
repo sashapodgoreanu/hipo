@@ -1,0 +1,91 @@
+{
+  "moduleName": "duckle-mcp",
+  "modulePath": "crates/duckle-mcp",
+  "analyzedAt": "2026-07-16T00:00:00+02:00",
+  "fileCount": 5,
+  "components": {
+    "entryPoints": [
+      {
+        "path": "src/main.rs",
+        "purpose": "MCP stdio JSON-RPC 2.0 server entry point.",
+        "responsibilities": [
+          "Read newline-delimited stdin messages and write newline-delimited stdout responses",
+          "Dispatch initialize, tools, resources and prompts methods",
+          "Report JSON-RPC parse and method errors"
+        ],
+        "dependencies": ["serde_json", "tools"]
+      }
+    ],
+    "handlers": [
+      {
+        "path": "src/tools.rs",
+        "purpose": "Declares and implements the MCP tool, resource and prompt surface.",
+        "responsibilities": [
+          "Catalog discovery and schema lookup",
+          "Pipeline create/update/read/validate/run/build",
+          "Lineage, impact, trust, contracts and drift analysis",
+          "Connection and run-log workspace operations",
+          "Secret masking and literal-secret rejection"
+        ],
+        "dependencies": ["duckle-duckdb-engine", "catalog", "serde_json"]
+      }
+    ],
+    "catalog": [
+      {
+        "path": "src/catalog.rs",
+        "purpose": "Loads the compile-time embedded component catalog and exposes filtering/lookups.",
+        "responsibilities": [
+          "Parse catalog once lazily",
+          "Filter components by kind or free-text query",
+          "Return a full component schema by id"
+        ],
+        "dependencies": ["catalog.json", "serde_json"]
+      },
+      {
+        "path": "catalog.json",
+        "purpose": "Generated frontend component catalog embedded by the MCP binary.",
+        "responsibilities": [
+          "Expose component ids, labels, kinds, availability and summaries",
+          "Expose synthesized manifest fields and input/output ports"
+        ],
+        "dependencies": ["frontend/scripts/export-catalog.ts"]
+      }
+    ],
+    "configuration": [
+      {
+        "path": "Cargo.toml",
+        "purpose": "Defines the duckle-mcp binary and target-specific engine feature dependencies.",
+        "responsibilities": [
+          "Build configuration",
+          "Teradata feature selection by platform"
+        ],
+        "dependencies": ["duckle-duckdb-engine", "serde", "serde_json"]
+      }
+    ],
+    "tests": [
+      {
+        "path": "src/tools.rs",
+        "purpose": "Inline unit tests for pipeline-analysis tool helpers.",
+        "responsibilities": [
+          "Structural-risk, PII, lineage impact and diff behavior",
+          "Trust and schema-drift behavior",
+          "Contract suggestion behavior"
+        ],
+        "dependencies": ["duckle-duckdb-engine"]
+      }
+    ]
+  },
+  "generatedCatalog": {
+    "source": "frontend/scripts/export-catalog.ts",
+    "buildCommand": "npm --prefix frontend run export-catalog",
+    "componentCountObserved": 369,
+    "componentKindsObserved": {
+      "source": 112,
+      "sink": 68,
+      "transform": 135,
+      "control": 19,
+      "quality": 28,
+      "custom": 7
+    }
+  }
+}

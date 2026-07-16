@@ -25,6 +25,14 @@
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$rustc",
       "group": "build"
+    },
+    {
+      "label": "frontend: export MCP component catalog",
+      "detail": "Regenerates crates/duckle-mcp/catalog.json from the frontend palette and manifests. Run after changing a component's id, fields, ports, label, summary, or availability so MCP clients receive the authoritative schema.",
+      "type": "shell",
+      "command": "npm --prefix frontend run export-catalog",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
     }
   ]
 }

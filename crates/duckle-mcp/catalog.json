@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 368,
+  "componentCount": 369,
   "components": [
     {
       "id": "src.csv",
@@ -28,7 +28,7 @@
         "id": "src.csv",
         "kind": "source",
         "label": "CSV",
-        "description": "Read delimited text files",
+        "description": "Read delimited text files.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -39,11 +39,14 @@
                 "label": "Path",
                 "kind": "file-path",
                 "required": true,
+                "placeholder": "e.g. C:\\data\\orders.csv",
                 "filters": [
                   {
-                    "name": "CSV",
+                    "name": "CSV / TSV",
                     "extensions": [
-                      "csv"
+                      "csv",
+                      "tsv",
+                      "txt"
                     ]
                   },
                   {
@@ -55,46 +58,11 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
-                "key": "glob",
-                "label": "Glob pattern",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Treat the path as a glob (e.g. data/*.csv) to read many files."
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
                 "key": "hasHeader",
-                "label": "Has header row",
+                "label": "First row is header",
                 "kind": "bool",
-                "defaultValue": true
+                "defaultValue": true,
+                "placeholder": "Use the first row as column names"
               },
               {
                 "key": "delimiter",
@@ -145,62 +113,41 @@
                 ]
               },
               {
+                "key": "encoding",
+                "label": "Encoding",
+                "kind": "select",
+                "defaultValue": "utf-8",
+                "options": [
+                  {
+                    "label": "UTF-8",
+                    "value": "utf-8"
+                  },
+                  {
+                    "label": "UTF-16",
+                    "value": "utf-16"
+                  },
+                  {
+                    "label": "Latin-1 (ISO-8859-1)",
+                    "value": "latin-1"
+                  },
+                  {
+                    "label": "Windows-1252",
+                    "value": "windows-1252"
+                  }
+                ]
+              },
+              {
                 "key": "skipLines",
-                "label": "Skip lines",
+                "label": "Skip lines (top)",
                 "kind": "integer",
                 "defaultValue": 0
               },
               {
-                "key": "dateFormat",
-                "label": "Date format (optional)",
+                "key": "nullValue",
+                "label": "Null sentinel",
                 "kind": "text",
-                "placeholder": "%d/%m/%Y",
-                "description": "strptime tokens. Common: %d/%m/%Y, %m/%d/%Y, %Y-%m-%d. Leave empty for auto-detect."
-              },
-              {
-                "key": "timestampFormat",
-                "label": "Timestamp format (optional)",
-                "kind": "text",
-                "placeholder": "%d/%m/%Y %H:%M:%S",
-                "description": "strptime tokens, same as date format plus %H:%M:%S. Leave empty for auto-detect."
-              },
-              {
-                "key": "filename",
-                "label": "Add filename column",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "When reading a folder glob (e.g. data/*.csv), add a `filename` column so you can extract data from the source path."
-              },
-              {
-                "key": "ignoreErrors",
-                "label": "Ignore bad rows",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Skip rows DuckDB cannot parse (bad encoding, wrong column count, a trailing blank line) instead of failing the whole read. Maps to read_csv ignore_errors=true."
-              },
-              {
-                "key": "nullPadding",
-                "label": "Pad short rows with NULL",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Rows with fewer columns than the header are padded with NULLs rather than erroring. Maps to read_csv null_padding=true."
-              },
-              {
-                "key": "readOptions",
-                "label": "Extra read options",
-                "kind": "key-value",
-                "description": "Any other DuckDB read_csv option, passed through verbatim as key=value (e.g. union_by_name=true, sample_size=-1, ignore_errors=true). For power users who need full control of the reader."
-              }
-            ]
-          },
-          {
-            "label": "Partitioning (write side, applies to sinks only)",
-            "fields": [
-              {
-                "key": "partitionBy",
-                "label": "Partition by columns",
-                "kind": "columns",
-                "description": "Write a Hive-style partitioned dataset under the output path. Each partition column becomes a directory level (col=value/). Reruns overwrite the slice we just emitted."
+                "placeholder": "e.g. NULL, NA, \\N",
+                "description": "Strings that should be interpreted as NULL."
               }
             ]
           }
@@ -470,7 +417,7 @@
         "id": "src.json",
         "kind": "source",
         "label": "JSON",
-        "description": "Read JSON files",
+        "description": "Read JSON or NDJSON files.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -485,7 +432,9 @@
                   {
                     "name": "JSON",
                     "extensions": [
-                      "json"
+                      "json",
+                      "jsonl",
+                      "ndjson"
                     ]
                   },
                   {
@@ -497,44 +446,8 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
-                "key": "glob",
-                "label": "Glob pattern",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Treat the path as a glob (e.g. data/*.csv) to read many files."
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
                 "key": "format",
-                "label": "JSON format",
+                "label": "Format",
                 "kind": "select",
                 "defaultValue": "auto",
                 "options": [
@@ -568,6 +481,13 @@
                 "kind": "text",
                 "placeholder": "data   or   response.records",
                 "description": "Dotted key path to the array of records inside the JSON, for API-style responses where the rows live under a key (e.g. {\"data\":[...]} -> 'data', or {\"response\":{\"records\":[...]}} -> 'response.records'). Each record is unnested and nested fields are flattened into columns. Leave blank for a plain top-level array or JSON Lines."
+              },
+              {
+                "key": "ignoreErrors",
+                "label": "Skip malformed records",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Skip records DuckDB cannot parse instead of failing the whole load (#101). Best for large JSON Lines files where one bad line should not abort the run; the error message names the offending line and byte."
               }
             ]
           }
@@ -1212,7 +1132,7 @@
         "id": "src.parquet",
         "kind": "source",
         "label": "Parquet",
-        "description": "Read columnar Parquet files",
+        "description": "Read columnar Parquet files.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -1227,7 +1147,8 @@
                   {
                     "name": "Parquet",
                     "extensions": [
-                      "parquet"
+                      "parquet",
+                      "pq"
                     ]
                   },
                   {
@@ -1239,64 +1160,17 @@
                 ]
               },
               {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
-                "key": "glob",
-                "label": "Glob pattern",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Treat the path as a glob (e.g. data/*.csv) to read many files."
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "rowGroupSize",
-                "label": "Row group size",
-                "kind": "integer",
-                "defaultValue": 100000
-              },
-              {
                 "key": "columns",
-                "label": "Projection",
+                "label": "Projection (columns to read)",
                 "kind": "text",
-                "placeholder": "leave blank for all",
-                "description": "Comma-separated column projection (read-side only)."
-              }
-            ]
-          },
-          {
-            "label": "Partitioning (write side, applies to sinks only)",
-            "fields": [
+                "placeholder": "leave blank for all columns",
+                "description": "Comma-separated; pushed down to the Parquet reader."
+              },
               {
-                "key": "partitionBy",
-                "label": "Partition by columns",
-                "kind": "columns",
-                "description": "Write a Hive-style partitioned dataset under the output path. Each partition column becomes a directory level (col=value/). Reruns overwrite the slice we just emitted."
+                "key": "rowGroupRange",
+                "label": "Row group range",
+                "kind": "text",
+                "placeholder": "e.g. 0..10"
               }
             ]
           }
@@ -3361,48 +3235,33 @@
         "id": "src.sqlite",
         "kind": "source",
         "label": "SQLite",
-        "description": "Read SQLite tables",
+        "description": "Read from a SQLite database file.",
         "schemaSource": "autodetect",
         "sections": [
           {
             "label": "Connection",
             "fields": [
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              },
-              {
-                "key": "host",
-                "label": "Host",
-                "kind": "text",
-                "required": true,
-                "placeholder": "localhost"
-              },
-              {
-                "key": "port",
-                "label": "Port",
-                "kind": "integer",
-                "defaultValue": 0
-              },
-              {
                 "key": "database",
-                "label": "Database",
-                "kind": "text",
+                "label": "Database file",
+                "kind": "file-path",
                 "required": true,
-                "placeholder": "mydb"
-              },
-              {
-                "key": "username",
-                "label": "Username",
-                "kind": "text"
-              },
-              {
-                "key": "password",
-                "label": "Password",
-                "kind": "text",
-                "placeholder": "••••••••"
+                "filters": [
+                  {
+                    "name": "SQLite",
+                    "extensions": [
+                      "db",
+                      "sqlite",
+                      "sqlite3"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ]
               }
             ]
           },
@@ -3422,44 +3281,21 @@
                   {
                     "label": "Custom SQL",
                     "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
                   }
                 ]
               },
               {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
-              },
-              {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Table name",
                 "kind": "text",
-                "placeholder": "orders"
+                "placeholder": "users"
               },
               {
                 "key": "sql",
                 "label": "SQL query",
                 "kind": "expression",
                 "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "placeholder": "SELECT * FROM users WHERE created_at > ?"
               }
             ]
           }
@@ -3508,80 +3344,38 @@
         "id": "src.duckdb",
         "kind": "source",
         "label": "DuckDB",
-        "description": "Read a table from a DuckDB file",
+        "description": "Read from a DuckDB database file.",
         "schemaSource": "autodetect",
         "sections": [
           {
             "label": "Connection",
             "fields": [
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              },
-              {
-                "key": "host",
-                "label": "Host",
-                "kind": "text",
-                "required": true,
-                "placeholder": "localhost"
-              },
-              {
-                "key": "port",
-                "label": "Port",
-                "kind": "integer",
-                "defaultValue": 0
-              },
-              {
                 "key": "database",
-                "label": "Database",
-                "kind": "text",
+                "label": "Database file",
+                "kind": "file-path",
                 "required": true,
-                "placeholder": "mydb"
-              },
-              {
-                "key": "username",
-                "label": "Username",
-                "kind": "text"
-              },
-              {
-                "key": "password",
-                "label": "Password",
-                "kind": "text",
-                "placeholder": "••••••••"
+                "filters": [
+                  {
+                    "name": "DuckDB",
+                    "extensions": [
+                      "duckdb",
+                      "db"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ]
               }
             ]
           },
           {
-            "label": "Query",
+            "label": "Source table",
             "fields": [
-              {
-                "key": "mode",
-                "label": "Read mode",
-                "kind": "select",
-                "defaultValue": "table",
-                "options": [
-                  {
-                    "label": "Whole table",
-                    "value": "table"
-                  },
-                  {
-                    "label": "Custom SQL",
-                    "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
-                  }
-                ]
-              },
-              {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
-              },
               {
                 "key": "tableName",
                 "label": "Table",
@@ -3589,24 +3383,18 @@
                 "placeholder": "orders"
               },
               {
-                "key": "sql",
-                "label": "SQL query",
-                "kind": "expression",
-                "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
+                "key": "schema",
+                "label": "Schema",
                 "kind": "text",
-                "placeholder": "updated_at"
+                "placeholder": "main"
               },
               {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "key": "sql",
+                "label": "Advanced: custom SQL",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "SELECT * FROM duckle_src.orders WHERE status = ...",
+                "description": "Optional - used only when no table is set above. Reference tables as duckle_src.<table>."
               }
             ]
           }
@@ -3624,6 +3412,68 @@
               "label": "reject",
               "type": "reject",
               "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.query",
+      "label": "Query Source",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Read-only SQL over shared Data Sources",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.query",
+        "kind": "source",
+        "label": "Query Source",
+        "description": "Execute read-only SQL against shared Data Sources.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Query",
+            "fields": [
+              {
+                "key": "dataSourceRefs",
+                "label": "Data Sources",
+                "kind": "data-source-ref",
+                "required": true,
+                "description": "Search by data source name. The node stores only stable references; connection credentials stay in the workspace connection."
+              },
+              {
+                "key": "sql",
+                "label": "Read-only SQL",
+                "kind": "expression",
+                "required": true,
+                "rows": 8,
+                "placeholder": "SELECT * FROM sales.orders"
+              },
+              {
+                "key": "previewLimit",
+                "label": "Preview rows (max 1000)",
+                "kind": "number",
+                "defaultValue": 1000
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
             }
           ]
         }
@@ -3998,48 +3848,60 @@
         "id": "src.adbc",
         "kind": "source",
         "label": "ADBC (Arrow)",
-        "description": "Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options.",
-        "schemaSource": "autodetect",
+        "description": "Read any database that ships an ADBC driver. Load a prebuilt driver shared library at runtime, connect via a URI, and run SQL; rows stream back as Arrow.",
+        "schemaSource": "declared",
         "sections": [
+          {
+            "label": "Driver",
+            "fields": [
+              {
+                "key": "driver",
+                "label": "Driver library",
+                "kind": "file-path",
+                "required": true,
+                "placeholder": "e.g. C:\\drivers\\adbc_driver_sqlite.dll",
+                "description": "Path to the prebuilt ADBC driver shared library (.dll / .so / .dylib). Any dependent libraries must sit next to it.",
+                "filters": [
+                  {
+                    "name": "Shared library",
+                    "extensions": [
+                      "dll",
+                      "so",
+                      "dylib"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ]
+              },
+              {
+                "key": "entrypoint",
+                "label": "Init entrypoint (optional)",
+                "kind": "text",
+                "placeholder": "AdbcDriverInit",
+                "description": "Custom driver init symbol. Leave blank for the standard AdbcDriverInit."
+              }
+            ]
+          },
           {
             "label": "Connection",
             "fields": [
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
-              },
-              {
-                "key": "host",
-                "label": "Host",
+                "key": "uri",
+                "label": "URI",
                 "kind": "text",
-                "required": true,
-                "placeholder": "localhost"
+                "placeholder": "a database file path or a server URI",
+                "description": "Passed to the driver as the ADBC uri option. Driver-specific: a file path for SQLite, a DSN / URL for server drivers."
               },
               {
-                "key": "port",
-                "label": "Port",
-                "kind": "integer",
-                "defaultValue": 0
-              },
-              {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true,
-                "placeholder": "mydb"
-              },
-              {
-                "key": "username",
-                "label": "Username",
-                "kind": "text"
-              },
-              {
-                "key": "password",
-                "label": "Password",
-                "kind": "text",
-                "placeholder": "••••••••"
+                "key": "options",
+                "label": "Driver options",
+                "kind": "key-value",
+                "description": "Extra ADBC database options (username, password, and any driver-specific keys)."
               }
             ]
           },
@@ -4047,56 +3909,12 @@
             "label": "Query",
             "fields": [
               {
-                "key": "mode",
-                "label": "Read mode",
-                "kind": "select",
-                "defaultValue": "table",
-                "options": [
-                  {
-                    "label": "Whole table",
-                    "value": "table"
-                  },
-                  {
-                    "label": "Custom SQL",
-                    "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
-                  }
-                ]
-              },
-              {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
-              },
-              {
-                "key": "tableName",
-                "label": "Table",
-                "kind": "text",
-                "placeholder": "orders"
-              },
-              {
-                "key": "sql",
+                "key": "query",
                 "label": "SQL query",
                 "kind": "expression",
                 "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "required": true,
+                "placeholder": "SELECT * FROM my_table"
               }
             ]
           }
@@ -4145,41 +3963,28 @@
         "id": "src.teradata",
         "kind": "source",
         "label": "Teradata",
-        "description": "Read from Teradata through its free ODBC driver (no DuckDB Teradata extension exists). Install the Teradata ODBC driver, then connect with friendly host / user / password / database fields, a DSN, or a full ODBC connection string. Whole-table read or custom SQL; types preserved.",
-        "schemaSource": "autodetect",
+        "description": "Read from Teradata through its free ODBC driver (there is no DuckDB Teradata extension or native Rust driver). Install the Teradata ODBC driver on the machine that runs the pipeline, then connect with the friendly fields below, a DSN, or a full ODBC connection string. Numbers, decimals, dates and timestamps keep their types.",
+        "schemaSource": "declared",
         "sections": [
           {
             "label": "Connection",
             "fields": [
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "key": "driver",
+                "label": "ODBC driver name",
+                "kind": "text",
+                "placeholder": "Teradata Database ODBC Driver 17.20",
+                "description": "Name of the installed Teradata ODBC driver, as registered with the ODBC driver manager. Leave blank to use \"Teradata Database ODBC Driver 17.20\". Ignored when a DSN or connection string is set."
               },
               {
                 "key": "host",
-                "label": "Host",
+                "label": "Host (DBCNAME)",
                 "kind": "text",
-                "required": true,
-                "placeholder": "localhost"
+                "placeholder": "teradata.example.com"
               },
               {
-                "key": "port",
-                "label": "Port",
-                "kind": "integer",
-                "defaultValue": 0
-              },
-              {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true,
-                "placeholder": "mydb"
-              },
-              {
-                "key": "username",
-                "label": "Username",
+                "key": "user",
+                "label": "User",
                 "kind": "text"
               },
               {
@@ -4187,6 +3992,24 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
+              },
+              {
+                "key": "database",
+                "label": "Default database (optional)",
+                "kind": "text"
+              },
+              {
+                "key": "dsn",
+                "label": "DSN (optional)",
+                "kind": "text",
+                "description": "Use a preconfigured ODBC Data Source Name instead of the driver + host fields. The user / password / database above still apply."
+              },
+              {
+                "key": "connectionString",
+                "label": "ODBC connection string (optional)",
+                "kind": "text",
+                "placeholder": "DRIVER={Teradata Database ODBC Driver 17.20};DBCNAME=...;UID=...;PWD=...",
+                "description": "Full ODBC connection string. When set, it is used verbatim and every field above is ignored."
               }
             ]
           },
@@ -4194,56 +4017,19 @@
             "label": "Query",
             "fields": [
               {
-                "key": "mode",
-                "label": "Read mode",
-                "kind": "select",
-                "defaultValue": "table",
-                "options": [
-                  {
-                    "label": "Whole table",
-                    "value": "table"
-                  },
-                  {
-                    "label": "Custom SQL",
-                    "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
-                  }
-                ]
-              },
-              {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
+                "key": "query",
+                "label": "SQL query",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "SELECT * FROM sales.orders",
+                "description": "Leave blank to read the whole table named below."
               },
               {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Or table name",
                 "kind": "text",
-                "placeholder": "orders"
-              },
-              {
-                "key": "sql",
-                "label": "SQL query",
-                "kind": "expression",
-                "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "placeholder": "sales.orders",
+                "description": "Read this entire table when no SQL query is given."
               }
             ]
           }
@@ -5374,59 +5160,48 @@
         "id": "src.gizmosql",
         "kind": "source",
         "label": "GizmoSQL",
-        "description": "Query a GizmoSQL (Arrow Flight SQL) server via a clean-room pure-Rust Flight SQL client - no ADBC driver or JDBC needed. Basic-auth handshake then streams Arrow back for fast loads; TLS optional.",
-        "schemaSource": "autodetect",
+        "description": "Query a GizmoSQL (Arrow Flight SQL) server. Pure-Rust Flight SQL client: rows stream back as Arrow and materialize fast - no ADBC driver or JDBC needed.",
+        "schemaSource": "declared",
         "sections": [
           {
-            "label": "Account",
+            "label": "Connection",
             "fields": [
               {
-                "key": "account",
-                "label": "Account identifier",
+                "key": "host",
+                "label": "Host",
                 "kind": "text",
                 "required": true,
-                "placeholder": "xy12345.us-east-1"
+                "placeholder": "localhost"
               },
               {
-                "key": "warehouse",
-                "label": "Warehouse",
-                "kind": "text"
-              },
-              {
-                "key": "role",
-                "label": "Role",
-                "kind": "text"
-              },
-              {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true
-              },
-              {
-                "key": "schema",
-                "label": "Schema",
-                "kind": "text"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "snowflake"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 31337
               },
               {
                 "key": "username",
                 "label": "Username",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "gizmosql_username or ${ENV:GIZMOSQL_USER}"
               },
               {
                 "key": "password",
                 "label": "Password",
                 "kind": "text",
-                "placeholder": "••••••••"
+                "placeholder": "${ENV:GIZMOSQL_PASSWORD}"
+              },
+              {
+                "key": "tls",
+                "label": "Use TLS",
+                "kind": "bool",
+                "defaultValue": false
+              },
+              {
+                "key": "tlsSkipVerify",
+                "label": "Skip TLS verification (self-signed)",
+                "kind": "bool",
+                "defaultValue": false
               }
             ]
           },
@@ -5434,56 +5209,12 @@
             "label": "Query",
             "fields": [
               {
-                "key": "mode",
-                "label": "Read mode",
-                "kind": "select",
-                "defaultValue": "table",
-                "options": [
-                  {
-                    "label": "Whole table",
-                    "value": "table"
-                  },
-                  {
-                    "label": "Custom SQL",
-                    "value": "sql"
-                  },
-                  {
-                    "label": "Incremental (by column)",
-                    "value": "incremental"
-                  }
-                ]
-              },
-              {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
-              },
-              {
-                "key": "tableName",
-                "label": "Table",
-                "kind": "text",
-                "placeholder": "orders"
-              },
-              {
-                "key": "sql",
+                "key": "query",
                 "label": "SQL query",
                 "kind": "expression",
                 "rows": 5,
-                "placeholder": "SELECT * FROM orders WHERE status = $1"
-              },
-              {
-                "key": "incrementalColumn",
-                "label": "Incremental column",
-                "kind": "text",
-                "placeholder": "updated_at"
-              },
-              {
-                "key": "fetchSize",
-                "label": "Fetch size",
-                "kind": "integer",
-                "defaultValue": 1000,
-                "description": "Rows fetched per round-trip."
+                "required": true,
+                "placeholder": "SELECT * FROM my_table"
               }
             ]
           }
@@ -5517,14 +5248,8 @@
         "outputs": [
           {
             "id": "main",
-            "label": "main",
+            "label": "out",
             "type": "main"
-          },
-          {
-            "id": "reject",
-            "label": "reject",
-            "type": "reject",
-            "optional": true
           }
         ]
       },
@@ -5532,147 +5257,48 @@
         "id": "src.s3",
         "kind": "source",
         "label": "Amazon S3",
-        "description": "Read via DuckDB httpfs",
+        "description": "Read CSV / Parquet / JSON from an s3:// URI via DuckDB httpfs.",
         "schemaSource": "autodetect",
         "sections": [
           {
-            "label": "Object",
+            "label": "Source",
             "fields": [
               {
-                "key": "bucket",
-                "label": "Bucket",
+                "key": "path",
+                "label": "S3 URI",
                 "kind": "text",
                 "required": true,
-                "placeholder": "my-bucket"
-              },
-              {
-                "key": "key",
-                "label": "Key / prefix",
-                "kind": "text",
-                "required": true,
-                "placeholder": "data/orders.parquet"
-              },
-              {
-                "key": "region",
-                "label": "Region",
-                "kind": "text",
-                "placeholder": "us-east-1"
-              },
-              {
-                "key": "glob",
-                "label": "Read as prefix glob",
-                "kind": "bool",
-                "defaultValue": false
-              }
-            ]
-          },
-          {
-            "label": "Credentials",
-            "fields": [
-              {
-                "key": "accessKey",
-                "label": "Access key",
-                "kind": "text"
-              },
-              {
-                "key": "secretKey",
-                "label": "Secret key",
-                "kind": "text",
-                "placeholder": "••••••••"
-              },
-              {
-                "key": "sessionToken",
-                "label": "Session token",
-                "kind": "text"
+                "placeholder": "s3://bucket/path/to/file.parquet",
+                "description": "Full S3 URI. File format is inferred from the extension."
               },
               {
                 "key": "connectionRef",
                 "label": "Or use saved connection",
                 "kind": "connection-ref",
                 "accepts": [
-                  "s3",
-                  "gcs",
-                  "azure-blob"
-                ]
-              }
-            ]
-          },
-          {
-            "label": "S3-compatible (MinIO / R2 / B2)",
-            "fields": [
-              {
-                "key": "endpoint",
-                "label": "Endpoint",
-                "kind": "text",
-                "description": "host:port for MinIO; the provider host for R2 / B2. Leave empty for plain AWS S3.",
-                "placeholder": "localhost:9000"
-              },
-              {
-                "key": "urlStyle",
-                "label": "URL style",
-                "kind": "select",
-                "defaultValue": "",
-                "options": [
-                  {
-                    "label": "Default",
-                    "value": ""
-                  },
-                  {
-                    "label": "Path (MinIO / B2)",
-                    "value": "path"
-                  },
-                  {
-                    "label": "Virtual host (R2 / AWS)",
-                    "value": "vhost"
-                  }
+                  "s3"
                 ]
               },
-              {
-                "key": "useSsl",
-                "label": "Use TLS",
-                "kind": "select",
-                "defaultValue": "",
-                "options": [
-                  {
-                    "label": "Default (true)",
-                    "value": ""
-                  },
-                  {
-                    "label": "true",
-                    "value": "true"
-                  },
-                  {
-                    "label": "false (local MinIO)",
-                    "value": "false"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
               {
                 "key": "format",
-                "label": "File format",
+                "label": "Format override",
                 "kind": "select",
-                "defaultValue": "parquet",
                 "options": [
                   {
-                    "label": "Parquet",
-                    "value": "parquet"
+                    "label": "Auto-detect from extension",
+                    "value": ""
                   },
                   {
                     "label": "CSV",
                     "value": "csv"
                   },
                   {
-                    "label": "JSON",
-                    "value": "json"
+                    "label": "Parquet",
+                    "value": "parquet"
                   },
                   {
-                    "label": "JSONL",
-                    "value": "jsonl"
+                    "label": "JSON",
+                    "value": "json"
                   }
                 ]
               }
@@ -5684,14 +5310,8 @@
           "outputs": [
             {
               "id": "main",
-              "label": "main",
+              "label": "out",
               "type": "main"
-            },
-            {
-              "id": "reject",
-              "label": "reject",
-              "type": "reject",
-              "optional": true
             }
           ]
         }
@@ -12087,18 +11707,33 @@
         "id": "xf.map",
         "kind": "transform",
         "label": "Map",
-        "description": "Visual row mapper with main + lookup inputs",
+        "description": "Visual row mapper. Define each output column as an expression over the input row, with optional lookup inputs.",
         "schemaSource": "declared",
         "sections": [
           {
-            "label": "Settings",
+            "label": "Mapping",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "mode",
+                "label": "Mode",
+                "kind": "select",
+                "defaultValue": "expressions",
+                "options": [
+                  {
+                    "label": "Expressions",
+                    "value": "expressions"
+                  },
+                  {
+                    "label": "Visual mapper",
+                    "value": "visual"
+                  }
+                ]
+              },
+              {
+                "key": "expressions",
+                "label": "Output expressions",
+                "kind": "key-value",
+                "description": "key = output column name, value = SQL expression. Example: total_with_tax → amount * 1.08"
               }
             ]
           }
@@ -12177,18 +11812,18 @@
         "id": "xf.project",
         "kind": "transform",
         "label": "Project / Select",
-        "description": "Transforms data with Project / Select.",
-        "schemaSource": "declared",
+        "description": "Pick which columns to keep, in which order.",
+        "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Settings",
+            "label": "Columns",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "columns",
+                "label": "Columns to keep",
+                "kind": "columns",
+                "required": true,
+                "description": "Selected columns flow through in the listed order; everything else is dropped."
               }
             ]
           }
@@ -13063,18 +12698,24 @@
         "id": "xf.filter",
         "kind": "transform",
         "label": "Filter Rows",
-        "description": "WHERE-style row filter",
+        "description": "Keep rows that match a predicate.",
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Settings",
+            "label": "Filter",
             "fields": [
               {
-                "key": "notes",
-                "label": "Notes",
-                "kind": "textarea",
-                "rows": 3,
-                "description": "Component-specific configuration not yet modeled - describe the intent here."
+                "key": "predicate",
+                "label": "Predicate",
+                "kind": "filter-predicate",
+                "required": true,
+                "description": "Visual builder with column / operator / value, or raw SQL. Rows where the predicate is true are kept."
+              },
+              {
+                "key": "rejectOnError",
+                "label": "Send errors to reject port",
+                "kind": "bool",
+                "defaultValue": false
               }
             ]
           }
@@ -13135,7 +12776,6 @@
         "id": "xf.distinct",
         "kind": "transform",
         "label": "Distinct",
-        "description": "Drop duplicate rows",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -13143,9 +12783,9 @@
             "fields": [
               {
                 "key": "columns",
-                "label": "Columns",
+                "label": "Distinct columns",
                 "kind": "columns",
-                "description": "Leave empty to dedupe on the whole row."
+                "description": "Leave empty to deduplicate on the whole row."
               }
             ]
           }
@@ -13348,14 +12988,13 @@
         "id": "xf.sort",
         "kind": "transform",
         "label": "Sort",
-        "description": "Order rows",
         "schemaSource": "upstream",
         "sections": [
           {
             "label": "Sort",
             "fields": [
               {
-                "key": "column",
+                "key": "sortColumn",
                 "label": "Column",
                 "kind": "column",
                 "required": true
@@ -13858,7 +13497,7 @@
         "id": "xf.groupby",
         "kind": "transform",
         "label": "Group By",
-        "description": "Transforms data with Group By.",
+        "description": "Group rows by key columns and apply aggregations.",
         "schemaSource": "declared",
         "sections": [
           {
@@ -13866,9 +13505,10 @@
             "fields": [
               {
                 "key": "groupKeys",
-                "label": "Group by",
+                "label": "Group by columns",
                 "kind": "columns",
-                "required": true
+                "required": true,
+                "description": "Rows with the same values in these columns are grouped."
               }
             ]
           },
@@ -13884,14 +13524,15 @@
             ]
           },
           {
-            "label": "Filter",
+            "label": "Output",
             "fields": [
               {
                 "key": "havingClause",
                 "label": "HAVING clause",
                 "kind": "expression",
                 "rows": 2,
-                "placeholder": "sum_amount > 1000"
+                "placeholder": "sum_amount > 1000",
+                "description": "Optional filter applied to groups after aggregation."
               }
             ]
           }
@@ -25153,7 +24794,7 @@
         "id": "snk.csv",
         "kind": "sink",
         "label": "CSV",
-        "description": "Writes data to CSV.",
+        "description": "Write delimited text files.",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -25172,6 +24813,12 @@
                     ]
                   },
                   {
+                    "name": "TSV",
+                    "extensions": [
+                      "tsv"
+                    ]
+                  },
+                  {
                     "name": "All files",
                     "extensions": [
                       "*"
@@ -25186,7 +24833,7 @@
                 "defaultValue": "overwrite",
                 "options": [
                   {
-                    "label": "Overwrite",
+                    "label": "Overwrite (replace)",
                     "value": "overwrite"
                   },
                   {
@@ -25194,65 +24841,6 @@
                     "value": "error"
                   }
                 ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "hasHeader",
-                "label": "Has header row",
-                "kind": "bool",
-                "defaultValue": true
               },
               {
                 "key": "delimiter",
@@ -25275,49 +24863,34 @@
                   {
                     "label": "Pipe  |",
                     "value": "|"
-                  },
-                  {
-                    "label": "Space",
-                    "value": " "
                   }
                 ]
               },
               {
-                "key": "quoteChar",
-                "label": "Quote character",
+                "key": "writeHeader",
+                "label": "Write header row",
+                "kind": "bool",
+                "defaultValue": true
+              },
+              {
+                "key": "encoding",
+                "label": "Encoding",
                 "kind": "select",
-                "defaultValue": "\"",
+                "defaultValue": "utf-8",
                 "options": [
                   {
-                    "label": "Double quote  \"",
-                    "value": "\""
+                    "label": "UTF-8",
+                    "value": "utf-8"
                   },
                   {
-                    "label": "Single quote  '",
-                    "value": "'"
+                    "label": "UTF-16",
+                    "value": "utf-16"
                   },
                   {
-                    "label": "None",
-                    "value": ""
+                    "label": "Latin-1",
+                    "value": "latin-1"
                   }
                 ]
-              },
-              {
-                "key": "skipLines",
-                "label": "Skip lines",
-                "kind": "integer",
-                "defaultValue": 0
-              }
-            ]
-          },
-          {
-            "label": "Partitioning (write side, applies to sinks only)",
-            "fields": [
-              {
-                "key": "partitionBy",
-                "label": "Partition by columns",
-                "kind": "columns",
-                "description": "Write a Hive-style partitioned dataset under the output path. Each partition column becomes a directory level (col=value/). Reruns overwrite the slice we just emitted."
               }
             ]
           }
@@ -26166,7 +25739,7 @@
         "id": "snk.parquet",
         "kind": "sink",
         "label": "Parquet",
-        "description": "Writes data to Parquet.",
+        "description": "Write columnar Parquet files.",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -26203,32 +25776,12 @@
                     "value": "overwrite"
                   },
                   {
+                    "label": "Append",
+                    "value": "append"
+                  },
+                  {
                     "label": "Error if exists",
                     "value": "error"
-                  }
-                ]
-              },
-              {
-                "key": "encoding",
-                "label": "Encoding",
-                "kind": "select",
-                "defaultValue": "utf-8",
-                "options": [
-                  {
-                    "label": "UTF-8",
-                    "value": "utf-8"
-                  },
-                  {
-                    "label": "UTF-16",
-                    "value": "utf-16"
-                  },
-                  {
-                    "label": "Latin-1",
-                    "value": "latin-1"
-                  },
-                  {
-                    "label": "Windows-1252",
-                    "value": "windows-1252"
                   }
                 ]
               },
@@ -26236,54 +25789,76 @@
                 "key": "compression",
                 "label": "Compression",
                 "kind": "select",
-                "defaultValue": "none",
+                "defaultValue": "snappy",
                 "options": [
                   {
-                    "label": "None",
-                    "value": "none"
+                    "label": "Snappy (fast)",
+                    "value": "snappy"
+                  },
+                  {
+                    "label": "Zstd (smaller)",
+                    "value": "zstd"
                   },
                   {
                     "label": "Gzip",
                     "value": "gzip"
                   },
                   {
-                    "label": "Zstd",
-                    "value": "zstd"
+                    "label": "LZ4",
+                    "value": "lz4"
                   },
                   {
-                    "label": "Snappy",
-                    "value": "snappy"
+                    "label": "None",
+                    "value": "none"
                   }
                 ]
-              }
-            ]
-          },
-          {
-            "label": "Format",
-            "fields": [
+              },
+              {
+                "key": "compressionLevel",
+                "label": "Compression level",
+                "kind": "integer",
+                "visibleWhen": {
+                  "key": "compression",
+                  "equals": "zstd"
+                },
+                "description": "ZSTD only (1-22). Leave empty to let DuckDB pick its default. Higher = smaller files, slower writes."
+              },
+              {
+                "key": "parquetVersion",
+                "label": "Parquet version",
+                "kind": "select",
+                "defaultValue": "v1",
+                "options": [
+                  {
+                    "label": "V1 (maximum compatibility)",
+                    "value": "v1"
+                  },
+                  {
+                    "label": "V2 (newer encodings)",
+                    "value": "v2"
+                  }
+                ],
+                "description": "V1 is the most widely compatible. V2 enables newer Parquet encodings for smaller files."
+              },
               {
                 "key": "rowGroupSize",
                 "label": "Row group size",
                 "kind": "integer",
-                "defaultValue": 100000
+                "defaultValue": 100000,
+                "description": "Number of rows per row group."
               },
-              {
-                "key": "columns",
-                "label": "Projection",
-                "kind": "text",
-                "placeholder": "leave blank for all",
-                "description": "Comma-separated column projection (read-side only)."
-              }
-            ]
-          },
-          {
-            "label": "Partitioning (write side, applies to sinks only)",
-            "fields": [
               {
                 "key": "partitionBy",
                 "label": "Partition by columns",
                 "kind": "columns",
-                "description": "Write a Hive-style partitioned dataset under the output path. Each partition column becomes a directory level (col=value/). Reruns overwrite the slice we just emitted."
+                "description": "Write Hive-style partitioned directories per value."
+              },
+              {
+                "key": "maxPartitions",
+                "label": "Max partitions",
+                "kind": "integer",
+                "defaultValue": 10000,
+                "description": "Safety cap: abort before writing if partitioning would create more than this many files (one per distinct value). 0 = unlimited. Only applies when Partition by columns is set."
               }
             ]
           }
@@ -28567,41 +28142,28 @@
         "id": "snk.teradata",
         "kind": "sink",
         "label": "Teradata",
-        "description": "Write to Teradata through its free ODBC driver. Install the Teradata ODBC driver, then connect with friendly fields, a DSN, or a full ODBC connection string. Append creates the table if missing then appends; Overwrite clears it first. No upsert.",
+        "description": "Write to Teradata through its free ODBC driver. Install the Teradata ODBC driver on the machine that runs the pipeline. Append creates the table if missing then appends rows; Overwrite clears the table first. Rows are inserted one statement at a time (Teradata VALUES is single-row), so for very large loads use Teradata bulk utilities. Upsert is not supported.",
         "schemaSource": "upstream",
         "sections": [
           {
             "label": "Connection",
             "fields": [
               {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "key": "driver",
+                "label": "ODBC driver name",
+                "kind": "text",
+                "placeholder": "Teradata Database ODBC Driver 17.20",
+                "description": "Name of the installed Teradata ODBC driver, as registered with the ODBC driver manager. Leave blank to use \"Teradata Database ODBC Driver 17.20\". Ignored when a DSN or connection string is set."
               },
               {
                 "key": "host",
-                "label": "Host",
+                "label": "Host (DBCNAME)",
                 "kind": "text",
-                "required": true,
-                "placeholder": "localhost"
+                "placeholder": "teradata.example.com"
               },
               {
-                "key": "port",
-                "label": "Port",
-                "kind": "integer",
-                "defaultValue": 0
-              },
-              {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true,
-                "placeholder": "mydb"
-              },
-              {
-                "key": "username",
-                "label": "Username",
+                "key": "user",
+                "label": "User",
                 "kind": "text"
               },
               {
@@ -28609,6 +28171,19 @@
                 "label": "Password",
                 "kind": "text",
                 "placeholder": "••••••••"
+              },
+              {
+                "key": "dsn",
+                "label": "DSN (optional)",
+                "kind": "text",
+                "description": "Use a preconfigured ODBC Data Source Name instead of the driver + host fields. The user / password above still apply."
+              },
+              {
+                "key": "connectionString",
+                "label": "ODBC connection string (optional)",
+                "kind": "text",
+                "placeholder": "DRIVER={Teradata Database ODBC Driver 17.20};DBCNAME=...;UID=...;PWD=...",
+                "description": "Full ODBC connection string. When set, it is used verbatim and every field above is ignored."
               }
             ]
           },
@@ -28616,93 +28191,31 @@
             "label": "Destination",
             "fields": [
               {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
-              },
-              {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Target table",
                 "kind": "text",
                 "required": true,
-                "placeholder": "orders"
+                "placeholder": "orders_loaded"
               },
               {
-                "key": "mode",
+                "key": "database",
+                "label": "Target database (optional)",
+                "kind": "text",
+                "description": "Database the table lives in. Qualifies the table name and sets the connection default database. Leave blank to use the connection default."
+              },
+              {
+                "key": "writeMode",
                 "label": "Write mode",
                 "kind": "select",
-                "defaultValue": "overwrite",
+                "defaultValue": "append",
                 "options": [
                   {
-                    "label": "Create or replace",
-                    "value": "overwrite"
-                  },
-                  {
-                    "label": "Append (insert)",
+                    "label": "Append (create table if missing)",
                     "value": "append"
                   },
                   {
-                    "label": "Upsert (insert on conflict / on duplicate key)",
-                    "value": "upsert"
-                  },
-                  {
-                    "label": "Truncate + insert",
-                    "value": "truncate"
-                  }
-                ]
-              },
-              {
-                "key": "conflictColumns",
-                "label": "Conflict columns",
-                "kind": "columns",
-                "description": "Used in upsert mode: Postgres / Cockroach use these as ON CONFLICT keys; MySQL / MariaDB rely on the target table's existing UNIQUE / PRIMARY KEY index; DuckDB / SQLite match on these for a set-based delete + re-insert."
-              },
-              {
-                "key": "deleteColumn",
-                "label": "Delete flag column (optional)",
-                "kind": "text",
-                "placeholder": "_change_type",
-                "description": "Upsert only: rows whose value in this column equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake CDC change-type column here to propagate deletes."
-              },
-              {
-                "key": "deleteValue",
-                "label": "Delete flag value",
-                "kind": "text",
-                "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
-              },
-              {
-                "key": "validateBeforeInsert",
-                "label": "Validate before insert (dead-letter bad rows)",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
-              },
-              {
-                "key": "deadLetterPath",
-                "label": "Dead-letter file",
-                "kind": "text",
-                "placeholder": "rejected.parquet",
-                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
-              },
-              {
-                "key": "deadLetterFormat",
-                "label": "Dead-letter format",
-                "kind": "select",
-                "defaultValue": "parquet",
-                "options": [
-                  {
-                    "label": "Parquet",
-                    "value": "parquet"
-                  },
-                  {
-                    "label": "CSV",
-                    "value": "csv"
-                  },
-                  {
-                    "label": "JSON",
-                    "value": "json"
+                    "label": "Overwrite (clear table first)",
+                    "value": "overwrite"
                   }
                 ]
               }
@@ -28741,11 +28254,11 @@
         "id": "snk.sqlite",
         "kind": "sink",
         "label": "SQLite",
-        "description": "Write a table into a SQLite file",
+        "description": "Write to a SQLite database file.",
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Database file",
+            "label": "Destination",
             "fields": [
               {
                 "key": "database",
@@ -28756,8 +28269,8 @@
                   {
                     "name": "SQLite",
                     "extensions": [
-                      "sqlite",
                       "db",
+                      "sqlite",
                       "sqlite3"
                     ]
                   },
@@ -28768,15 +28281,10 @@
                     ]
                   }
                 ]
-              }
-            ]
-          },
-          {
-            "label": "Destination",
-            "fields": [
+              },
               {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Table name",
                 "kind": "text",
                 "required": true,
                 "placeholder": "orders"
@@ -28788,7 +28296,7 @@
                 "defaultValue": "overwrite",
                 "options": [
                   {
-                    "label": "Overwrite (create / append)",
+                    "label": "Create or replace",
                     "value": "overwrite"
                   },
                   {
@@ -28800,7 +28308,7 @@
                     "value": "truncate"
                   },
                   {
-                    "label": "Upsert (MERGE on key)",
+                    "label": "Upsert (delete-by-key + re-insert)",
                     "value": "upsert"
                   },
                   {
@@ -28808,61 +28316,27 @@
                     "value": "merge"
                   }
                 ],
-                "description": "Upsert replaces whole rows (delete-by-key + re-insert). Merge updates only the columns the source provides and inserts new rows, leaving other target columns untouched (issue #39)."
+                "description": "Upsert deletes rows matching the conflict columns, then re-inserts (issue #19). Merge updates only the columns the source provides and inserts new rows, leaving other target columns untouched (issue #39)."
               },
               {
                 "key": "conflictColumns",
                 "label": "Conflict columns (upsert key)",
                 "kind": "columns",
-                "description": "Key columns to match on for Upsert / MERGE. Required when Write mode is Upsert."
+                "description": "Required in Upsert mode: rows matching these key columns are replaced (set-based delete + re-insert), the rest inserted."
               },
               {
                 "key": "deleteColumn",
                 "label": "Delete flag column (optional)",
                 "kind": "text",
                 "placeholder": "_change_type",
-                "description": "Upsert only: rows whose value in this column equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake CDC change-type column here to propagate deletes."
+                "description": "Upsert only: rows whose value here equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake change-type column here to propagate deletes."
               },
               {
                 "key": "deleteValue",
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
-              },
-              {
-                "key": "validateBeforeInsert",
-                "label": "Validate before insert (dead-letter bad rows)",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
-              },
-              {
-                "key": "deadLetterPath",
-                "label": "Dead-letter file",
-                "kind": "text",
-                "placeholder": "rejected.parquet",
-                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
-              },
-              {
-                "key": "deadLetterFormat",
-                "label": "Dead-letter format",
-                "kind": "select",
-                "defaultValue": "parquet",
-                "options": [
-                  {
-                    "label": "Parquet",
-                    "value": "parquet"
-                  },
-                  {
-                    "label": "CSV",
-                    "value": "csv"
-                  },
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  }
-                ]
+                "description": "The value in the Delete flag column that marks a row for deletion."
               }
             ]
           }
@@ -28899,11 +28373,11 @@
         "id": "snk.duckdb",
         "kind": "sink",
         "label": "DuckDB",
-        "description": "Write a table into a DuckDB file",
+        "description": "Write to a DuckDB database file.",
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Database file",
+            "label": "Destination",
             "fields": [
               {
                 "key": "database",
@@ -28925,18 +28399,12 @@
                     ]
                   }
                 ]
-              }
-            ]
-          },
-          {
-            "label": "Destination",
-            "fields": [
+              },
               {
                 "key": "tableName",
-                "label": "Table",
+                "label": "Table name",
                 "kind": "text",
-                "required": true,
-                "placeholder": "orders"
+                "required": true
               },
               {
                 "key": "mode",
@@ -28945,7 +28413,7 @@
                 "defaultValue": "overwrite",
                 "options": [
                   {
-                    "label": "Overwrite (create / append)",
+                    "label": "Create or replace",
                     "value": "overwrite"
                   },
                   {
@@ -28957,7 +28425,7 @@
                     "value": "truncate"
                   },
                   {
-                    "label": "Upsert (MERGE on key)",
+                    "label": "Upsert (delete-by-key + re-insert)",
                     "value": "upsert"
                   },
                   {
@@ -28965,61 +28433,27 @@
                     "value": "merge"
                   }
                 ],
-                "description": "Upsert replaces whole rows (delete-by-key + re-insert). Merge updates only the columns the source provides and inserts new rows, leaving other target columns untouched (issue #39)."
+                "description": "Upsert deletes rows matching the conflict columns, then re-inserts (issue #19). Merge updates only the columns the source provides and inserts new rows, leaving other target columns untouched (issue #39)."
               },
               {
                 "key": "conflictColumns",
                 "label": "Conflict columns (upsert key)",
                 "kind": "columns",
-                "description": "Key columns to match on for Upsert / MERGE. Required when Write mode is Upsert."
+                "description": "Required in Upsert mode: rows matching these key columns are replaced (set-based delete + re-insert), the rest inserted."
               },
               {
                 "key": "deleteColumn",
                 "label": "Delete flag column (optional)",
                 "kind": "text",
                 "placeholder": "_change_type",
-                "description": "Upsert only: rows whose value in this column equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake CDC change-type column here to propagate deletes."
+                "description": "Upsert only: rows whose value here equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake change-type column here to propagate deletes."
               },
               {
                 "key": "deleteValue",
                 "label": "Delete flag value",
                 "kind": "text",
                 "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
-              },
-              {
-                "key": "validateBeforeInsert",
-                "label": "Validate before insert (dead-letter bad rows)",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
-              },
-              {
-                "key": "deadLetterPath",
-                "label": "Dead-letter file",
-                "kind": "text",
-                "placeholder": "rejected.parquet",
-                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
-              },
-              {
-                "key": "deadLetterFormat",
-                "label": "Dead-letter format",
-                "kind": "select",
-                "defaultValue": "parquet",
-                "options": [
-                  {
-                    "label": "Parquet",
-                    "value": "parquet"
-                  },
-                  {
-                    "label": "CSV",
-                    "value": "csv"
-                  },
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  }
-                ]
+                "description": "The value in the Delete flag column that marks a row for deletion."
               }
             ]
           }
@@ -29647,152 +29081,74 @@
         "id": "snk.gizmosql",
         "kind": "sink",
         "label": "GizmoSQL",
-        "description": "Write rows to a table on a GizmoSQL (Arrow Flight SQL) server via CREATE + batched INSERT over the clean-room pure-Rust Flight SQL client. Append or overwrite; TLS optional.",
-        "schemaSource": "upstream",
+        "description": "Write rows to a table on a GizmoSQL (Arrow Flight SQL) server via CREATE + batched INSERT over the pure-Rust Flight SQL client.",
+        "schemaSource": "declared",
         "sections": [
           {
-            "label": "Account",
+            "label": "Connection",
             "fields": [
               {
-                "key": "account",
-                "label": "Account identifier",
+                "key": "host",
+                "label": "Host",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "localhost"
               },
               {
-                "key": "warehouse",
-                "label": "Warehouse",
-                "kind": "text"
-              },
-              {
-                "key": "role",
-                "label": "Role",
-                "kind": "text"
-              },
-              {
-                "key": "database",
-                "label": "Database",
-                "kind": "text",
-                "required": true
-              },
-              {
-                "key": "schema",
-                "label": "Schema",
-                "kind": "text"
-              },
-              {
-                "key": "connectionRef",
-                "label": "Saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "snowflake"
-                ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 31337
               },
               {
                 "key": "username",
                 "label": "Username",
-                "kind": "text"
+                "kind": "text",
+                "placeholder": "gizmosql_username or ${ENV:GIZMOSQL_USER}"
               },
               {
                 "key": "password",
                 "label": "Password",
                 "kind": "text",
-                "placeholder": "••••••••"
+                "placeholder": "${ENV:GIZMOSQL_PASSWORD}"
+              },
+              {
+                "key": "tls",
+                "label": "Use TLS",
+                "kind": "bool",
+                "defaultValue": false
+              },
+              {
+                "key": "tlsSkipVerify",
+                "label": "Skip TLS verification (self-signed)",
+                "kind": "bool",
+                "defaultValue": false
               }
             ]
           },
           {
-            "label": "Destination",
+            "label": "Target",
             "fields": [
               {
-                "key": "schemaName",
-                "label": "Schema",
-                "kind": "text",
-                "placeholder": "public"
-              },
-              {
-                "key": "tableName",
+                "key": "table",
                 "label": "Table",
                 "kind": "text",
                 "required": true,
-                "placeholder": "orders"
+                "placeholder": "my_table"
               },
               {
                 "key": "mode",
                 "label": "Write mode",
                 "kind": "select",
-                "defaultValue": "overwrite",
+                "defaultValue": "append",
                 "options": [
                   {
-                    "label": "Create or replace",
-                    "value": "overwrite"
-                  },
-                  {
-                    "label": "Append (insert)",
+                    "label": "Append (create if missing)",
                     "value": "append"
                   },
                   {
-                    "label": "Upsert (insert on conflict / on duplicate key)",
-                    "value": "upsert"
-                  },
-                  {
-                    "label": "Truncate + insert",
-                    "value": "truncate"
-                  }
-                ]
-              },
-              {
-                "key": "conflictColumns",
-                "label": "Conflict columns",
-                "kind": "columns",
-                "description": "Used in upsert mode: Postgres / Cockroach use these as ON CONFLICT keys; MySQL / MariaDB rely on the target table's existing UNIQUE / PRIMARY KEY index; DuckDB / SQLite match on these for a set-based delete + re-insert."
-              },
-              {
-                "key": "deleteColumn",
-                "label": "Delete flag column (optional)",
-                "kind": "text",
-                "placeholder": "_change_type",
-                "description": "Upsert only: rows whose value in this column equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake CDC change-type column here to propagate deletes."
-              },
-              {
-                "key": "deleteValue",
-                "label": "Delete flag value",
-                "kind": "text",
-                "defaultValue": "delete",
-                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
-              },
-              {
-                "key": "validateBeforeInsert",
-                "label": "Validate before insert (dead-letter bad rows)",
-                "kind": "bool",
-                "defaultValue": false,
-                "description": "Before writing, split off rows whose values do not match the declared column types. Valid rows are inserted; rejected rows are written to the dead-letter file with a __rejected_at stamp. Requires a declared schema on this node."
-              },
-              {
-                "key": "deadLetterPath",
-                "label": "Dead-letter file",
-                "kind": "text",
-                "placeholder": "rejected.parquet",
-                "description": "Where rejected rows go when Validate before insert is on. Required when it is enabled."
-              },
-              {
-                "key": "deadLetterFormat",
-                "label": "Dead-letter format",
-                "kind": "select",
-                "defaultValue": "parquet",
-                "options": [
-                  {
-                    "label": "Parquet",
-                    "value": "parquet"
-                  },
-                  {
-                    "label": "CSV",
-                    "value": "csv"
-                  },
-                  {
-                    "label": "JSON",
-                    "value": "json"
+                    "label": "Overwrite (replace table)",
+                    "value": "overwrite"
                   }
                 ]
               }
@@ -30895,7 +30251,7 @@
         "inputs": [
           {
             "id": "main",
-            "label": "main",
+            "label": "in",
             "type": "main"
           }
         ],
@@ -30905,28 +30261,50 @@
         "id": "snk.s3",
         "kind": "sink",
         "label": "Amazon S3",
-        "description": "Write via DuckDB httpfs",
+        "description": "Write CSV / Parquet / JSON to an s3:// URI via DuckDB httpfs.",
         "schemaSource": "upstream",
         "sections": [
           {
-            "label": "Object",
+            "label": "Destination",
             "fields": [
               {
-                "key": "bucket",
-                "label": "Bucket",
+                "key": "path",
+                "label": "S3 URI",
                 "kind": "text",
-                "required": true
+                "required": true,
+                "placeholder": "s3://bucket/path/out.parquet",
+                "description": "Full S3 URI. Format is inferred from the extension."
               },
               {
-                "key": "key",
-                "label": "Key / prefix",
-                "kind": "text",
-                "required": true
+                "key": "connectionRef",
+                "label": "Or use saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "s3"
+                ]
               },
               {
-                "key": "region",
-                "label": "Region",
-                "kind": "text"
+                "key": "format",
+                "label": "Format override",
+                "kind": "select",
+                "options": [
+                  {
+                    "label": "Auto-detect from extension",
+                    "value": ""
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  }
+                ]
               }
             ]
           },
@@ -30945,14 +30323,10 @@
                 "placeholder": "••••••••"
               },
               {
-                "key": "connectionRef",
-                "label": "Or use saved connection",
-                "kind": "connection-ref",
-                "accepts": [
-                  "s3",
-                  "gcs",
-                  "azure-blob"
-                ]
+                "key": "region",
+                "label": "Region",
+                "kind": "text",
+                "placeholder": "us-east-1"
               }
             ]
           },
@@ -31007,88 +30381,13 @@
                 ]
               }
             ]
-          },
-          {
-            "label": "Format",
-            "fields": [
-              {
-                "key": "format",
-                "label": "File format",
-                "kind": "select",
-                "defaultValue": "parquet",
-                "options": [
-                  {
-                    "label": "Parquet",
-                    "value": "parquet"
-                  },
-                  {
-                    "label": "CSV",
-                    "value": "csv"
-                  },
-                  {
-                    "label": "JSON",
-                    "value": "json"
-                  },
-                  {
-                    "label": "JSONL",
-                    "value": "jsonl"
-                  }
-                ]
-              },
-              {
-                "key": "mode",
-                "label": "Write mode",
-                "kind": "select",
-                "defaultValue": "overwrite",
-                "options": [
-                  {
-                    "label": "Overwrite",
-                    "value": "overwrite"
-                  },
-                  {
-                    "label": "Error if exists",
-                    "value": "error"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
-              },
-              {
-                "key": "partitionBy",
-                "label": "Partition by columns",
-                "kind": "columns",
-                "description": "Hive-style partitioned output."
-              }
-            ]
           }
         ],
         "ports": {
           "inputs": [
             {
               "id": "main",
-              "label": "main",
+              "label": "in",
               "type": "main"
             }
           ],
