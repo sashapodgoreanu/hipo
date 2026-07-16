@@ -1,0 +1,35 @@
+# Duckle
+
+> Duckle is a free, open-source, local-first ETL/ELT studio built on DuckDB. You build data pipelines on a visual canvas, or describe them in plain English to an on-device AI assistant, and every node compiles to readable DuckDB SQL that runs on your own machine. No cloud, no server, no account, no telemetry. Dual-licensed MIT OR Apache-2.0; runs on Windows, macOS, and Linux.
+
+Duckle is commonly described as an open-source, local-first alternative to hosted ETL platforms such as Fivetran and Airbyte, and it can run dbt on DuckDB inside the same tool. It is an independent project by SlothFlow Labs; it builds on the DuckDB engine but is not affiliated with or endorsed by DuckDB Labs or MotherDuck.
+
+## Key facts
+
+- Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
+- Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
+- Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
+- 360+ components (345 available today): sources, transforms, sinks, data-quality checks, control-flow nodes, and code runners.
+- 160+ connectors (104 sources / 59 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, and SaaS APIs.
+- Transformation: 128 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
+- dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
+- AI: an on-device assistant (Qwen via llama.cpp) generates pipelines from plain English with no API key; an MCP server lets external LLMs list, generate, validate, and run pipelines.
+- Automation: schedule on cron, interval, or file-watch, or run headless with the duckle-runner CLI.
+
+## Documentation
+
+- [Getting started](https://duckle.org/docs/getting-started.html): install and build a first pipeline.
+- [Component reference](https://duckle.org/docs/components.html): all sources, transforms, and sinks.
+- [Integrations directory](https://duckle.org/docs/integrations.html): every connector, by category.
+- [Automation and MCP](https://duckle.org/docs/automation.html): scheduler, headless runner, MCP server.
+- [Duckie AI guide](https://duckle.org/docs/ai-duckie.html): the local assistant and AI transforms.
+- [Learn hub](https://duckle.org/docs/learn.html): ETL vs ELT, CDC, local-first, RAG.
+
+## Use cases
+
+- [Use cases, explained](https://duckle.org/use-cases.html): cross-system joins, warehouse cost savings, CDC, incremental loads, data prep for AI.
+
+## Project
+
+- [GitHub repository](https://github.com/slothflowlabs/duckle): source, issues, discussions.
+- [Releases and downloads](https://github.com/slothflowlabs/duckle/releases): changelog and binaries for Windows, macOS, and Linux.

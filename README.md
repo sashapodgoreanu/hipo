@@ -115,6 +115,8 @@
 
 A visual data pipeline studio that runs on your laptop. Drag sources, transforms, validators, and sinks onto a canvas. Wire them together. Press **Run**. Duckle compiles the graph to SQL and executes it through a real columnar engine, with live previews, generated SQL on every node, and zero hidden state.
 
+In short: a free, open-source, local-first alternative to hosted ETL platforms like Fivetran and Airbyte, that can also run dbt on DuckDB inside the same tool.
+
 Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs locally - no API key, no telemetry, no cloud round-trip.
@@ -1025,6 +1027,27 @@ A few patterns that consistently produce sub-second runs at small / medium data 
 <summary><b>Is Duckle free? What's the license?</b></summary>
 
 Yes, free + open source. Dual-licensed **MIT OR Apache-2.0**. You can use it commercially, fork it, sell what you build with it. No usage limits, no telemetry.
+
+</details>
+
+<details>
+<summary><b>Is Duckle an open-source alternative to Fivetran or Airbyte?</b></summary>
+
+It covers similar ground - moving data across 160+ sources and destinations - but locally, with nothing to host and no per-row, per-connector, or per-seat billing. Pipelines are built visually or from plain English and compile to readable DuckDB SQL that runs on your machine. The trade-off is scope: Duckle is single-machine and embedded, so for warehouse-scale replication you point its output at the system that scales.
+
+</details>
+
+<details>
+<summary><b>Can I run ETL pipelines without the cloud or a data warehouse?</b></summary>
+
+Yes. Duckle executes on the embedded DuckDB engine, so there is no external warehouse, no server, and no account. It runs fully offline, which suits air-gapped, on-premise, and compliance-sensitive work. Pipelines can still read from and write to cloud systems when needed - it just is not required to run.
+
+</details>
+
+<details>
+<summary><b>How is Duckle different from Airbyte, dbt, or Talend?</b></summary>
+
+Airbyte focuses on hosted extract-and-load connectors; dbt focuses on SQL transformation; Talend is a heavyweight GUI suite (its free Open Studio edition was discontinued in early 2026). Duckle is a single local-first studio that does extract, transform, and load together, compiles a visual canvas to DuckDB SQL, and can also run dbt on DuckDB inside the same tool - all from one self-contained binary with no cloud or account.
 
 </details>
 
