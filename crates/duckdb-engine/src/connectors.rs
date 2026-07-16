@@ -3043,11 +3043,61 @@ impl DuckdbEngine {
         db: &Path,
         spec: &XmlSourceSpec,
     ) -> Result<String, EngineError> {
-        let content = std::fs::read_to_string(&spec.path)
+        use std::io::{BufReader, Read, Seek};
+        let mut file = std::fs::File::open(&spec.path)
             .map_err(|e| EngineError::Query(format!("xml: read {}: {}", spec.path, e)))?;
-        let rows = walk_xml_to_rows(&content, &spec.row_path, &self.cancel)?;
-        let count = rows.len();
-        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+        // Sniff the first bytes so a gzipped (.gz) or zipped (.zip) XML file is
+        // decompressed on the fly regardless of extension. Everything below
+        // streams: rows are emitted straight to an NDJSON temp file as each
+        // element closes and DuckDB reads that back out-of-core, so a multi-GB
+        // (and, uncompressed, far larger) document never lands in RAM the way
+        // std::fs::read_to_string + a Vec of every row did (issue #186).
+        let mut magic = [0u8; 4];
+        let n = file
+            .read(&mut magic)
+            .map_err(|e| EngineError::Query(format!("xml: read {}: {}", spec.path, e)))?;
+        file.rewind()
+            .map_err(|e| EngineError::Query(format!("xml: seek {}: {}", spec.path, e)))?;
+        let is_gzip = n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b;
+        let is_zip = n >= 4 && &magic[0..4] == b"PK\x03\x04";
+
+        let mut writer = JsonLinesWriter::open(&spec.node_id)?;
+        let mut count: usize = 0;
+        {
+            let mut emit = |row: &JsonValue| -> Result<(), EngineError> {
+                writer.write_row(row)?;
+                count += 1;
+                Ok(())
+            };
+            if is_zip {
+                // ZIP central directory lives at the end of the file, so this
+                // seeks (the file is on disk); the entry itself then decompresses
+                // as a stream. Take the first *.xml entry, else the first entry.
+                let mut archive = zip::ZipArchive::new(file)
+                    .map_err(|e| EngineError::Query(format!("xml: open zip {}: {}", spec.path, e)))?;
+                if archive.is_empty() {
+                    return Err(EngineError::Query(format!("xml: zip {} is empty", spec.path)));
+                }
+                let name = archive
+                    .file_names()
+                    .find(|n| n.to_ascii_lowercase().ends_with(".xml"))
+                    .map(|s| s.to_string());
+                let entry = match name {
+                    Some(n) => archive.by_name(&n),
+                    None => archive.by_index(0),
+                }
+                .map_err(|e| {
+                    EngineError::Query(format!("xml: read zip entry {}: {}", spec.path, e))
+                })?;
+                stream_xml_rows(BufReader::new(entry), &spec.row_path, &self.cancel, &mut emit)?;
+            } else if is_gzip {
+                let decoder = flate2::read::MultiGzDecoder::new(BufReader::new(file));
+                stream_xml_rows(BufReader::new(decoder), &spec.row_path, &self.cancel, &mut emit)?;
+            } else {
+                stream_xml_rows(BufReader::new(file), &spec.row_path, &self.cancel, &mut emit)?;
+            }
+        }
+        writer.finalize_into_table(&self.bin, db, &spec.node_id)?;
         Ok(format!(
             "xml: materialized {} rows into {}",
             count, spec.node_id

@@ -185,16 +185,13 @@ pub(crate) fn procedural_note(s: &plan::Stage) -> String {
 /// merge it into its parent (multiple same-named children collapse
 /// to an array). Standalone (not a method) so the borrow checker
 /// doesn't complain about &mut stack + &mut rows at the same time.
-pub(crate) fn xml_close_element(
-    stack: &mut Vec<(String, serde_json::Map<String, JsonValue>, String)>,
-    rows: &mut Vec<JsonValue>,
-    row_path: &[String],
-    name: &str,
-    mut builder: serde_json::Map<String, JsonValue>,
-    text: String,
-) {
+/// Build the JSON value for a closed XML element from its attribute/child
+/// builder and accumulated text. Empty element -> Null; text-only -> String;
+/// otherwise an object, with any trailing text under `_text`. Shared by the
+/// buffered (`walk_xml_to_rows`) and streaming (`stream_xml_rows`) walkers.
+fn xml_element_value(mut builder: serde_json::Map<String, JsonValue>, text: String) -> JsonValue {
     let text_trimmed = text.trim().to_string();
-    let value: JsonValue = if builder.is_empty() && !text_trimmed.is_empty() {
+    if builder.is_empty() && !text_trimmed.is_empty() {
         JsonValue::String(text_trimmed)
     } else if builder.is_empty() {
         JsonValue::Null
@@ -203,26 +200,28 @@ pub(crate) fn xml_close_element(
             builder.insert("_text".into(), JsonValue::String(text_trimmed));
         }
         JsonValue::Object(builder)
-    };
+    }
+}
 
-    // Check if (stack path + name) ends with row_path. Empty row_path
-    // matches every element - useful for "every immediate child" type
-    // use cases when combined with a single-segment path.
-    let mut current_path: Vec<&str> = stack.iter().map(|(n, _, _)| n.as_str()).collect();
-    current_path.push(name);
-    // Compare element names ignoring namespace prefix on both sides
-    // (`soap:Envelope` matches user's `Envelope` as well as their
-    // `soap:Envelope`). The user can still preserve namespaces in
-    // their row_path if they want exact-match against a single ns.
+/// Does the current element path (`stack` names + `name`) end with `row_path`?
+/// Element names compare by local part, so `soap:Envelope` matches a user's
+/// `Envelope` (and vice-versa); the user can still write the prefix to pin a
+/// single namespace. An empty `row_path` matches only direct children of the
+/// root, avoiding emitting nested structures as separate rows.
+fn xml_path_matches(
+    stack: &[(String, serde_json::Map<String, JsonValue>, String)],
+    name: &str,
+    row_path: &[String],
+) -> bool {
     fn local(name: &str) -> &str {
         match name.rfind(':') {
             Some(i) => &name[i + 1..],
             None => name,
         }
     }
-    let matches = if row_path.is_empty() {
-        // No filter - match every direct child of the root only, to
-        // avoid emitting nested structures as separate rows.
+    let mut current_path: Vec<&str> = stack.iter().map(|(n, _, _)| n.as_str()).collect();
+    current_path.push(name);
+    if row_path.is_empty() {
         current_path.len() == 1
     } else {
         current_path.len() >= row_path.len()
@@ -230,8 +229,19 @@ pub(crate) fn xml_close_element(
                 .iter()
                 .zip(row_path.iter())
                 .all(|(a, b)| local(a) == local(b.as_str()))
-    };
+    }
+}
 
+pub(crate) fn xml_close_element(
+    stack: &mut Vec<(String, serde_json::Map<String, JsonValue>, String)>,
+    rows: &mut Vec<JsonValue>,
+    row_path: &[String],
+    name: &str,
+    builder: serde_json::Map<String, JsonValue>,
+    text: String,
+) {
+    let matches = xml_path_matches(stack, name, row_path);
+    let value = xml_element_value(builder, text);
     if matches {
         rows.push(value.clone());
     }
@@ -339,6 +349,135 @@ pub(crate) fn walk_xml_to_rows(
         buf.clear();
     }
     Ok(rows)
+}
+
+/// Streaming close: on a `row_path` match, emit the element via `emit` and drop
+/// it - it is NOT nested into its parent, so ancestors (root, containers) never
+/// accumulate the whole document. A matched element is never itself an ancestor
+/// of another match (their paths differ in depth), so skipping the parent-nest
+/// changes no output while keeping live memory at O(one row + nesting depth).
+fn xml_close_element_streaming(
+    stack: &mut Vec<(String, serde_json::Map<String, JsonValue>, String)>,
+    row_path: &[String],
+    name: &str,
+    builder: serde_json::Map<String, JsonValue>,
+    text: String,
+    emit: &mut dyn FnMut(&JsonValue) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    let matches = xml_path_matches(stack, name, row_path);
+    let value = xml_element_value(builder, text);
+    if matches {
+        return emit(&value);
+    }
+    if let Some((_, parent_builder, _)) = stack.last_mut() {
+        match parent_builder.get_mut(name) {
+            Some(JsonValue::Array(arr)) => arr.push(value),
+            Some(existing) => {
+                let prev = std::mem::replace(existing, JsonValue::Null);
+                *existing = JsonValue::Array(vec![prev, value]);
+            }
+            None => {
+                parent_builder.insert(name.to_string(), value);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Streaming XML pull-parser. Reads events from `reader` and emits each
+/// `row_path` match via `emit` the moment it closes, holding only the current
+/// element stack (nesting depth) plus the row being built in memory - never the
+/// whole document. This lets src.xml ingest multi-GB (and gzipped) files that
+/// `walk_xml_to_rows` (whole file in a String, all rows in a Vec, every match
+/// re-nested into the root) would exhaust RAM on (issue #186). Row shape is
+/// identical to `walk_xml_to_rows` for well-formed documents.
+pub(crate) fn stream_xml_rows<R: std::io::BufRead>(
+    reader: R,
+    row_path: &str,
+    cancel: &Arc<AtomicBool>,
+    emit: &mut dyn FnMut(&JsonValue) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut xr = Reader::from_reader(reader);
+    xr.config_mut().trim_text(true);
+    let row_path_parts: Vec<String> = row_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    let mut stack: Vec<(String, serde_json::Map<String, JsonValue>, String)> = Vec::new();
+    let mut buf = Vec::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::Cancelled);
+        }
+        let event = xr
+            .read_event_into(&mut buf)
+            .map_err(|e| EngineError::Query(format!("xml: parse: {}", e)))?;
+        match event {
+            Event::Eof => break,
+            Event::Start(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let mut builder = serde_json::Map::new();
+                for attr in e.attributes().flatten() {
+                    let k = format!("@{}", String::from_utf8_lossy(attr.key.as_ref()));
+                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                    builder.insert(k, JsonValue::String(v));
+                }
+                stack.push((name, builder, String::new()));
+            }
+            Event::Empty(e) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let mut builder = serde_json::Map::new();
+                for attr in e.attributes().flatten() {
+                    let k = format!("@{}", String::from_utf8_lossy(attr.key.as_ref()));
+                    let v = String::from_utf8_lossy(&attr.value).to_string();
+                    builder.insert(k, JsonValue::String(v));
+                }
+                xml_close_element_streaming(
+                    &mut stack,
+                    &row_path_parts,
+                    &name,
+                    builder,
+                    String::new(),
+                    emit,
+                )?;
+            }
+            Event::Text(e) => {
+                let text = String::from_utf8_lossy(
+                    e.unescape().unwrap_or_default().as_ref().as_bytes(),
+                )
+                .to_string();
+                if let Some(last) = stack.last_mut() {
+                    last.2.push_str(&text);
+                }
+            }
+            Event::CData(e) => {
+                let text = String::from_utf8_lossy(e.into_inner().as_ref()).to_string();
+                if let Some(last) = stack.last_mut() {
+                    last.2.push_str(&text);
+                }
+            }
+            Event::End(_) => {
+                if let Some((name, builder, text)) = stack.pop() {
+                    xml_close_element_streaming(
+                        &mut stack,
+                        &row_path_parts,
+                        &name,
+                        builder,
+                        text,
+                        emit,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(())
 }
 
 /// Convert a JSON value into an apache-avro Value matching the
@@ -975,7 +1114,7 @@ pub(crate) fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String>
 
 #[cfg(test)]
 mod tests {
-    use super::{finalize_xlsx_whitespace, infer_avro_nullable_field, walk_xml_to_rows};
+    use super::{finalize_xlsx_whitespace, infer_avro_nullable_field, stream_xml_rows, walk_xml_to_rows};
     use serde_json::json;
     use std::io::{Read, Write};
     use std::sync::atomic::AtomicBool;
@@ -1042,6 +1181,64 @@ mod tests {
         assert_eq!(rows[0]["payload"], json!("{\"a\":1}"), "CDATA content must be captured");
         assert_eq!(rows[0]["id"], json!("1"));
         assert_eq!(rows[1]["payload"], json!("plain"), "plain text still works");
+    }
+
+    #[test]
+    fn stream_xml_rows_matches_walk_output() {
+        // #186: the streaming walker (used by src.xml for large / gzipped files)
+        // must emit byte-identical rows to walk_xml_to_rows across attributes,
+        // nested + repeated children, CDATA, plain text, self-closing rows,
+        // bare single-segment paths and the empty (root) path.
+        let cases: &[(&str, &str)] = &[
+            (
+                "<catalog><book id=\"1\"><title>A</title><tags><t>x</t><t>y</t></tags></book>\
+                 <book id=\"2\"><title>B</title></book></catalog>",
+                "catalog/book",
+            ),
+            (
+                "<root><row><id>1</id><payload><![CDATA[{\"a\":1}]]></payload></row>\
+                 <row><id>2</id><payload>plain</payload></row></root>",
+                "root/row",
+            ),
+            ("<a><item>1</item><item>2</item></a>", "item"),
+            ("<a><one>1</one><two>2</two></a>", ""),
+            ("<root><row a=\"1\"/><row a=\"2\"/></root>", "root/row"),
+        ];
+        let cancel = Arc::new(AtomicBool::new(false));
+        for (xml, path) in cases {
+            let expected = walk_xml_to_rows(xml, path, &cancel).unwrap();
+            let mut got: Vec<serde_json::Value> = Vec::new();
+            stream_xml_rows(std::io::Cursor::new(xml.as_bytes()), path, &cancel, &mut |row| {
+                got.push(row.clone());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(got, expected, "stream vs walk mismatch for path {:?} in {}", path, xml);
+        }
+    }
+
+    #[test]
+    fn stream_xml_rows_emits_incrementally_without_root_buildup() {
+        // A repeating-row document: every <row> match is emitted and dropped, so
+        // the root <feed> never accumulates the rows. We can't measure RAM here,
+        // but we can prove each row arrives independently and in order.
+        let xml = "<feed><row><n>1</n></row><row><n>2</n></row><row><n>3</n></row></feed>";
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut seen: Vec<String> = Vec::new();
+        stream_xml_rows(std::io::Cursor::new(xml.as_bytes()), "feed/row", &cancel, &mut |row| {
+            seen.push(row["n"].as_str().unwrap().to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn stream_xml_rows_propagates_cancel() {
+        let xml = "<feed><row><n>1</n></row><row><n>2</n></row></feed>";
+        let cancel = Arc::new(AtomicBool::new(true));
+        let r = stream_xml_rows(std::io::Cursor::new(xml.as_bytes()), "feed/row", &cancel, &mut |_| Ok(()));
+        assert!(matches!(r, Err(crate::EngineError::Cancelled)));
     }
 
     #[test]

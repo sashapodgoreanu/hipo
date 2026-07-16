@@ -106,6 +106,9 @@ async-nats = "0.37"
 # match as a JSON object) and snk.xml (wraps rows in row elements).
 # Pure Rust.
 quick-xml = "0.36"
+# Streaming gzip decoder for src.xml, so a .gz (or .xml.gz) XML file is
+# decompressed on the fly and never lands in RAM whole (issue #186). Pure Rust.
+flate2 = "1"
 # ZIP reader/writer, used only to post-process xlsx output. DuckDB's excel
 # writer emits <t> text nodes without xml:space="preserve", so Excel strips
 # leading/trailing whitespace from those cells on load. We reopen the written
