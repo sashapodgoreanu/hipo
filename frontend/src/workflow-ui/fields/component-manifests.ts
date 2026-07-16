@@ -647,7 +647,7 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                 ],
             },
         ],
-        ports: { inputs: [], outputs: [{ id: 'main', label: 'out', type: 'main' }] },
+        ports: { inputs: [], outputs: [{ id: 'main', label: 'main', type: 'main' }] },
     },
 
     'src.json': {
