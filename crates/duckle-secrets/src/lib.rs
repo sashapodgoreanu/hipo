@@ -258,11 +258,6 @@ pub fn resolve_connection_ref_props(
     component_id: &str,
     props: &mut JsonValue,
 ) -> Result<(), String> {
-    let is_sink = component_id == "snk.salesforce";
-    let is_source = component_id == "src.salesforce";
-    if !is_sink && !is_source {
-        return Ok(());
-    }
     let Some(ref_id) = props
         .get("connectionRef")
         .and_then(|v| v.as_str())
@@ -271,8 +266,24 @@ pub fn resolve_connection_ref_props(
     else {
         return Ok(());
     };
-    let conn = load_connection(workspace, &ref_id)?;
+    let is_sink = component_id == "snk.salesforce";
+    let is_source = component_id == "src.salesforce";
+    // Salesforce demands its connection (auth is the whole node); every other
+    // kind falls back to the node's inline props if the connection can no longer
+    // be loaded, so a since-removed connection never hard-fails a pipeline that
+    // still carries usable credentials.
+    let conn = match load_connection(workspace, &ref_id) {
+        Ok(c) => c,
+        Err(e) => return if is_sink || is_source { Err(e) } else { Ok(()) },
+    };
     let kind = conn.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    if !is_sink && !is_source {
+        // Generic connection (S3 / Postgres / GCS / Azure / ...): merge its
+        // credential and config fields onto the node, exactly as the desktop
+        // connection picker does, so headless / scheduled / web runs and
+        // ref-only pipelines resolve credentials the same way (#185).
+        return merge_generic_connection(component_id, kind, &conn, props);
+    }
     if kind != "salesforce" {
         return Err(format!(
             "{}: connection '{}' is kind '{}', expected a Salesforce connection",
@@ -343,9 +354,92 @@ pub fn resolve_connection_ref_props(
     Ok(())
 }
 
-/// Resolve saved-connection references on every Salesforce node in a pipeline
-/// document, in place. Call BEFORE the `${ENV:...}` pass so a connection field
-/// stored as a placeholder still expands afterwards.
+/// Merge a saved connection's credential/config fields onto a node's props for
+/// any non-Salesforce component (S3, Postgres, GCS, Azure, Snowflake, ...). The
+/// connection field names already match what each engine connector reads, so
+/// this is the run-time equivalent of the desktop UI's "pick a connection"
+/// action - and, unlike that, it also covers headless / scheduled / web runs
+/// and pipelines that carry only a `connectionRef`. The connection wins over any
+/// stale inline value so credential rotation lives in one place. Runs before the
+/// `${ENV:}` pass, so a field stored as `${ENV:...}` still resolves afterwards.
+fn merge_generic_connection(
+    component_id: &str,
+    kind: &str,
+    conn: &JsonValue,
+    props: &mut JsonValue,
+) -> Result<(), String> {
+    // The same fields the desktop connection picker copies (PropertiesPanel
+    // onPickConnection). Node-specific props (path, format, object, ...) are
+    // left untouched.
+    const KEYS: &[&str] = &[
+        "host",
+        "port",
+        "database",
+        "username",
+        "password",
+        "bucket",
+        "region",
+        "accessKey",
+        "secretKey",
+        "sessionToken",
+        "accountName",
+        "accountKey",
+        "brokers",
+        "url",
+        "endpoint",
+        "urlStyle",
+        "sslmode",
+        "sslrootcert",
+        "sslcert",
+        "sslkey",
+        "connectTimeout",
+        "options",
+        "connParams",
+    ];
+    let map = props
+        .as_object_mut()
+        .ok_or_else(|| format!("{}: node properties are not an object", component_id))?;
+    for key in KEYS {
+        let Some(v) = conn.get(*key) else {
+            continue;
+        };
+        // Skip nulls and empty strings so a blank connection field never
+        // clobbers a node default.
+        if v.is_null() || v.as_str() == Some("") {
+            continue;
+        }
+        if *key == "urlStyle" {
+            // Normalize legacy free-text URL styles to DuckDB's canonical
+            // 'path' / 'vhost' (matches the UI picker); leave the node default
+            // for an unrecognized value.
+            if let Some(s) = v.as_str() {
+                let low = s.to_lowercase();
+                let canon = if low.starts_with("path") {
+                    "path"
+                } else if low.starts_with("vhost") || low.contains("virtual") {
+                    "vhost"
+                } else {
+                    continue;
+                };
+                map.insert("urlStyle".into(), JsonValue::String(canon.into()));
+                continue;
+            }
+        }
+        map.insert((*key).to_string(), v.clone());
+    }
+    // Snowflake keys the account identifier as `account`, but the connection
+    // stores it in `host` (matches the UI picker).
+    if kind == "snowflake" {
+        if let Some(h) = conn_str(conn, "host") {
+            map.insert("account".into(), JsonValue::String(h.into()));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve saved-connection references on every node in a pipeline document, in
+/// place. Call BEFORE the `${ENV:...}` pass so a connection field stored as a
+/// placeholder still expands afterwards.
 pub fn resolve_connection_refs(workspace: &Path, nodes: &mut [PipelineNode]) -> Result<(), String> {
     for node in nodes.iter_mut() {
         let Some(component_id) = node.data.component_id.clone() else {
@@ -358,16 +452,12 @@ pub fn resolve_connection_refs(workspace: &Path, nodes: &mut [PipelineNode]) -> 
     Ok(())
 }
 
-/// Does any Salesforce node in the document carry a `connectionRef`? Lets a
-/// host that has no workspace path fail with a clear message instead of
-/// silently running with unresolved auth.
+/// Does any node in the document carry a non-empty `connectionRef`? Lets a host
+/// that has no workspace path fail with a clear message instead of silently
+/// running with unresolved credentials.
 pub fn has_connection_refs(nodes: &[PipelineNode]) -> bool {
     nodes.iter().any(|node| {
-        matches!(
-            node.data.component_id.as_deref(),
-            Some("src.salesforce") | Some("snk.salesforce")
-        ) && node
-            .data
+        node.data
             .properties
             .as_ref()
             .and_then(|p| p.get("connectionRef"))
@@ -592,24 +682,72 @@ mod tests {
     }
 
     #[test]
-    fn non_salesforce_nodes_and_refless_nodes_are_untouched() {
+    fn refless_nodes_are_untouched() {
         let ws = temp_ws("noop");
-        let mut pg = sf_node(
-            "src.postgres",
-            serde_json::json!({"connectionRef": "some-pg"}),
-        );
+        // No connectionRef -> nothing to resolve, both SF and non-SF.
+        let mut pg = sf_node("src.postgres", serde_json::json!({"host": "inline"}));
         resolve_connection_refs(&ws, std::slice::from_mut(&mut pg)).unwrap();
-        assert_eq!(
-            pg.data.properties.unwrap(),
-            serde_json::json!({"connectionRef": "some-pg"})
-        );
+        assert_eq!(pg.data.properties.unwrap(), serde_json::json!({"host": "inline"}));
 
         let mut sf = sf_node("snk.salesforce", serde_json::json!({"object": "Account"}));
         resolve_connection_refs(&ws, std::slice::from_mut(&mut sf)).unwrap();
-        assert_eq!(
-            sf.data.properties.unwrap(),
-            serde_json::json!({"object": "Account"})
+        assert_eq!(sf.data.properties.unwrap(), serde_json::json!({"object": "Account"}));
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn missing_generic_connection_falls_back_to_inline_props() {
+        // A non-SF node whose ref points at a since-removed connection keeps its
+        // inline props rather than hard-failing the run (#185).
+        let ws = temp_ws("miss");
+        let mut node = sf_node(
+            "src.s3",
+            serde_json::json!({"connectionRef": "gone", "accessKey": "AKINLINE"}),
         );
+        resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+        assert_eq!(node.data.properties.unwrap()["accessKey"], "AKINLINE");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn s3_connection_ref_merges_credentials() {
+        // #185: an S3 node carrying only a connectionRef gets its credentials
+        // merged from the saved connection, urlStyle normalized, and node-only
+        // props (path) preserved. A ${ENV:} value survives for the later pass.
+        let ws = temp_ws("s3");
+        write_connection(
+            &ws,
+            "minio",
+            r#"{"kind":"s3","accessKey":"AKIA123","secretKey":"${ENV:MASSIVE_SECRET}","region":"eu-west-1","endpoint":"minio.local:9000","urlStyle":"Path (MinIO / B2)","bucket":"flatfiles"}"#,
+        );
+        let mut node = sf_node(
+            "src.s3",
+            serde_json::json!({"connectionRef": "minio", "path": "s3://flatfiles/a.csv"}),
+        );
+        resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+        let p = node.data.properties.unwrap();
+        assert_eq!(p["accessKey"], "AKIA123");
+        assert_eq!(p["secretKey"], "${ENV:MASSIVE_SECRET}"); // resolved by the env pass later
+        assert_eq!(p["region"], "eu-west-1");
+        assert_eq!(p["endpoint"], "minio.local:9000");
+        assert_eq!(p["urlStyle"], "path"); // legacy label normalized
+        assert_eq!(p["path"], "s3://flatfiles/a.csv"); // node-only prop preserved
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn snowflake_connection_ref_maps_host_to_account() {
+        let ws = temp_ws("snow");
+        write_connection(
+            &ws,
+            "sf",
+            r#"{"kind":"snowflake","host":"acme-xy12345","username":"u","password":"p"}"#,
+        );
+        let mut node = sf_node("src.snowflake", serde_json::json!({"connectionRef": "sf"}));
+        resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+        let p = node.data.properties.unwrap();
+        assert_eq!(p["account"], "acme-xy12345");
+        assert_eq!(p["username"], "u");
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -628,12 +766,12 @@ mod tests {
     }
 
     #[test]
-    fn has_connection_refs_detects_salesforce_refs_only() {
+    fn has_connection_refs_detects_any_ref() {
         let sf = sf_node("snk.salesforce", serde_json::json!({"connectionRef": "x"}));
-        let pg = sf_node("src.postgres", serde_json::json!({"connectionRef": "y"}));
+        let s3 = sf_node("src.s3", serde_json::json!({"connectionRef": "y"}));
         let bare = sf_node("snk.salesforce", serde_json::json!({"object": "Account"}));
         assert!(has_connection_refs(&[sf]));
-        assert!(!has_connection_refs(&[pg]));
+        assert!(has_connection_refs(&[s3])); // #185: any kind of ref now counts
         assert!(!has_connection_refs(&[bare]));
     }
 }

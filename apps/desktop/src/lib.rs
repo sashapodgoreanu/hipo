@@ -400,7 +400,7 @@ fn resolve_saved_connections(
             duckle_secrets::resolve_connection_refs(std::path::Path::new(ws), &mut pipeline.nodes)
         }
         None if duckle_secrets::has_connection_refs(&pipeline.nodes) => Err(
-            "this pipeline uses a saved Salesforce connection; run it from a workspace \
+            "this pipeline uses a saved connection; run it from a workspace \
              so the connection can be resolved"
             .into(),
         ),
