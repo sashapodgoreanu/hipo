@@ -821,6 +821,11 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
             { name: comp.label, extensions: EXT_OVERRIDES[comp.id] ?? [ext] },
             { name: 'All files', extensions: ['*'] },
         ];
+    // src.xml streams its input, so the path may be a local file, an http(s)://
+    // URL, or an sftp://user@host/path URL - all decompress .gz transparently.
+    const pathDescription = comp.id === 'src.xml'
+        ? 'A local file, an http(s):// URL, or an sftp://user@host/path URL. Remote paths are streamed (never fully buffered) and .gz files decompress transparently. For SFTP auth, set the fields below.'
+        : undefined;
     return base(comp, [
         {
             label: 'Source file',
@@ -831,6 +836,7 @@ function synthFileSource(comp: ComponentDef): ComponentManifest {
                     kind: 'file-path',
                     required: true,
                     filters,
+                    ...(pathDescription ? { description: pathDescription } : {}),
                 },
                 encodingField(),
                 {
@@ -1124,15 +1130,58 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
         ];
     }
     if (id.endsWith('.xml')) {
-        return [
+        const sections: FormSection[] = [
             {
                 label: 'Format',
                 fields: [
-                    { key: 'rootPath', label: 'Root element XPath', kind: 'text', placeholder: '/root/record' },
+                    // Engine prop is `rowPath` (was mislabelled `rootPath` here,
+                    // so the GUI value never reached the engine). Slash-separated
+                    // walk to the repeating element that becomes one row.
+                    {
+                        key: 'rowPath',
+                        label: 'Row path',
+                        kind: 'text',
+                        placeholder: 'catalog/book',
+                        description:
+                            'Slash-separated path to the repeating element that becomes one row (e.g. catalog/book). Element names match by local name so XML namespaces are ignored. Attributes become @name columns and text content becomes _text.',
+                    },
                     { key: 'namespace', label: 'XML namespace', kind: 'text' },
                 ],
             },
         ];
+        if (id.startsWith('src.')) {
+            // src.xml streams the file, so the path may be a local file, an
+            // http(s):// URL, or an sftp://user@host/path URL (both decompress
+            // .gz transparently). SFTP auth mirrors src.ftp's prop keys.
+            sections.push({
+                label: 'Remote / SFTP auth (optional)',
+                fields: [
+                    {
+                        key: 'password',
+                        label: 'SFTP password',
+                        kind: 'text',
+                        placeholder: '••••••••',
+                        description: 'Only used when the path is an sftp:// URL. Leave blank for local files or http(s):// URLs.',
+                    },
+                    {
+                        key: 'privateKey',
+                        label: 'SFTP private key (PEM)',
+                        kind: 'text',
+                        placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----',
+                        description: 'OpenSSH private key for SFTP key-based auth (instead of a password). You can also set privateKeyPath to a key file.',
+                    },
+                    { key: 'keyPassphrase', label: 'SFTP key passphrase', kind: 'text', placeholder: '••••••••' },
+                    {
+                        key: 'hostFingerprint',
+                        label: 'SFTP host fingerprint',
+                        kind: 'text',
+                        placeholder: 'SHA256:...',
+                        description: 'Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint.',
+                    },
+                ],
+            });
+        }
+        return sections;
     }
     if (id.endsWith('.parquet')) {
         return [

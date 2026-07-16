@@ -3044,24 +3044,27 @@ impl DuckdbEngine {
         spec: &XmlSourceSpec,
     ) -> Result<String, EngineError> {
         use std::io::{BufReader, Read, Seek};
-        let mut file = std::fs::File::open(&spec.path)
-            .map_err(|e| EngineError::Query(format!("xml: read {}: {}", spec.path, e)))?;
-        // Sniff the first bytes so a gzipped (.gz) or zipped (.zip) XML file is
-        // decompressed on the fly regardless of extension. Everything below
-        // streams: rows are emitted straight to an NDJSON temp file as each
-        // element closes and DuckDB reads that back out-of-core, so a multi-GB
-        // (and, uncompressed, far larger) document never lands in RAM the way
-        // std::fs::read_to_string + a Vec of every row did (issue #186).
-        let mut magic = [0u8; 4];
-        let n = file
-            .read(&mut magic)
-            .map_err(|e| EngineError::Query(format!("xml: read {}: {}", spec.path, e)))?;
-        file.rewind()
-            .map_err(|e| EngineError::Query(format!("xml: seek {}: {}", spec.path, e)))?;
-        let is_gzip = n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b;
-        let is_zip = n >= 4 && &magic[0..4] == b"PK\x03\x04";
+        // Cloud object stores would need a signed streaming GET we don't have for
+        // XML yet (DuckDB's httpfs can't parse XML); fail early with a pointer
+        // rather than opening a temp file we'd leak.
+        let lower = spec.path.to_ascii_lowercase();
+        if let Some(scheme) = ["s3://", "gs://", "gcs://", "az://", "azure://"]
+            .iter()
+            .find(|s| lower.starts_with(**s))
+        {
+            return Err(EngineError::Config(format!(
+                "xml: {} object storage is not supported for src.xml yet; use an https:// or sftp:// URL, or download the file to a local path",
+                scheme.trim_end_matches("://")
+            )));
+        }
 
-        let mut writer = JsonLinesWriter::open(&spec.node_id)?;
+        // A declared schema pins the output to exactly those columns and types.
+        let mut writer = match &spec.declared_schema {
+            Some(schema) if !schema.is_empty() => {
+                JsonLinesWriter::open_with_schema(&spec.node_id, Some(schema.clone()))?
+            }
+            _ => JsonLinesWriter::open(&spec.node_id)?,
+        };
         let mut count: usize = 0;
         {
             let mut emit = |row: &JsonValue| -> Result<(), EngineError> {
@@ -3069,35 +3072,89 @@ impl DuckdbEngine {
                 count += 1;
                 Ok(())
             };
-            if is_zip {
-                // ZIP central directory lives at the end of the file, so this
-                // seeks (the file is on disk); the entry itself then decompresses
-                // as a stream. Take the first *.xml entry, else the first entry.
-                let mut archive = zip::ZipArchive::new(file)
-                    .map_err(|e| EngineError::Query(format!("xml: open zip {}: {}", spec.path, e)))?;
-                if archive.is_empty() {
-                    return Err(EngineError::Query(format!("xml: zip {} is empty", spec.path)));
-                }
-                let name = archive
-                    .file_names()
-                    .find(|n| n.to_ascii_lowercase().ends_with(".xml"))
-                    .map(|s| s.to_string());
-                let entry = match name {
-                    Some(n) => archive.by_name(&n),
-                    None => archive.by_index(0),
-                }
-                .map_err(|e| {
-                    EngineError::Query(format!("xml: read zip entry {}: {}", spec.path, e))
+            // Everything below streams: rows are emitted straight to an NDJSON
+            // temp file as each element closes and DuckDB reads that back
+            // out-of-core, so a multi-GB (and, uncompressed, far larger) document
+            // never lands in RAM the way std::fs::read_to_string + a Vec of every
+            // row did (issue #186). gzip (.gz) is decompressed on the fly for all
+            // inputs; zip needs random access (its directory is at EOF) so it is
+            // local-file only.
+            if lower.starts_with("http://") || lower.starts_with("https://") {
+                // Streaming GET via the shared proxy- and CA-aware agent; ureq's
+                // gzip feature transparently inflates Content-Encoding: gzip, and
+                // stream_remote_xml handles a gzipped file body on top.
+                let resp = crate::tls::http_agent()
+                    .get(&spec.path)
+                    .call()
+                    .map_err(|e| EngineError::Query(format!("xml: GET {}: {}", spec.path, e)))?;
+                stream_remote_xml(resp.into_reader(), &spec.row_path, &self.cancel, &mut emit)?;
+            } else if lower.starts_with("sftp://") {
+                let (host, port, uri_user, remote) = parse_sftp_uri(&spec.path)?;
+                let user = uri_user.ok_or_else(|| {
+                    EngineError::Config(
+                        "xml: an sftp URL needs a user, e.g. sftp://user@host/path/file.xml.gz"
+                            .into(),
+                    )
                 })?;
-                stream_xml_rows(BufReader::new(entry), &spec.row_path, &self.cancel, &mut emit)?;
-            } else if is_gzip {
-                let decoder = flate2::read::MultiGzDecoder::new(BufReader::new(file));
-                stream_xml_rows(BufReader::new(decoder), &spec.row_path, &self.cancel, &mut emit)?;
+                let reader = SftpFileReader::open(
+                    &host,
+                    port,
+                    &user,
+                    spec.sftp_password.as_deref(),
+                    spec.sftp_private_key.as_deref(),
+                    spec.sftp_key_passphrase.as_deref(),
+                    spec.sftp_host_fingerprint.as_deref(),
+                    &remote,
+                )?;
+                stream_remote_xml(reader, &spec.row_path, &self.cancel, &mut emit)?;
             } else {
-                stream_xml_rows(BufReader::new(file), &spec.row_path, &self.cancel, &mut emit)?;
+                // Local file: a full seek is available, so also take the zip path.
+                let mut file = std::fs::File::open(&spec.path)
+                    .map_err(|e| EngineError::Query(format!("xml: read {}: {}", spec.path, e)))?;
+                let mut magic = [0u8; 4];
+                let n = file
+                    .read(&mut magic)
+                    .map_err(|e| EngineError::Query(format!("xml: read {}: {}", spec.path, e)))?;
+                file.rewind()
+                    .map_err(|e| EngineError::Query(format!("xml: seek {}: {}", spec.path, e)))?;
+                let is_gzip = n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b;
+                let is_zip = n >= 4 && &magic[0..4] == b"PK\x03\x04";
+                if is_zip {
+                    // Take the first *.xml entry, else the first entry; it then
+                    // decompresses as a stream.
+                    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+                        EngineError::Query(format!("xml: open zip {}: {}", spec.path, e))
+                    })?;
+                    if archive.is_empty() {
+                        return Err(EngineError::Query(format!("xml: zip {} is empty", spec.path)));
+                    }
+                    let name = archive
+                        .file_names()
+                        .find(|n| n.to_ascii_lowercase().ends_with(".xml"))
+                        .map(|s| s.to_string());
+                    let entry = match name {
+                        Some(n) => archive.by_name(&n),
+                        None => archive.by_index(0),
+                    }
+                    .map_err(|e| {
+                        EngineError::Query(format!("xml: read zip entry {}: {}", spec.path, e))
+                    })?;
+                    stream_xml_rows(BufReader::new(entry), &spec.row_path, &self.cancel, &mut emit)?;
+                } else if is_gzip {
+                    let decoder = flate2::read::MultiGzDecoder::new(BufReader::new(file));
+                    stream_xml_rows(BufReader::new(decoder), &spec.row_path, &self.cancel, &mut emit)?;
+                } else {
+                    stream_xml_rows(BufReader::new(file), &spec.row_path, &self.cancel, &mut emit)?;
+                }
             }
         }
-        writer.finalize_into_table(&self.bin, db, &spec.node_id)?;
+        match &spec.declared_schema {
+            Some(schema) if !schema.is_empty() => {
+                let (columns_spec, select_list) = xml_declared_columns(schema);
+                writer.finalize_typed(&self.bin, db, &spec.node_id, &columns_spec, &select_list)?;
+            }
+            _ => writer.finalize_into_table(&self.bin, db, &spec.node_id)?,
+        }
         Ok(format!(
             "xml: materialized {} rows into {}",
             count, spec.node_id
@@ -9880,6 +9937,62 @@ mod ftp_tests {
 }
 
 #[cfg(test)]
+mod xml_remote_tests {
+    use super::{parse_sftp_uri, xml_declared_columns};
+
+    #[test]
+    fn parse_sftp_uri_variants() {
+        // user@host:port + absolute path
+        let (h, p, u, path) =
+            parse_sftp_uri("sftp://bob@host.example.com:2222/data/day.xml.gz").unwrap();
+        assert_eq!(h, "host.example.com");
+        assert_eq!(p, 2222);
+        assert_eq!(u.as_deref(), Some("bob"));
+        assert_eq!(path, "/data/day.xml.gz");
+
+        // no user, default port, root-relative path
+        let (h, p, u, path) = parse_sftp_uri("sftp://files.example.com/a/b.xml").unwrap();
+        assert_eq!(h, "files.example.com");
+        assert_eq!(p, 22);
+        assert_eq!(u, None);
+        assert_eq!(path, "/a/b.xml");
+
+        // no path
+        let (h, p, _, path) = parse_sftp_uri("sftp://host").unwrap();
+        assert_eq!(h, "host");
+        assert_eq!(p, 22);
+        assert_eq!(path, "/");
+
+        // wrong scheme / empty host are rejected
+        assert!(parse_sftp_uri("https://host/x").is_err());
+        assert!(parse_sftp_uri("sftp:///only/path").is_err());
+    }
+
+    #[test]
+    fn declared_columns_build_varchar_read_and_typed_cast() {
+        use duckle_metadata::{Column, DataType};
+        let schema = vec![
+            Column { name: "id".into(), data_type: DataType::Int64, nullable: true, primary_key: None, format: None },
+            Column { name: "price".into(), data_type: DataType::Float64, nullable: true, primary_key: None, format: None },
+            Column { name: "title".into(), data_type: DataType::String, nullable: true, primary_key: None, format: None },
+        ];
+        let (columns_spec, select_list) = xml_declared_columns(&schema);
+        // read_json reads every declared column as text...
+        assert_eq!(
+            columns_spec,
+            "'id': 'VARCHAR', 'price': 'VARCHAR', 'title': 'VARCHAR'"
+        );
+        // ...then each is TRY_CAST to its declared DuckDB type (empty -> NULL).
+        assert_eq!(
+            select_list,
+            "TRY_CAST(NULLIF(\"id\", '') AS BIGINT) AS \"id\", \
+             TRY_CAST(NULLIF(\"price\", '') AS DOUBLE) AS \"price\", \
+             TRY_CAST(NULLIF(\"title\", '') AS VARCHAR) AS \"title\""
+        );
+    }
+}
+
+#[cfg(test)]
 mod connector_helper_tests {
     use super::{bson_flag_matches, jsonnative_quote_inner};
     use mongodb::bson::Bson;
@@ -10086,5 +10199,228 @@ fn gizmo_sql_literal(v: &JsonValue) -> String {
         JsonValue::Number(n) => n.to_string(),
         JsonValue::String(s) => format!("'{}'", s.replace('\'', "''")),
         other => format!("'{}'", other.to_string().replace('\'', "''")),
+    }
+}
+
+/// Build the `columns={...}` body and typed SELECT list for src.xml's declared
+/// schema. Every column is read as VARCHAR (XML carries text) and TRY_CAST to
+/// its declared DuckDB type, so the output is exactly the declared columns and
+/// types - a column absent from a given day's file comes back NULL, and an
+/// undeclared element is dropped, keeping the table shape stable across runs.
+/// Mirrors the Snowflake / Teradata typed-finalize pattern (#186 follow-up).
+fn xml_declared_columns(schema: &[duckle_metadata::Column]) -> (String, String) {
+    let mut columns_spec_parts: Vec<String> = Vec::with_capacity(schema.len());
+    let mut select_parts: Vec<String> = Vec::with_capacity(schema.len());
+    for col in schema {
+        let ident = plan::quote_ident(&col.name);
+        columns_spec_parts.push(format!("'{}': 'VARCHAR'", col.name.replace('\'', "''")));
+        let ty = plan::data_type_to_duckdb_sql(&col.data_type);
+        select_parts.push(format!("TRY_CAST(NULLIF({i}, '') AS {ty}) AS {i}", i = ident, ty = ty));
+    }
+    (columns_spec_parts.join(", "), select_parts.join(", "))
+}
+
+/// Read up to `buf.len()` bytes, looping past short reads until the buffer is
+/// full or EOF. `std::io::Read::read` may return fewer bytes than asked even
+/// when more are available (common on network streams), so a single read can't
+/// reliably peek a fixed-size magic header.
+fn read_up_to<R: std::io::Read>(r: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match r.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(k) => filled += k,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
+/// Stream XML rows from a non-seekable reader (http:// or sftp://). Peeks the
+/// first bytes to pick gzip vs plain and chains them back, so nothing is
+/// buffered whole. zip is rejected: its central directory lives at EOF and needs
+/// random access, which a network stream can't give - use a .gz or a local path.
+fn stream_remote_xml<R: std::io::Read>(
+    reader: R,
+    row_path: &str,
+    cancel: &Arc<AtomicBool>,
+    emit: &mut dyn FnMut(&JsonValue) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    use std::io::{BufReader, Read};
+    let mut reader = reader;
+    let mut head = [0u8; 4];
+    let n = read_up_to(&mut reader, &mut head)
+        .map_err(|e| EngineError::Query(format!("xml: read stream: {}", e)))?;
+    if n >= 4 && &head[0..4] == b"PK\x03\x04" {
+        return Err(EngineError::Config(
+            "xml: a zip over http/sftp can't be streamed (its directory is at the end of the file); use a .gz file or a local path".into(),
+        ));
+    }
+    let chained = std::io::Cursor::new(head[..n].to_vec()).chain(reader);
+    if n >= 2 && head[0] == 0x1f && head[1] == 0x8b {
+        let decoder = flate2::read::MultiGzDecoder::new(chained);
+        stream_xml_rows(BufReader::new(decoder), row_path, cancel, emit)
+    } else {
+        stream_xml_rows(BufReader::new(chained), row_path, cancel, emit)
+    }
+}
+
+/// Parse `sftp://[user@]host[:port]/remote/path` into (host, port, user, path).
+/// Port defaults to 22; the path keeps its leading `/` (absolute) unless the URL
+/// has none. Auth secrets are NOT taken from the URL - they come from node props.
+fn parse_sftp_uri(uri: &str) -> Result<(String, u16, Option<String>, String), EngineError> {
+    let rest = uri
+        .strip_prefix("sftp://")
+        .ok_or_else(|| EngineError::Config(format!("xml: not an sftp URL: {}", uri)))?;
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], rest[i..].to_string()),
+        None => (rest, "/".to_string()),
+    };
+    let (user, hostport) = match authority.rfind('@') {
+        Some(i) => (Some(authority[..i].to_string()), &authority[i + 1..]),
+        None => (None, authority),
+    };
+    let (host, port) = match hostport.rfind(':') {
+        Some(i) => (
+            hostport[..i].to_string(),
+            hostport[i + 1..].parse::<u16>().unwrap_or(22),
+        ),
+        None => (hostport.to_string(), 22),
+    };
+    if host.is_empty() {
+        return Err(EngineError::Config(format!("xml: sftp URL has no host: {}", uri)));
+    }
+    Ok((host, port, user, path))
+}
+
+/// Host-key verifier for src.xml's SFTP reader. With a pinned SHA256 fingerprint
+/// it refuses any other server key; without one it trusts on first use. Mirrors
+/// the verifier in run_sftp_source.
+struct SftpVerifier {
+    expected: Option<String>,
+}
+
+impl russh::client::Handler for SftpVerifier {
+    type Error = russh::Error;
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        match &self.expected {
+            None => Ok(true),
+            Some(want) => {
+                let got = server_public_key
+                    .fingerprint(russh::keys::HashAlg::Sha256)
+                    .to_string();
+                let norm = |s: &str| s.trim().trim_start_matches("SHA256:").to_string();
+                Ok(norm(&got) == norm(want))
+            }
+        }
+    }
+}
+
+/// One remote file over SFTP, exposed as a blocking `std::io::Read`. It owns the
+/// tokio runtime that drives the russh run-loop plus the live SSH handle and
+/// SFTP session (dropping either would close the stream), and each `read()`
+/// pulls a single SFTP READ round-trip - nothing is buffered whole, which is
+/// what lets src.xml stream a multi-GB remote file (issue #186). Mirrors the
+/// connect / auth of run_sftp_source but keeps the file open instead of slurping
+/// it into a base64 column.
+struct SftpFileReader {
+    // Fields drop in declaration order, so `rt` drops first. That is safe: the
+    // russh / russh-sftp teardown (File and session close) only pushes to
+    // unbounded channels and needs no running runtime. `rt` is a current-thread
+    // runtime, so the connection run-loop only advances while we are inside
+    // `block_on` - which is exactly when `read()` runs.
+    rt: tokio::runtime::Runtime,
+    file: russh_sftp::client::fs::File,
+    _sftp: russh_sftp::client::SftpSession,
+    _session: russh::client::Handle<SftpVerifier>,
+}
+
+impl SftpFileReader {
+    #[allow(clippy::too_many_arguments)]
+    fn open(
+        host: &str,
+        port: u16,
+        user: &str,
+        password: Option<&str>,
+        private_key: Option<&str>,
+        key_passphrase: Option<&str>,
+        host_fingerprint: Option<&str>,
+        remote_path: &str,
+    ) -> Result<Self, EngineError> {
+        use russh_sftp::client::SftpSession;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("xml/sftp: tokio rt: {}", e)))?;
+        let (session, sftp, file) = rt
+            .block_on(async {
+                let config = std::sync::Arc::new(russh::client::Config::default());
+                let handler = SftpVerifier {
+                    expected: host_fingerprint.map(|s| s.to_string()),
+                };
+                let mut session = russh::client::connect(config, (host, port), handler)
+                    .await
+                    .map_err(|e| format!("connect {}:{}: {}", host, port, e))?;
+                let authed = if let Some(pem) = private_key {
+                    let key = russh::keys::decode_secret_key(pem, key_passphrase)
+                        .map_err(|e| format!("private key: {}", e))?;
+                    let with_alg = russh::keys::PrivateKeyWithHashAlg::new(
+                        std::sync::Arc::new(key),
+                        Some(russh::keys::HashAlg::Sha256),
+                    );
+                    session
+                        .authenticate_publickey(user, with_alg)
+                        .await
+                        .map_err(|e| format!("publickey auth: {}", e))?
+                        .success()
+                } else if let Some(pw) = password {
+                    session
+                        .authenticate_password(user, pw)
+                        .await
+                        .map_err(|e| format!("password auth: {}", e))?
+                        .success()
+                } else {
+                    return Err("no credentials: set a password or a private key".to_string());
+                };
+                if !authed {
+                    return Err("authentication failed".to_string());
+                }
+                let channel = session
+                    .channel_open_session()
+                    .await
+                    .map_err(|e| format!("open channel: {}", e))?;
+                channel
+                    .request_subsystem(true, "sftp")
+                    .await
+                    .map_err(|e| format!("request sftp subsystem: {}", e))?;
+                let sftp = SftpSession::new(channel.into_stream())
+                    .await
+                    .map_err(|e| format!("sftp session: {}", e))?;
+                let file = sftp
+                    .open(remote_path)
+                    .await
+                    .map_err(|e| format!("open {}: {}", remote_path, e))?;
+                Ok::<_, String>((session, sftp, file))
+            })
+            .map_err(|e| EngineError::Query(format!("xml/sftp: {}", e)))?;
+        Ok(SftpFileReader {
+            rt,
+            file,
+            _sftp: sftp,
+            _session: session,
+        })
+    }
+}
+
+impl std::io::Read for SftpFileReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use tokio::io::AsyncReadExt;
+        // Plain sync context (the XML parser calls this), so block_on is legal;
+        // returns 0 at EOF, matching std::io::Read.
+        self.rt.block_on(self.file.read(buf))
     }
 }

@@ -492,10 +492,25 @@ pub struct PubSubSourceSpec {
 #[derive(Debug, Clone)]
 pub struct XmlSourceSpec {
     pub node_id: String,
+    /// A local filesystem path, or a remote URI: `http(s)://` (streamed via the
+    /// shared HTTP agent) or `sftp://[user@]host[:port]/remote/path` (streamed
+    /// over SSH). Remote inputs never land on disk or in RAM whole (issue #186).
     pub path: String,
     /// Slash-separated element names from the root. Empty = take
     /// every immediate child of the root.
     pub row_path: String,
+    /// Optional declared output schema (the node's Schema tab). When set, the
+    /// result is pinned to exactly these columns and types (VARCHAR read +
+    /// TRY_CAST), so a daily run's table shape stays stable regardless of that
+    /// day's data; when None the schema is inferred from every row.
+    pub declared_schema: Option<Vec<duckle_metadata::Column>>,
+    /// SFTP credentials, used only when `path` is an `sftp://` URI. Host / port
+    /// / user come from the URI; these secrets come from the node props (and may
+    /// be `${ENV:...}` placeholders).
+    pub sftp_password: Option<String>,
+    pub sftp_private_key: Option<String>,
+    pub sftp_key_passphrase: Option<String>,
+    pub sftp_host_fingerprint: Option<String>,
 }
 
 /// snk.xml: write rows as

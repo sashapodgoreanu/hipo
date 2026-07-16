@@ -3055,7 +3055,26 @@ fn build_stage(
         xml_source = Some(XmlSourceSpec {
             node_id: node.id.clone(),
             path,
-            row_path: string_prop(&props, "rowPath").unwrap_or_default(),
+            // The GUI historically wrote this under `rootPath` while the engine
+            // only ever read `rowPath`, so GUI-configured XML never picked up
+            // the path. The manifest now writes `rowPath`; accept `rootPath` as
+            // a fallback so any older saved pipeline keeps working.
+            row_path: string_prop(&props, "rowPath")
+                .filter(|s| !s.is_empty())
+                .or_else(|| string_prop(&props, "rootPath"))
+                .unwrap_or_default(),
+            declared_schema: node.data.schema.clone(),
+            // Only consulted for an sftp:// path; same prop keys as src.ftp so a
+            // pasted PEM (privateKey) or a key file (privateKeyPath) both work.
+            sftp_password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            sftp_private_key: string_prop(&props, "privateKey")
+                .or_else(|| {
+                    string_prop(&props, "privateKeyPath")
+                        .and_then(|p| std::fs::read_to_string(&p).ok())
+                })
+                .filter(|s| !s.is_empty()),
+            sftp_key_passphrase: string_prop(&props, "keyPassphrase").filter(|s| !s.is_empty()),
+            sftp_host_fingerprint: string_prop(&props, "hostFingerprint").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.avro" {
