@@ -20,6 +20,7 @@ export type FieldKind =
     | 'key-value'
     | 'rename-columns'
     | 'connection-ref'
+    | 'data-source-ref'
     | 'routine-ref'
     | 'pipeline-ref'
     | 'ducklake-snapshot';

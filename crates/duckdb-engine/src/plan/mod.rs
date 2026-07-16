@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+mod affinity;
+pub use affinity::*;
+
 /// Pipeline payload sent from the frontend. Just the nodes + edges
 /// directly - no wrapping metadata required for a run.
 #[derive(Debug, Deserialize, Serialize)]
@@ -21,6 +24,58 @@ pub struct PipelineDoc {
     #[serde(default)]
     pub edges: Vec<PipelineEdge>,
 }
+
+/// Stable planner diagnostics. The public code is separate from the
+/// human-readable message so desktop/web callers can classify failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlannerError {
+    QuerySourceHasNoDataSources { node_id: String },
+    MissingDataSourceRef { node_id: String, data_source_id: String },
+    InvalidQuerySql { node_id: Option<String>, reason: String },
+    AttachFailure { data_source_id: String, alias: String, reason: String },
+}
+
+impl PlannerError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::QuerySourceHasNoDataSources { .. } | Self::MissingDataSourceRef { .. } => "planner.missing_data_source_ref",
+            Self::InvalidQuerySql { .. } => "planner.invalid_query_sql",
+            Self::AttachFailure { .. } => "planner.attach_failure",
+        }
+    }
+}
+
+impl std::fmt::Display for PlannerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::QuerySourceHasNoDataSources { node_id } => write!(f, "[{}] Query Source '{}' has no Data Source references", self.code(), node_id),
+            Self::MissingDataSourceRef { node_id, data_source_id } => write!(
+                f,
+                "[{}] Query Source '{}' references missing Data Source '{}'",
+                self.code(),
+                node_id,
+                data_source_id
+            ),
+            Self::InvalidQuerySql { node_id, reason } => write!(
+                f,
+                "[{}] Query Source{} SQL is invalid: {}",
+                self.code(),
+                node_id.as_deref().map(|id| format!(" '{}'", id)).unwrap_or_default(),
+                reason
+            ),
+            Self::AttachFailure { data_source_id, alias, reason } => write!(
+                f,
+                "[{}] Data Source '{}' (alias '{}') could not attach: {}",
+                self.code(),
+                data_source_id,
+                alias,
+                reason
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PlannerError {}
 
 #[derive(Debug)]
 pub struct Stage {
@@ -53,6 +108,13 @@ pub struct Stage {
     /// PRAGMA memory_limit prepended to the stage SQL when set. Lets a
     /// user cap a heavy aggregation without touching the whole pipeline.
     pub memory_limit_mb: Option<u32>,
+    /// Ephemeral Data Source aliases attached by a Query Source stage. They
+    /// are detached in the same SQL batch so the next stage can reuse them.
+    pub data_source_aliases: Vec<String>,
+    /// Split representation of a Query Source's attachments and materializing
+    /// query. Used only by the persistent affinity worker; `sql` remains the
+    /// compatibility path for ordinary per-stage execution and SQL export.
+    pub query_source: Option<QuerySourceSpec>,
     /// True when this is a duck-family source the user set to Materialize=View.
     /// compile() upgrades it from the safe materialized TABLE to a real lazy
     /// VIEW (so a downstream WHERE / projection pushes down into the source
@@ -69,6 +131,10 @@ pub struct Stage {
     /// skips the per-stage count + preview (and the batched count marker) for
     /// these, the same way it does for nodes that never create a plain relation.
     pub no_output_relation: bool,
+    /// Assigned when an execution boundary resolves this stage to an
+    /// AffinityGroup. Compilation alone leaves it unset for compatibility.
+    pub affinity_group_id: Option<String>,
+    pub affinity_mode: AffinityStageMode,
 }
 
 impl Stage {
@@ -224,6 +290,9 @@ pub struct CompiledPipeline {
     /// Node IDs that have no downstream consumer - used to fetch
     /// preview rows when there's no sink.
     pub leaves: Vec<String>,
+    /// Optional run-local affinity metadata. Existing compile callers do not
+    /// resolve workspace Data Sources, so the default is `None`.
+    pub affinity: Option<AffinityPlan>,
 }
 
 /// Compile only the subgraph upstream of (and including) `target_id`.
@@ -270,6 +339,18 @@ pub fn compile_partial(
     // so suppress the live-VIEW upgrade - keep ATTACH-backed sources as
     // materialized TABLEs that survive across the per-stage processes (#87).
     compile_impl(&filtered, false)
+}
+
+/// Build the read-only body and ephemeral attach prelude for a resolved Query
+/// Source. The runtime resolver is deliberately outside the planner; these
+/// wrappers keep the builder's credential-free SQL contract available to the
+/// desktop and headless preview commands.
+pub fn query_source_sql(props: &JsonValue) -> Result<String, PlannerError> {
+    builders::build_query_source(props)
+}
+
+pub fn query_source_attach_prelude(props: &JsonValue) -> String {
+    builders::attach_prelude("src.query", props)
 }
 
 /// Remote / catalog sources that, when exactly one stage consumes them, take
@@ -830,7 +911,34 @@ fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<Comp
         .cloned()
         .collect();
 
-    Ok(CompiledPipeline { stages, leaves })
+    // Workspace resolution injects `_duckleDataSourceRuntime` only at the
+    // execution boundary. Once that happened, retain the selected Query Source
+    // connected components in the compiled plan and annotate their stages with
+    // the stable run-local group id. The persisted `dataSourceRefs` remain the
+    // authority for grouping; attachment SQL never participates in this graph.
+    let affinity = if stages.iter().any(|stage| stage.query_source.is_some()) {
+        let known_data_source_ids = pipeline
+            .nodes
+            .iter()
+            .filter(|node| node.data.component_id.as_deref() == Some("src.query"))
+            .filter_map(|node| node.data.properties.as_ref())
+            .filter_map(|props| props.get("dataSourceRefs").and_then(JsonValue::as_array))
+            .flatten()
+            .filter_map(JsonValue::as_str)
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let selected_node_ids = stages.iter().map(|stage| stage.node_id.clone()).collect::<HashSet<_>>();
+        let plan = build_affinity_plan_for_nodes(pipeline, &known_data_source_ids, Some(&selected_node_ids))
+            .map_err(|error| EngineError::Config(error.to_string()))?;
+        for stage in &mut stages {
+            stage.affinity_group_id = plan.node_to_group.get(&stage.node_id).cloned();
+        }
+        Some(plan)
+    } else {
+        None
+    };
+
+    Ok(CompiledPipeline { stages, leaves, affinity })
 }
 
 mod graph;
@@ -1101,6 +1209,13 @@ fn build_stage(
     // DETACH the alias at the end of the stage (further down) to free it for
     // the next stage's ATTACH.
     let attach = attach_prelude(component_id, &props);
+    let data_source_aliases: Vec<String> = props
+        .get("_duckleDataSourceRuntime")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("alias").and_then(JsonValue::as_str).map(str::to_string))
+        .collect();
     let attach_alias: Option<&str> = if attach.contains("AS duckle_src") {
         Some("duckle_src")
     } else if attach.contains("AS duckle_dst") {
@@ -4214,8 +4329,15 @@ fn build_stage(
         // (true predicate pushdown into the source scan). Auto also keeps its
         // parquet fast-path spec as the fallback for when the pipeline cannot
         // batch into one session; compile() drops that spec on upgrade.
+        //
+        // Query Sources are intentionally excluded. Their Data Source aliases
+        // are detached immediately after the query, so a live view would retain
+        // a reference to a catalog that no longer exists when a downstream node
+        // reads it in the same batched run. Until the affinity worker owns the
+        // attachment lifecycle, Query Source output must be a run-db TABLE.
         attach_view = matches!(materialize, "view" | "auto")
             && attach_backed
+            && component_id != "src.query"
             && main_consumers <= 1
             && reject_sql.is_none()
             // A source a reject-wired filter reads twice must stay materialized
@@ -4432,6 +4554,21 @@ fn build_stage(
         .or_else(|| ai_dedupe.map(RuntimeSpec::AiDedupe))
         .or_else(|| jq.map(RuntimeSpec::Jq))
         ;
+    // Preserve a worker-specific representation before the compatibility path
+    // appends per-stage DETACH statements below. An affinity worker owns these
+    // attachments for its entire group and materializes the query result into
+    // the run database, so downstream nodes never need the external catalog.
+    let query_source = if component_id == "src.query" && !data_source_aliases.is_empty() {
+        let materialize_sql = sql.strip_prefix(&attach).unwrap_or(&sql).trim_start().to_string();
+        let attachments = query_source_attach_statements(&props)
+            .into_iter()
+            .map(|(alias, sql)| QuerySourceAttachment { alias, sql })
+            .collect();
+        Some(QuerySourceSpec { attachments, materialize_sql })
+    } else {
+        None
+    };
+
     // Free the ATTACH alias so the next batched stage can re-ATTACH it (see
     // attach_alias above). Only stages that embed the ATTACH in their own SQL
     // qualify - the sql starts with the prelude. Runtime-spec sources/sinks
@@ -4461,7 +4598,15 @@ fn build_stage(
             let sep = if trimmed.ends_with(';') { " " } else { "; " };
             sql = format!("{}{}DETACH {};", trimmed, sep, effective);
         }
+    } else if !data_source_aliases.is_empty() && sql.starts_with(&attach) {
+        let mut trimmed = sql.trim_end().to_string();
+        for alias in &data_source_aliases {
+            let sep = if trimmed.ends_with(';') { " " } else { "; " };
+            trimmed.push_str(&format!("{}DETACH {};", sep, quote_ident(alias)));
+        }
+        sql = trimmed;
     }
+    let affinity_mode = classify_affinity_stage(component_id, runtime.is_some());
     Ok(Stage {
         node_id: node.id.clone(),
         component_id: component_id.to_string(),
@@ -4476,6 +4621,8 @@ fn build_stage(
         retry_attempts,
         retry_backoff_ms,
         memory_limit_mb,
+        data_source_aliases,
+        query_source,
         attach_view,
         // A user alias names the node's output relation. Pure SQL nodes create no
         // such relation, so they carry no alias view. An alias equal to the node
@@ -4491,6 +4638,8 @@ fn build_stage(
                 .map(str::to_string)
         },
         no_output_relation,
+        affinity_group_id: None,
+        affinity_mode,
     })
 }
 

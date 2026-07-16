@@ -19,7 +19,7 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine;
 use duckle_metadata::PipelineNode;
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use std::path::{Path, PathBuf};
 
 pub const ENC_PREFIX: &str = "enc:v1:";
@@ -241,6 +241,93 @@ pub fn load_connection(workspace: &Path, id: &str) -> Result<JsonValue, String> 
     Ok(v)
 }
 
+/// Resolve the non-secret Data Source catalog references carried by Query
+/// Source nodes. The resulting runtime payload is attached to the in-memory
+/// pipeline only; callers must never persist or echo the mutated document.
+/// Connection credentials are loaded through the strict decrypting path above.
+pub fn resolve_data_source_refs(workspace: &Path, nodes: &mut [PipelineNode]) -> Result<(), String> {
+    for node in nodes.iter_mut() {
+        if node.data.component_id.as_deref() != Some("src.query") {
+            continue;
+        }
+        let Some(props) = node.data.properties.as_mut().and_then(JsonValue::as_object_mut) else {
+            return Err(format!("query source '{}': properties are required", node.id));
+        };
+        let refs = props
+            .get("dataSourceRefs")
+            .and_then(JsonValue::as_array)
+            .ok_or_else(|| format!("query source '{}': dataSourceRefs is required", node.id))?;
+        if refs.is_empty() {
+            return Err(format!("query source '{}': at least one Data Source is required", node.id));
+        }
+
+        let mut seen_aliases = std::collections::HashSet::new();
+        let mut runtime = Vec::with_capacity(refs.len());
+        for reference in refs {
+            let id = reference
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| format!("query source '{}': invalid Data Source reference", node.id))?;
+            let ds_path = workspace.join("data-sources").join(format!("{}.json", id));
+            let text = std::fs::read_to_string(&ds_path).map_err(|e| format!("query source '{}': Data Source '{}' not found ({})", node.id, id, e))?;
+            let data_source: JsonValue =
+                serde_json::from_str(&text).map_err(|e| format!("query source '{}': Data Source '{}' has invalid JSON: {}", node.id, id, e))?;
+            let kind = data_source.get("kind").and_then(JsonValue::as_str).unwrap_or("").trim().to_ascii_lowercase();
+            if !matches!(kind.as_str(), "duckdb" | "postgres") {
+                return Err(format!("query source '{}': Data Source '{}' has unsupported kind", node.id, id));
+            }
+            let alias = data_source
+                .get("sqlAlias")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("query source '{}': Data Source '{}' has no SQL alias", node.id, id))?;
+            if !alias
+                .chars()
+                .enumerate()
+                .all(|(i, c)| c == '_' || c.is_ascii_alphanumeric() && (i > 0 || c.is_ascii_alphabetic()))
+            {
+                return Err(format!("query source '{}': Data Source '{}' has an invalid SQL alias", node.id, id));
+            }
+            if !seen_aliases.insert(alias.to_ascii_lowercase()) {
+                return Err(format!("query source '{}': duplicate Data Source SQL alias", node.id));
+            }
+            let connection_id = data_source
+                .get("connectionRef")
+                .and_then(JsonValue::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| format!("query source '{}': Data Source '{}' has no Connection", node.id, id))?;
+            let connection = load_connection(workspace, connection_id)?;
+            let connection_kind = connection.get("kind").and_then(JsonValue::as_str).unwrap_or("").to_ascii_lowercase();
+            if connection_kind != kind {
+                return Err(format!("query source '{}': Data Source '{}' is incompatible with its Connection", node.id, id));
+            }
+            runtime.push(json!({
+                "id": id,
+                "alias": alias,
+                "kind": kind,
+                "connection": connection,
+            }));
+        }
+        props.insert("_duckleDataSourceRuntime".into(), JsonValue::Array(runtime));
+    }
+    Ok(())
+}
+
+pub fn has_data_source_refs(nodes: &[PipelineNode]) -> bool {
+    nodes.iter().any(|node| {
+        node.data.component_id.as_deref() == Some("src.query")
+            && node
+                .data
+                .properties
+                .as_ref()
+                .and_then(|p| p.get("dataSourceRefs"))
+                .and_then(JsonValue::as_array)
+                .map(|refs| !refs.is_empty())
+                .unwrap_or(false)
+    })
+}
+
 /// The payload holds a connection JSON object; read a non-empty string field.
 fn conn_str<'a>(conn: &'a JsonValue, key: &str) -> Option<&'a str> {
     conn.get(key)
@@ -393,6 +480,19 @@ mod tests {
         std::fs::write(dir.join(format!("{}.json", id)), payload).unwrap();
     }
 
+    fn query_node(props: serde_json::Value) -> PipelineNode {
+        serde_json::from_value(serde_json::json!({
+            "id": "q1",
+            "position": {"x": 0.0, "y": 0.0},
+            "data": {
+                "label": "query",
+                "componentId": "src.query",
+                "properties": props,
+            }
+        }))
+        .unwrap()
+    }
+
     fn sf_node(component_id: &str, props: serde_json::Value) -> PipelineNode {
         serde_json::from_value(serde_json::json!({
             "id": "n1",
@@ -434,6 +534,27 @@ mod tests {
         let v: JsonValue = serde_json::from_str(&dec).unwrap();
         assert_eq!(v["password"], "s3cr3t");
         assert_eq!(v["host"], "db.local");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn resolves_query_data_source_refs_without_changing_persisted_refs() {
+        let ws = temp_ws("query_ds");
+        let connection = encrypt_payload_json(&ws, r#"{"kind":"postgres","host":"db.local","username":"u"}"#).unwrap();
+        write_connection(&ws, "conn-1", &connection);
+        let ds_dir = ws.join("data-sources");
+        std::fs::create_dir_all(&ds_dir).unwrap();
+        std::fs::write(ds_dir.join("ds-1.json"), r#"{"kind":"postgres","sqlAlias":"sales","connectionRef":"conn-1"}"#).unwrap();
+
+        let mut node = query_node(serde_json::json!({
+            "dataSourceRefs": ["ds-1"],
+            "sql": "SELECT * FROM sales.orders"
+        }));
+        resolve_data_source_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+        let props = node.data.properties.unwrap();
+        assert_eq!(props["dataSourceRefs"], serde_json::json!(["ds-1"]));
+        assert_eq!(props["_duckleDataSourceRuntime"][0]["alias"], "sales");
+        assert_eq!(props["_duckleDataSourceRuntime"][0]["connection"]["host"], "db.local");
         let _ = std::fs::remove_dir_all(&ws);
     }
 

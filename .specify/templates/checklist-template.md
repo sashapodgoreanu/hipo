@@ -15,6 +15,9 @@
   - Feature requirements from spec.md
   - Technical context from plan.md
   - Implementation details from tasks.md
+  - For UI changes, existing visual/interaction patterns that must be preserved
+  - For every Duckle connector, source, sink, or component: MCP API implementation and contract coverage
+  - For every Duckle node: both mandatory output flows, `main` and `reject`, across all affected layers
 
   DO NOT keep these sample items in the generated checklist file.
   ============================================================================

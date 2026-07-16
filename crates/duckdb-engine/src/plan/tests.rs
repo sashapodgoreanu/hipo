@@ -59,23 +59,119 @@
         assert!(sql.contains("WHERE \"r\".\"active\" = true"), "filter qualified: {}", sql);
     }
 
-    #[test]
-    fn query_source_accepts_read_only_sql_and_rejects_writes() {
-        use serde_json::json;
-        assert_eq!(
-            builders::build_query_source(&json!({"sql": "SELECT * FROM sales.orders;"}))
-                .unwrap(),
-            "(SELECT * FROM sales.orders)"
-        );
-        assert!(builders::build_query_source(&json!({"sql": "CREATE TABLE x AS SELECT 1"})).is_err());
-        assert!(builders::build_query_source(&json!({"sql": "SELECT 1; SELECT 2"})).is_err());
-    }
+#[test]
+fn query_source_accepts_read_only_sql_and_rejects_writes() {
+    use serde_json::json;
+    assert_eq!(
+        builders::build_query_source(&json!({"sql": "SELECT * FROM sales.orders;"})).unwrap(),
+        "(SELECT * FROM sales.orders)"
+    );
+    assert!(builders::build_query_source(&json!({"sql": "CREATE TABLE x AS SELECT 1"})).is_err());
+    assert!(builders::build_query_source(&json!({"sql": "SELECT 1; SELECT 2"})).is_err());
+    let error = builders::build_query_source(&json!({"sql": "CREATE TABLE x AS SELECT 1"})).unwrap_err();
+    assert_eq!(error.code(), "planner.invalid_query_sql");
 
-    #[test]
-    fn map_without_lookups_is_unchanged() {
-        // No lookups + no lookup refs: behaves like the original mapper.
-        let doc = pipeline_from_json(
-            r#"{
+    let attach = builders::attach_prelude(
+        "src.query",
+        &json!({
+            "_duckleDataSourceRuntime": [{
+                "alias": "sales",
+                "kind": "duckdb",
+                "connection": {"database": "C:/tmp/sales.duckdb"}
+            }]
+        }),
+    );
+    assert!(attach.contains("AS \"sales\" (READ_ONLY)"));
+}
+
+#[test]
+fn query_source_materializes_before_detaching_data_source_alias() {
+    // A full pipeline batch runs downstream stages in the same DuckDB
+    // process. Query Source aliases are still per-stage, therefore this
+    // source must remain a TABLE: a lazy VIEW would try to resolve
+    // sales.orders after the stage's DETACH "sales" has run.
+    let doc = pipeline_from_json(
+        r#"{
+              "nodes":[
+                {"id":"q","position":{"x":0,"y":0},"data":{"label":"query","componentId":"src.query","properties":{
+                  "dataSourceRefs":["ds-orders"],
+                  "sql":"SELECT * FROM sales.orders",
+                  "_duckleDataSourceRuntime":[{"id":"ds-orders","alias":"sales","kind":"duckdb","connection":{"database":"C:/tmp/orders.duckdb"}}]
+                }}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"C:/tmp/out.csv"}}}
+              ],
+              "edges":[{"id":"e","source":"q","target":"k","data":{"connectionType":"main"}}]
+            }"#,
+    );
+
+    let stage = compile(&doc)
+        .unwrap()
+        .stages
+        .into_iter()
+        .find(|stage| stage.node_id == "q")
+        .expect("Query Source stage");
+    assert!(!stage.attach_view);
+    assert!(stage.sql.contains("CREATE OR REPLACE TABLE \"q\""), "{}", stage.sql);
+    assert!(stage.sql.contains("DETACH \"sales\""), "{}", stage.sql);
+    let query = stage.query_source.expect("Query Source affinity spec");
+    assert_eq!(query.attachments.len(), 1);
+    assert_eq!(query.attachments[0].alias, "sales");
+    assert!(query.attachments[0].sql.contains("AS \"sales\" (READ_ONLY)"));
+    assert!(query.materialize_sql.contains("CREATE OR REPLACE TABLE \"q\""));
+    assert!(!query.materialize_sql.contains("DETACH \"sales\""));
+    assert_eq!(compile(&doc).unwrap().affinity.unwrap().groups.len(), 1);
+}
+
+#[test]
+fn affinity_groups_merge_direct_and_transitive_refs_but_keep_independent_groups() {
+    use serde_json::json;
+    let doc = pipeline_from_json(&format!(
+        r#"{{"nodes":[
+                {{"id":"q1","position":{{"x":0,"y":0}},"data":{{"label":"q1","componentId":"src.query","properties":{{"dataSourceRefs":["ds-a"],"sql":"SELECT 1"}}}}}},
+                {{"id":"q2","position":{{"x":0,"y":0}},"data":{{"label":"q2","componentId":"src.query","properties":{{"dataSourceRefs":["ds-a","ds-b"],"sql":"SELECT 2"}}}}}},
+                {{"id":"q3","position":{{"x":0,"y":0}},"data":{{"label":"q3","componentId":"src.query","properties":{{"dataSourceRefs":["ds-b"],"sql":"SELECT 3"}}}}}},
+                {{"id":"q4","position":{{"x":0,"y":0}},"data":{{"label":"q4","componentId":"src.query","properties":{{"dataSourceRefs":["ds-c"],"sql":"SELECT 4"}}}}}}
+            ]}}"#
+    ));
+    let known = ["ds-a", "ds-b", "ds-c"].into_iter().map(String::from).collect();
+    let plan = build_affinity_plan(&doc, &known).unwrap();
+    assert_eq!(plan.groups.len(), 2);
+    assert_eq!(plan.groups[0].query_source_ids, vec!["q1", "q2", "q3"]);
+    assert_eq!(plan.groups[0].data_source_ids, vec!["ds-a", "ds-b"]);
+    assert_eq!(plan.groups[1].query_source_ids, vec!["q4"]);
+    assert_eq!(plan.node_to_group["q1"], plan.node_to_group["q3"]);
+    assert_ne!(plan.node_to_group["q1"], plan.node_to_group["q4"]);
+    assert!(matches!(classify_affinity_stage("src.query", false), AffinityStageMode::SessionPreserving));
+    assert!(matches!(classify_affinity_stage("xf.ai.embed", true), AffinityStageMode::SessionSuspending));
+    assert!(matches!(classify_affinity_stage("src.rest", true), AffinityStageMode::Unsupported));
+    let _ = json!(null);
+}
+
+#[test]
+fn affinity_plan_rejects_missing_or_empty_refs_and_honors_selection() {
+    use serde_json::json;
+    let doc = pipeline_from_json(
+        r#"{"nodes":[
+                {"id":"q1","position":{"x":0,"y":0},"data":{"label":"q1","componentId":"src.query","properties":{"dataSourceRefs":["missing"],"sql":"SELECT 1"}}},
+                {"id":"q2","position":{"x":0,"y":0},"data":{"label":"q2","componentId":"src.query","properties":{"dataSourceRefs":[],"sql":"SELECT 2"}}}
+            ]}"#,
+    );
+    let known = ["ds-a"].into_iter().map(String::from).collect();
+    assert!(matches!(build_affinity_plan(&doc, &known), Err(AffinityError::MissingDataSourceRef { .. })));
+    let selected = [String::from("q1")].into_iter().collect();
+    let valid = pipeline_from_json(
+        r#"{"nodes":[{"id":"q1","position":{"x":0,"y":0},"data":{"label":"q1","componentId":"src.query","properties":{"dataSourceRefs":["ds-a"],"sql":"SELECT 1"}}}]}"#,
+    );
+    let plan = build_affinity_plan_for_nodes(&valid, &known, Some(&selected)).unwrap();
+    assert_eq!(plan.groups.len(), 1);
+    let _ = json!(null);
+}
+
+#[test]
+fn map_without_lookups_is_unchanged() {
+    // No lookups + no lookup refs: behaves like the original mapper.
+    let doc = pipeline_from_json(
+        r#"{
               "nodes": [
                 {"id":"o","position":{"x":0,"y":0},"data":{"label":"orders","componentId":"src.csv","properties":{"path":"/tmp/o.csv","hasHeader":true}}},
                 {"id":"m","position":{"x":0,"y":0},"data":{"label":"Map","componentId":"xf.map","properties":{
@@ -296,18 +392,13 @@
                   "data":{"connectionType":"main"}}
               ]
             }"#,
-        );
-        let compiled = compile(&p).unwrap();
-        assert_eq!(compiled.stages.len(), 3);
-        for stage in &compiled.stages {
-            assert!(
-                stage.is_pure_sql(),
-                "stage {} ({}) should be batchable",
-                stage.node_id,
-                stage.component_id
-            );
-        }
+    );
+    let compiled = compile(&p).unwrap();
+    assert_eq!(compiled.stages.len(), 3);
+    for stage in &compiled.stages {
+        assert!(stage.is_pure_sql(), "stage {} ({}) should be batchable", stage.node_id, stage.component_id);
     }
+}
 
     #[test]
     fn rest_source_pipeline_is_not_batchable() {
@@ -362,36 +453,24 @@
                 {"id":"e1","source":"src","target":"out","data":{"connectionType":"main"}}
               ]
             }"#,
-        );
-        let stage = compile(&p)
-            .unwrap()
-            .stages
-            .into_iter()
-            .find(|s| s.node_id == "src")
-            .unwrap();
-        assert!(
-            !stage.attach_view,
-            "custom-sql ducklake must not be a live VIEW (it would re-resolve names downstream)"
-        );
-        match stage.runtime {
-            Some(RuntimeSpec::AttachParquetSource(spec)) => {
-                assert!(
-                    spec.attach.contains("SET search_path='duckle_src'"),
-                    "custom-sql ducklake must put the attached catalog on the search_path, got: {}",
-                    spec.attach
-                );
-                assert!(
-                    spec.body.contains("data.weights"),
-                    "the user's SQL is preserved verbatim, got: {}",
-                    spec.body
-                );
-            }
-            other => panic!(
-                "expected an AttachParquetSource runtime for custom-sql ducklake, got: {:?}",
-                other
-            ),
+    );
+    let stage = compile(&p).unwrap().stages.into_iter().find(|s| s.node_id == "src").unwrap();
+    assert!(
+        !stage.attach_view,
+        "custom-sql ducklake must not be a live VIEW (it would re-resolve names downstream)"
+    );
+    match stage.runtime {
+        Some(RuntimeSpec::AttachParquetSource(spec)) => {
+            assert!(
+                spec.attach.contains("SET search_path='duckle_src'"),
+                "custom-sql ducklake must put the attached catalog on the search_path, got: {}",
+                spec.attach
+            );
+            assert!(spec.body.contains("data.weights"), "the user's SQL is preserved verbatim, got: {}", spec.body);
         }
+        other => panic!("expected an AttachParquetSource runtime for custom-sql ducklake, got: {:?}", other),
     }
+}
 
     #[test]
     fn compiles_csv_filter_parquet() {
@@ -770,54 +849,68 @@
         assert!(sink.sql.contains("\"amount\" = src.\"amount\""), "merge must set the non-key source column: {}", sink.sql);
     }
 
-    #[test]
-    fn sqlserver_sink_bulk_uses_mssql_extension() {
-        // #86: snk.sqlserver default (bulk) -> ATTACH via the mssql community
-        // extension + pure-SQL CREATE/INSERT through duckle_dst (fast bulk load),
-        // not the row-by-row driver.
-        let mk = |bulk: &str| pipeline_from_json(&format!(
+#[test]
+fn sqlserver_sink_bulk_uses_mssql_extension() {
+    // #86: snk.sqlserver default (bulk) -> ATTACH via the mssql community
+    // extension + pure-SQL CREATE/INSERT through duckle_dst (fast bulk load),
+    // not the row-by-row driver.
+    let mk = |bulk: &str| {
+        pipeline_from_json(&format!(
             r#"{{"nodes":[
                 {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"Src","componentId":"src.csv","properties":{{"path":"/tmp/in.csv"}}}}}},
                 {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"MSSQL","componentId":"snk.sqlserver","properties":{{"host":"h","database":"db","user":"u","password":"p","tableName":"orders"{}}}}}}}
               ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#,
-            bulk));
-        // Default (no bulk prop) -> bulk path.
-        let c = compile(&mk("")).unwrap();
-        let k = c.stages.iter().find(|s| s.node_id == "k").unwrap();
-        assert!(k.sql.contains("INSTALL mssql FROM community") && k.sql.contains("AS duckle_dst (TYPE mssql)"),
-            "bulk sink must ATTACH via mssql: {}", k.sql);
-        assert!(k.sql.contains("duckle_dst.\"dbo\".\"orders\""), "writes to dbo.orders via duckle_dst: {}", k.sql);
-        assert!(k.runtime.is_none(), "bulk sink is pure SQL (no driver spec)");
-        // bulk=false -> the tiberius driver runtime spec, empty stage SQL.
-        let c2 = compile(&mk(r#","bulk":false"#)).unwrap();
-        let k2 = c2.stages.iter().find(|s| s.node_id == "k").unwrap();
-        assert!(matches!(k2.runtime.as_ref(), Some(RuntimeSpec::SqlserverSink(_))), "bulk=false uses the driver");
-        assert!(!k2.sql.contains("mssql"), "driver path has no mssql ATTACH: {}", k2.sql);
-    }
+            bulk
+        ))
+    };
+    // Default (no bulk prop) -> bulk path.
+    let c = compile(&mk("")).unwrap();
+    let k = c.stages.iter().find(|s| s.node_id == "k").unwrap();
+    assert!(
+        k.sql.contains("INSTALL mssql FROM community") && k.sql.contains("AS duckle_dst (TYPE mssql)"),
+        "bulk sink must ATTACH via mssql: {}",
+        k.sql
+    );
+    assert!(
+        k.sql.contains("duckle_dst.\"dbo\".\"orders\""),
+        "writes to dbo.orders via duckle_dst: {}",
+        k.sql
+    );
+    assert!(k.runtime.is_none(), "bulk sink is pure SQL (no driver spec)");
+    // bulk=false -> the tiberius driver runtime spec, empty stage SQL.
+    let c2 = compile(&mk(r#","bulk":false"#)).unwrap();
+    let k2 = c2.stages.iter().find(|s| s.node_id == "k").unwrap();
+    assert!(matches!(k2.runtime.as_ref(), Some(RuntimeSpec::SqlserverSink(_))), "bulk=false uses the driver");
+    assert!(!k2.sql.contains("mssql"), "driver path has no mssql ATTACH: {}", k2.sql);
+}
 
-    #[test]
-    fn sqlserver_bulk_honours_trust_and_batch() {
-        // #86 follow-up: trustCert + batchSize now apply to the bulk (mssql
-        // extension) path, not only the legacy driver.
-        let mk = |extra: &str| pipeline_from_json(&format!(
+#[test]
+fn sqlserver_bulk_honours_trust_and_batch() {
+    // #86 follow-up: trustCert + batchSize now apply to the bulk (mssql
+    // extension) path, not only the legacy driver.
+    let mk = |extra: &str| {
+        pipeline_from_json(&format!(
             r#"{{"nodes":[
                 {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"S","componentId":"src.csv","properties":{{"path":"/tmp/in.csv"}}}}}},
                 {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"M","componentId":"snk.sqlserver","properties":{{"host":"h","database":"db","user":"u","password":"p","tableName":"t"{}}}}}}}
-              ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#, extra));
-        let sql = |extra: &str| {
-            let c = compile(&mk(extra)).unwrap();
-            c.stages.iter().find(|s| s.node_id == "k").unwrap().sql.clone()
-        };
-        // Default: trust off (matches the legacy driver default), batch 1000.
-        let d = sql("");
-        assert!(!d.contains("TrustServerCertificate"), "trust off by default: {}", d);
-        assert!(d.contains("SET mssql_insert_batch_size = 1000"), "default batch 1000: {}", d);
-        // Trust on -> TrustServerCertificate in the connection string.
-        assert!(sql(r#","trustCert":true"#).contains("TrustServerCertificate=true"));
-        // batchSize honoured, and clamped to SQL Server's 1000 ceiling.
-        assert!(sql(r#","batchSize":500"#).contains("SET mssql_insert_batch_size = 500"));
-        assert!(sql(r#","batchSize":5000"#).contains("SET mssql_insert_batch_size = 1000"), "clamp to 1000");
-    }
+              ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#,
+            extra
+        ))
+    };
+    let sql = |extra: &str| {
+        let c = compile(&mk(extra)).unwrap();
+        c.stages.iter().find(|s| s.node_id == "k").unwrap().sql.clone()
+    };
+    // Default: trust off (matches the legacy driver default), batch 1000.
+    let d = sql("");
+    assert!(!d.contains("TrustServerCertificate"), "trust off by default: {}", d);
+    assert!(d.contains("SET mssql_insert_batch_size = 1000"), "default batch 1000: {}", d);
+    // Trust on -> TrustServerCertificate in the connection string.
+    assert!(sql(r#","trustCert":true"#).contains("TrustServerCertificate=true"));
+    // batchSize honoured, and clamped to SQL Server's 1000 ceiling.
+    assert!(sql(r#","batchSize":500"#).contains("SET mssql_insert_batch_size = 500"));
+    assert!(sql(r#","batchSize":5000"#).contains("SET mssql_insert_batch_size = 1000"), "clamp to 1000");
+}
 
     #[test]
     fn partial_run_keeps_attach_source_materialized() {
@@ -945,16 +1038,16 @@
               ],
               "edges": [{"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}]
             }"#,
-        );
-        let compiled = compile(&p).unwrap();
-        let src = compiled.stages.iter().find(|s| s.node_id == "s1").unwrap();
-        match src.runtime.as_ref() {
-            Some(RuntimeSpec::MaterializeDuckDb(spec)) => {
-                assert!(spec.output_path.is_none(), "temp target must have no path");
-            }
-            other => panic!("expected MaterializeDuckDb, got {:?}", other),
+    );
+    let compiled = compile(&p).unwrap();
+    let src = compiled.stages.iter().find(|s| s.node_id == "s1").unwrap();
+    match src.runtime.as_ref() {
+        Some(RuntimeSpec::MaterializeDuckDb(spec)) => {
+            assert!(spec.output_path.is_none(), "temp target must have no path");
         }
+        other => panic!("expected MaterializeDuckDb, got {:?}", other),
     }
+}
 
     #[test]
     fn materialize_duckdbfile_carries_path_and_requires_it() {
@@ -970,18 +1063,18 @@
               ],
               "edges": [{"id":"e1","source":"s1","target":"k1","data":{"connectionType":"main"}}]
             }"#,
-        );
-        let src = compile(&ok).unwrap();
-        let st = src.stages.iter().find(|s| s.node_id == "s1").unwrap();
-        match st.runtime.as_ref() {
-            Some(RuntimeSpec::MaterializeDuckDb(spec)) => {
-                assert_eq!(spec.output_path.as_deref(), Some("/tmp/lake.duckdb"));
-            }
-            other => panic!("expected MaterializeDuckDb with path, got {:?}", other),
+    );
+    let src = compile(&ok).unwrap();
+    let st = src.stages.iter().find(|s| s.node_id == "s1").unwrap();
+    match st.runtime.as_ref() {
+        Some(RuntimeSpec::MaterializeDuckDb(spec)) => {
+            assert_eq!(spec.output_path.as_deref(), Some("/tmp/lake.duckdb"));
         }
-        // Without materializePath it fails loud (no silent temp fallback).
-        let bad = pipeline_from_json(
-            r#"{
+        other => panic!("expected MaterializeDuckDb with path, got {:?}", other),
+    }
+    // Without materializePath it fails loud (no silent temp fallback).
+    let bad = pipeline_from_json(
+        r#"{
               "nodes": [
                 {"id":"s1","position":{"x":0,"y":0},"data":{
                   "label":"CSV","componentId":"src.csv",
@@ -1153,15 +1246,11 @@
                     {{"id":"e2","source":"n","target":"k","data":{{"connectionType":"main"}}}}
                   ]
                 }}"#,
-                bad
-            ));
-            assert!(
-                compile(&p).is_err(),
-                "numeric op with argument '{}' should be rejected",
-                bad
-            );
-        }
+            bad
+        ));
+        assert!(compile(&p).is_err(), "numeric op with argument '{}' should be rejected", bad);
     }
+}
 
     #[test]
     fn addcol_typed_expr_defaults_to_try_cast() {
@@ -1234,570 +1323,648 @@
         );
     }
 
-    #[test]
-    fn skip_orderby_makes_offset_deterministic() {
-        // audit B4: xf.skip with an orderBy prop emits ORDER BY before
-        // OFFSET so the skipped slice is repeatable.
+#[test]
+fn skip_orderby_makes_offset_deterministic() {
+    // audit B4: xf.skip with an orderBy prop emits ORDER BY before
+    // OFFSET so the skipped slice is repeatable.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_take(&ni, &serde_json::json!({"count": 5, "orderBy": ["id"]}), TakeKind::Offset).unwrap();
+    assert!(
+        sql.contains("ORDER BY \"id\" OFFSET 5"),
+        "skip with orderBy should sort before offset, got: {}",
+        sql
+    );
+}
+
+#[test]
+fn distinct_orderby_prop_replaces_order_by_all() {
+    // audit B10: keyed DISTINCT defaults to ORDER BY ALL (deterministic
+    // but a full sort, >100x slower). An `orderBy` prop sorts only the
+    // keys + tiebreak columns; default is unchanged.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let default_sql = build_distinct(&ni, &serde_json::json!({"columns": ["status"]})).unwrap();
+    assert!(
+        default_sql.contains("ORDER BY ALL"),
+        "default keyed distinct must keep ORDER BY ALL, got: {}",
+        default_sql
+    );
+    let fast_sql = build_distinct(&ni, &serde_json::json!({"columns": ["status"], "orderBy": ["amount"]})).unwrap();
+    assert!(
+        fast_sql.contains("ORDER BY \"status\", \"amount\"") && !fast_sql.contains("ORDER BY ALL"),
+        "orderBy prop must sort keys+tiebreak, not ALL, got: {}",
+        fast_sql
+    );
+    assert!(
+        fast_sql.trim_end().ends_with(", *"),
+        "orderBy prop must append a trailing `, *` all-column tiebreaker for a deterministic survivor, got: {}",
+        fast_sql
+    );
+}
+
+#[test]
+fn setop_realigns_columns_by_name_without_invalid_syntax() {
+    // INTERSECT/EXCEPT BY NAME is a parser error in DuckDB; realign later
+    // legs to the first leg's columns via a 0-row UNION ALL BY NAME template
+    // and join with the plain set operator.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["a".into(), "b".into()]);
+    let sql = build_setop(&ni, "INTERSECT").unwrap();
+    assert!(!sql.contains("INTERSECT BY NAME"), "must not emit invalid INTERSECT BY NAME, got: {}", sql);
+    assert!(sql.contains(" INTERSECT "), "must join legs with plain INTERSECT, got: {}", sql);
+    assert!(sql.contains("WHERE false UNION ALL BY NAME"), "must realign later legs by name, got: {}", sql);
+    let ex = build_setop(&ni, "EXCEPT").unwrap();
+    assert!(ex.contains(" EXCEPT ") && !ex.contains("EXCEPT BY NAME"), "got: {}", ex);
+}
+
+#[test]
+fn cast_per_column_format_uses_strptime() {
+    // #10: each cast entry can carry its own strptime format so multiple
+    // columns with different date formats parse independently.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_cast(
+        &ni,
+        &serde_json::json!({"casts": [
+            {"column": "d1", "targetType": "date", "format": "%d/%m/%Y"},
+            {"column": "ts", "targetType": "timestamp", "format": "%Y.%m.%d %H:%M:%S"},
+            {"column": "amount", "targetType": "double"}
+        ]}),
+    )
+    .unwrap();
+    assert!(sql.contains("try_strptime(\"d1\", '%d/%m/%Y')::DATE AS \"d1\""), "got: {}", sql);
+    assert!(sql.contains("try_strptime(\"ts\", '%Y.%m.%d %H:%M:%S')::TIMESTAMP AS \"ts\""), "got: {}", sql);
+    assert!(sql.contains("TRY_CAST(\"amount\""), "non-date cast keeps TRY_CAST, got: {}", sql);
+    // A date cast WITHOUT a format still uses TRY_CAST (no regression).
+    let no_fmt = build_cast(&ni, &serde_json::json!({"casts":[{"column":"d","targetType":"date"}]})).unwrap();
+    assert!(no_fmt.contains("TRY_CAST(\"d\" AS DATE)"), "got: {}", no_fmt);
+}
+
+#[test]
+fn mask_builds_replace_per_mode() {
+    // qa.mask: SELECT * REPLACE with a per-column masking expression.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_mask(
+        &ni,
+        &serde_json::json!({"masks":[
+            {"column":"ssn","mode":"partial","showLast":4},
+            {"column":"email","mode":"hash","salt":"s7"},
+            {"column":"name","mode":"null"},
+            {"column":"note","mode":"constant","value":"X"}
+        ]}),
+    )
+    .unwrap();
+    assert!(sql.starts_with("SELECT * REPLACE ("), "got: {}", sql);
+    assert!(sql.contains("right(CAST(\"ssn\" AS VARCHAR), 4)"), "got: {}", sql);
+    assert!(sql.contains("md5('s7' || CAST(\"email\" AS VARCHAR)) AS \"email\""), "got: {}", sql);
+    assert!(sql.contains("NULL AS \"name\""), "got: {}", sql);
+    assert!(sql.contains("'X' AS \"note\""), "got: {}", sql);
+    assert!(sql.contains("FROM \"up\""), "got: {}", sql);
+    // hash without salt is unsalted md5; unknown mode is a loud error.
+    let nosalt = build_mask(&ni, &serde_json::json!({"column":"x","mode":"hash"})).unwrap();
+    assert!(nosalt.contains("md5(CAST(\"x\" AS VARCHAR))"), "got: {}", nosalt);
+    assert!(build_mask(&ni, &serde_json::json!({"column":"x","mode":"bogus"})).is_err());
+}
+
+#[test]
+fn survivor_builds_golden_record_groupby() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let freq = build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"most_frequent"})).unwrap();
+    assert!(freq.contains("mode(COLUMNS(* EXCLUDE (\"id\")))"), "got: {}", freq);
+    assert!(freq.contains("GROUP BY \"id\""), "got: {}", freq);
+    let recent = build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"most_recent","recencyColumn":"updated_at"})).unwrap();
+    assert!(recent.contains("arg_max(COLUMNS(* EXCLUDE (\"id\")), \"updated_at\")"), "got: {}", recent);
+    // most_recent without a recency column is a loud error; unknown rule too.
+    assert!(build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"most_recent"})).is_err());
+    assert!(build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"bogus"})).is_err());
+    assert!(build_survivor(&ni, &serde_json::json!({"rule":"max"})).is_err());
+}
+
+#[test]
+fn matchgroup_builds_recursive_cluster_sql() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_matchgroup(&ni, &serde_json::json!({})).unwrap();
+    assert!(sql.starts_with("WITH RECURSIVE"), "got: {}", sql);
+    assert!(sql.contains("CAST(\"id_a\" AS VARCHAR) AS s, CAST(\"id_b\" AS VARCHAR) AS t"), "got: {}", sql);
+    assert!(sql.contains("SELECT CAST(\"id_b\" AS VARCHAR), CAST(\"id_a\" AS VARCHAR)"), "got: {}", sql);
+    assert!(sql.contains("SELECT id, MIN(rep) AS cluster_id FROM reach GROUP BY id"), "got: {}", sql);
+    assert!(sql.contains("FROM \"up\""), "got: {}", sql);
+    let custom = build_matchgroup(&ni, &serde_json::json!({"leftKey":"left rec","rightKey":"right rec"})).unwrap();
+    assert!(
+        custom.contains("CAST(\"left rec\" AS VARCHAR) AS s, CAST(\"right rec\" AS VARCHAR) AS t"),
+        "got: {}",
+        custom
+    );
+    assert!(build_matchgroup(&NodeInputs::default(), &serde_json::json!({})).is_err());
+}
+
+#[test]
+fn sample_adv_builds_using_sample_clause() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let seeded = build_sample_adv(&ni, &serde_json::json!({ "percent": 10, "method": "reservoir", "seed": 42 })).unwrap();
+    assert_eq!(seeded, "SELECT * FROM \"up\" USING SAMPLE 10 PERCENT (reservoir, 42)", "got: {}", seeded);
+    let no_seed = build_sample_adv(&ni, &serde_json::json!({ "percent": 5 })).unwrap();
+    assert_eq!(no_seed, "SELECT * FROM \"up\" USING SAMPLE 5 PERCENT (reservoir)", "got: {}", no_seed);
+    assert!(build_sample_adv(&ni, &serde_json::json!({})).is_err());
+    assert!(build_sample_adv(&ni, &serde_json::json!({ "percent": 150 })).is_err());
+    assert!(build_sample_adv(&ni, &serde_json::json!({ "percent": 10, "method": "bogus" })).is_err());
+    assert!(build_sample_adv(&ni, &serde_json::json!({ "percent": "10; DROP TABLE x" })).is_err());
+}
+
+#[test]
+fn expect_builds_scorecard_per_rule() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_expect(
+        &ni,
+        &serde_json::json!({ "rules": [
+            { "column": "email", "check": "not_null" },
+            { "column": "amt",   "check": "in_range", "args": { "min": 0, "max": 10 } },
+            { "column": "status","check": "in_set",   "args": ["paid", "pending"] },
+            { "column": "code",  "check": "regex",    "args": "^[A-Z]+$" },
+            { "column": "qty",   "check": "non_negative" },
+            { "column": "id",    "check": "unique" }
+        ]}),
+    )
+    .unwrap();
+    assert!(sql.contains("AS pass_rate"), "got: {}", sql);
+    assert!(sql.contains("(failed = 0) AS passed"), "got: {}", sql);
+    assert!(sql.contains("COUNT(*) FILTER (WHERE NOT (\"email\" IS NOT NULL))"), "got: {}", sql);
+    assert!(sql.contains("COUNT(*) FILTER (WHERE NOT (\"amt\" BETWEEN 0 AND 10))"), "got: {}", sql);
+    assert!(sql.contains("\"status\" IN ('paid', 'pending')"), "got: {}", sql);
+    assert!(sql.contains("regexp_full_match(CAST(\"code\" AS VARCHAR), '^[A-Z]+$')"), "got: {}", sql);
+    assert!(sql.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", sql);
+    assert!(sql.contains("'in_set(status, 2 values)' AS expectation"), "got: {}", sql);
+    assert!(sql.contains("FROM \"up\""), "got: {}", sql);
+    assert!(build_expect(&ni, &serde_json::json!({ "rules": [] })).is_err());
+    assert!(build_expect(&ni, &serde_json::json!({ "rules": [{ "column": "x", "check": "bogus" }] })).is_err());
+    let kv = build_expect(&ni, &serde_json::json!({ "rules": { "amt": "in_range:0,10", "id": "unique" } })).unwrap();
+    // The key-value form parses 0,10 as floats, so the SQL is BETWEEN 0.0 AND 10.0.
+    assert!(kv.contains("\"amt\" BETWEEN 0.0 AND 10.0"), "got: {}", kv);
+    assert!(kv.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", kv);
+}
+
+#[test]
+fn refintegrity_builds_semi_and_anti_join() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["m1".into()]);
+    ni.ports.insert("lookup".into(), vec!["r1".into()]);
+    let props = serde_json::json!({"leftKey": "cust_id", "rightKey": "id"});
+    let pass = build_refintegrity(&ni, &props, false).unwrap();
+    assert_eq!(
+        pass, "SELECT \"m1\".* FROM \"m1\" WHERE EXISTS (SELECT 1 FROM \"r1\" WHERE \"r1\".\"id\" = \"m1\".\"cust_id\")",
+        "got: {}",
+        pass
+    );
+    let rej = build_refintegrity(&ni, &props, true).unwrap();
+    assert_eq!(
+        rej, "SELECT \"m1\".* FROM \"m1\" WHERE NOT EXISTS (SELECT 1 FROM \"r1\" WHERE \"r1\".\"id\" = \"m1\".\"cust_id\")",
+        "got: {}",
+        rej
+    );
+    let mut no_ref = NodeInputs::default();
+    no_ref.ports.insert("main".into(), vec!["m1".into()]);
+    assert!(build_refintegrity(&no_ref, &props, false).is_err());
+    assert!(build_refintegrity(&ni, &serde_json::json!({"rightKey": "id"}), false).is_err());
+    assert!(build_refintegrity(&ni, &serde_json::json!({"leftKey": "cust_id"}), false).is_err());
+}
+
+#[test]
+fn profile_adv_builds_metric_value_long_form() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_profile_adv(&ni, &serde_json::json!({ "column": "email", "topN": 3 })).unwrap();
+    assert!(sql.contains("SELECT CAST(\"email\" AS VARCHAR) AS v FROM \"up\""), "got: {}", sql);
+    assert!(sql.contains("approx_count_distinct(v) AS distinct_n"), "got: {}", sql);
+    assert!(sql.contains("regexp_full_match(v, '^-?[0-9]+$')"), "int pattern: {}", sql);
+    assert!(sql.contains("GROUP BY v ORDER BY freq DESC, v LIMIT 3"), "top-n: {}", sql);
+    assert!(sql.contains("SELECT \"metric\", \"value\", \"count\", \"pct\" FROM ("), "shape: {}", sql);
+    let def = build_profile_adv(&ni, &serde_json::json!({ "column": "x" })).unwrap();
+    assert!(def.contains("LIMIT 10"), "default top-n: {}", def);
+    assert!(build_profile_adv(&ni, &serde_json::json!({ "column": "x", "topN": 99999 }))
+        .unwrap()
+        .contains("LIMIT 1000"));
+    assert!(build_profile_adv(&ni, &serde_json::json!({})).is_err());
+    assert!(build_profile_adv(&NodeInputs::default(), &serde_json::json!({ "column": "x" })).is_err());
+}
+
+#[test]
+fn link_builds_cross_join_over_two_inputs() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["m1".into()]);
+    ni.ports.insert("lookup".into(), vec!["r1".into()]);
+    let sql = build_record_link(&ni, &serde_json::json!({ "leftKey": "name", "rightKey": "company" })).unwrap();
+    assert!(sql.contains("FROM \"m1\"") && sql.contains("FROM \"r1\""), "got: {}", sql);
+    assert!(sql.contains("CROSS JOIN"), "got: {}", sql);
+    assert!(sql.contains("jaro_winkler_similarity(a._key, b._key)"), "got: {}", sql);
+    assert!(sql.contains(">= 0.85"), "got: {}", sql);
+    assert!(sql.contains("a._show AS left_key") && sql.contains("b._show AS right_key"), "got: {}", sql);
+    let lev = build_record_link(
+        &ni,
+        &serde_json::json!({"leftColumns":["first","last"],"rightColumns":["fname","lname"],"algorithm":"levenshtein","threshold":0.7}),
+    )
+    .unwrap();
+    assert!(lev.contains("levenshtein(a._key, b._key)"), "got: {}", lev);
+    assert!(lev.contains("concat_ws(' ', \"first\", \"last\")"), "got: {}", lev);
+    let mut no_ref = NodeInputs::default();
+    no_ref.ports.insert("main".into(), vec!["m1".into()]);
+    assert!(build_record_link(&no_ref, &serde_json::json!({"leftKey":"a","rightKey":"b"})).is_err());
+    assert!(build_record_link(&ni, &serde_json::json!({ "rightKey": "company" })).is_err());
+}
+
+#[test]
+fn reconcile_builds_full_outer_join_report() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["m1".into()]);
+    ni.ports.insert("lookup".into(), vec!["r1".into()]);
+    let sql = build_reconcile(&ni, &serde_json::json!({ "keyColumns": ["id"], "measureColumns": ["amount"] })).unwrap();
+    assert!(
+        sql.contains("FULL OUTER JOIN \"__r\" ON \"__m\".\"id\" IS NOT DISTINCT FROM \"__r\".\"id\""),
+        "got: {}",
+        sql
+    );
+    assert!(sql.contains("'source_rows' AS metric"), "got: {}", sql);
+    assert!(
+        sql.contains("'amount_difference', CAST((SELECT SUM(\"amount\") FROM \"__m\") AS DOUBLE) - CAST((SELECT SUM(\"amount\") FROM \"__r\") AS DOUBLE)"),
+        "got: {}",
+        sql
+    );
+    let composite = build_reconcile(&ni, &serde_json::json!({ "keyColumns": ["region", "id"] })).unwrap();
+    assert!(
+        composite.contains("\"__m\".\"region\" IS NOT DISTINCT FROM \"__r\".\"region\" AND \"__m\".\"id\" IS NOT DISTINCT FROM \"__r\".\"id\""),
+        "got: {}",
+        composite
+    );
+    assert!(!composite.contains("_source_sum"), "no measures means no sum metrics: {}", composite);
+    assert!(build_reconcile(&ni, &serde_json::json!({ "measureColumns": ["amount"] })).is_err());
+}
+
+#[test]
+fn classify_builds_pii_report_sql() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let all = build_classify(&ni, &serde_json::json!({})).unwrap();
+    assert!(all.contains("SELECT COLUMNS(*)::VARCHAR FROM \"up\""), "got: {}", all);
+    assert!(all.contains("UNPIVOT INCLUDE NULLS (col_val FOR col_name IN (COLUMNS(*)))"), "got: {}", all);
+    assert!(all.contains("n_email / NULLIF(sample_count, 0) AS r_email"), "got: {}", all);
+    assert!(all.contains("GREATEST(COALESCE(r_email, 0)"), "got: {}", all);
+    assert!(all.contains("CASE WHEN best_rate < 0.8 THEN 'text'"), "got: {}", all);
+    assert!(all.contains("WHEN r_email = best_rate THEN 'email'"), "got: {}", all);
+    assert!(
+        all.contains("detected_type IN ('email', 'ssn', 'uuid', 'ipv4', 'credit_card', 'phone') AS is_pii"),
+        "got: {}",
+        all
+    );
+    let some = build_classify(&ni, &serde_json::json!({"columns": ["email", "ssn"]})).unwrap();
+    assert!(some.contains("CAST(\"email\" AS VARCHAR) AS \"email\""), "got: {}", some);
+    assert!(!some.contains("COLUMNS(*)::VARCHAR"), "explicit columns must not melt all: {}", some);
+    let clamp = build_classify(&ni, &serde_json::json!({"threshold": 5})).unwrap();
+    assert!(clamp.contains("CASE WHEN best_rate < 1 THEN 'text'"), "got: {}", clamp);
+    assert!(build_classify(&NodeInputs::default(), &serde_json::json!({})).is_err());
+}
+
+#[test]
+fn rename_from_mapping_file_json_csv() {
+    use std::io::Write;
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let dir = std::env::temp_dir().join(format!("duckle_rentest_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // JSON object form.
+    let jpath = dir.join("map.json");
+    std::fs::File::create(&jpath).unwrap().write_all(br#"{"a":"alpha","b":"beta"}"#).unwrap();
+    let sql = build_rename(&ni, &serde_json::json!({ "mappingFile": jpath.to_string_lossy() })).unwrap();
+    assert!(sql.contains("\"a\" AS \"alpha\"") && sql.contains("\"b\" AS \"beta\""), "got: {}", sql);
+    // CSV form with a header row (skipped).
+    let cpath = dir.join("map.csv");
+    std::fs::File::create(&cpath).unwrap().write_all(b"old,new\nx,ex\ny,why\n").unwrap();
+    let csv = build_rename(&ni, &serde_json::json!({ "mappingFile": cpath.to_string_lossy() })).unwrap();
+    assert!(csv.contains("\"x\" AS \"ex\"") && csv.contains("\"y\" AS \"why\""), "got: {}", csv);
+    // Missing file is a loud error.
+    assert!(build_rename(&ni, &serde_json::json!({ "mappingFile": "/no/such/file.json" })).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn csv_extra_read_options_and_filename() {
+    // #83: filename=true + a readOptions passthrough land in read_csv args.
+    let sql = build_csv_source(
+        &serde_json::json!({
+            "path": "data/*.csv",
+            "hasHeader": true,
+            "filename": true,
+            "readOptions": [{ "key": "union_by_name", "value": "true" }, { "key": "sample_size", "value": "-1" }]
+        }),
+        None,
+    );
+    assert!(sql.contains("filename=true"), "got: {}", sql);
+    assert!(sql.contains("union_by_name=true"), "got: {}", sql);
+    assert!(sql.contains("sample_size=-1"), "got: {}", sql);
+    // Default: neither appears.
+    let plain = build_csv_source(&serde_json::json!({ "path": "d.csv", "hasHeader": true }), None);
+    assert!(!plain.contains("filename="), "got: {}", plain);
+}
+
+#[test]
+fn csv_ignore_errors_and_null_padding() {
+    // #98: first-class toggles surface read_csv ignore_errors / null_padding.
+    let sql = build_csv_source(
+        &serde_json::json!({
+            "path": "d.csv",
+            "hasHeader": true,
+            "ignoreErrors": true,
+            "nullPadding": true
+        }),
+        None,
+    );
+    assert!(sql.contains("ignore_errors=true"), "got: {}", sql);
+    assert!(sql.contains("null_padding=true"), "got: {}", sql);
+    // Default off: neither appears.
+    let plain = build_csv_source(&serde_json::json!({ "path": "d.csv", "hasHeader": true }), None);
+    assert!(!plain.contains("ignore_errors"), "got: {}", plain);
+    assert!(!plain.contains("null_padding"), "got: {}", plain);
+}
+
+#[test]
+fn json_ignore_errors_and_format() {
+    // #101: skip malformed records instead of aborting + wire the Format dropdown.
+    let sql = build_json_source(&serde_json::json!({
+        "path": "d.json", "format": "jsonl", "ignoreErrors": true
+    }));
+    assert!(sql.contains("ignore_errors=true"), "got: {}", sql);
+    assert!(sql.contains("format='newline_delimited'"), "got: {}", sql);
+    // The recordsPath branch carries the same args.
+    let nested = build_json_source(&serde_json::json!({
+        "path": "d.json", "recordsPath": "data", "ignoreErrors": true
+    }));
+    assert!(nested.contains("ignore_errors=true"), "got: {}", nested);
+    // Default off: neither appears, auto format omitted.
+    let plain = build_json_source(&serde_json::json!({ "path": "d.json" }));
+    assert!(!plain.contains("ignore_errors"), "got: {}", plain);
+    assert!(!plain.contains("format="), "got: {}", plain);
+}
+
+#[test]
+fn custom_sql_raw_mode_skips_input_wrapper() {
+    // #102 item 3: rawSql=true emits the user SQL verbatim so a leading WITH
+    // is not broken by the "WITH input AS (...)" wrapper.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let raw = build_custom_sql(
+        &ni,
+        &serde_json::json!({
+            "sql": "WITH c AS (SELECT * FROM \"up\") SELECT * FROM c",
+            "rawSql": true
+        }),
+    )
+    .unwrap();
+    assert!(!raw.contains("WITH input AS"), "raw mode must not wrap: {}", raw);
+    assert!(raw.starts_with("WITH c AS"), "raw SQL emitted verbatim: {}", raw);
+    // Default (no rawSql) still wraps the upstream as `input`.
+    let wrapped = build_custom_sql(&ni, &serde_json::json!({ "sql": "SELECT * FROM input" })).unwrap();
+    assert!(wrapped.contains("WITH input AS (SELECT * FROM \"up\")"), "default wraps: {}", wrapped);
+}
+
+#[test]
+fn contract_builds_gated_passthrough() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_contract(
+        &ni,
+        &serde_json::json!({ "rules": [
+            { "column": "email", "check": "not_null" },
+            { "column": "amt",   "check": "in_range", "args": { "min": 0, "max": 10 } },
+            { "column": "id",    "check": "unique" }
+        ]}),
+    )
+    .unwrap();
+    assert!(sql.contains("SELECT u.* FROM \"up\" u"), "got: {}", sql);
+    assert!(sql.contains("WITH _duckle_contract AS MATERIALIZED"), "got: {}", sql);
+    assert!(sql.contains("error('Data contract violated: '"), "got: {}", sql);
+    assert!(
+        sql.contains("COUNT(*) FILTER (WHERE NOT (\"amt\" BETWEEN 0 AND 10)) AS BIGINT) AS f1"),
+        "got: {}",
+        sql
+    );
+    assert!(sql.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", sql);
+    assert!(sql.contains("(f0 + f1 + f2) > 0"), "got: {}", sql);
+    assert!(build_contract(&ni, &serde_json::json!({ "rules": [] })).is_err());
+    assert!(build_contract(
+        &NodeInputs::default(),
+        &serde_json::json!({ "rules": [{ "column": "x", "check": "not_null" }] })
+    )
+    .is_err());
+}
+
+#[test]
+fn surrogate_key_builds_hash_and_sequence() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let hash = build_surrogate_key(&ni, &serde_json::json!({"mode":"hash","keyColumns":["company","country"]})).unwrap();
+    assert!(
+        hash.contains("md5(concat_ws('||', CAST(\"company\" AS VARCHAR), CAST(\"country\" AS VARCHAR))) AS \"surrogate_key\""),
+        "got: {}",
+        hash
+    );
+    let sep = build_surrogate_key(
+        &ni,
+        &serde_json::json!({"mode":"hash","keyColumns":["id"],"separator":"-","outputColumn":"dim_key"}),
+    )
+    .unwrap();
+    assert!(sep.contains("md5(concat_ws('-', CAST(\"id\" AS VARCHAR))) AS \"dim_key\""), "got: {}", sep);
+    let seq = build_surrogate_key(&ni, &serde_json::json!({"mode":"sequence","keyColumns":["company","country"]})).unwrap();
+    assert!(
+        seq.contains("row_number() OVER (ORDER BY \"company\", \"country\") AS \"surrogate_key\""),
+        "got: {}",
+        seq
+    );
+    assert!(build_surrogate_key(&ni, &serde_json::json!({"mode":"hash"})).is_err());
+    assert!(build_surrogate_key(&ni, &serde_json::json!({"mode":"bogus","keyColumns":["id"]})).is_err());
+}
+
+#[test]
+fn bucketize_labeled_bounds_mode() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    // bounds (array) -> labeled half-open ranges + NULL guard.
+    let sql = build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":[18,40,65]})).unwrap();
+    assert!(sql.contains("CASE WHEN \"age\" IS NULL THEN NULL"), "got: {}", sql);
+    assert!(sql.contains("< 18 THEN '<18'"), "got: {}", sql);
+    assert!(sql.contains("< 40 THEN '18-40'"), "got: {}", sql);
+    assert!(sql.contains("ELSE '>=65'"), "got: {}", sql);
+    // comma-string bounds + custom labels.
+    let lab = build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":"18,65","labels":["minor","adult","senior"]})).unwrap();
+    assert!(
+        lab.contains("THEN 'minor'") && lab.contains("THEN 'adult'") && lab.contains("ELSE 'senior'"),
+        "got: {}",
+        lab
+    );
+    // wrong label count is a loud error; without bounds the equal-width path still needs low/high.
+    assert!(build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":[18],"labels":["a","b","c"]})).is_err());
+    let eqw = build_bucketize(&ni, &serde_json::json!({"column":"age","low":0,"high":100,"buckets":4})).unwrap();
+    assert!(eqw.contains("floor(") && !eqw.contains("'<"), "equal-width path unchanged: {}", eqw);
+}
+
+#[test]
+fn scd3_keeps_previous_value_in_sibling_column() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["c1".into()]);
+    ni.ports.insert("lookup".into(), vec!["p1".into()]);
+    let props = serde_json::json!({ "keyColumns": ["id"], "trackColumns": ["v"], "effectiveDateColumn": "effective_date" });
+    let sql = build_scd3(&ni, &props).unwrap();
+    assert_eq!(
+        sql, "SELECT c.*, p.\"v\" AS \"previous_v\", CURRENT_TIMESTAMP AS \"effective_date\" FROM \"c1\" c LEFT JOIN \"p1\" p ON p.\"id\" = c.\"id\"",
+        "got: {}",
+        sql
+    );
+    let multi = build_scd3(&ni, &serde_json::json!({ "keyColumns": ["region", "id"], "trackColumns": ["name", "score"] })).unwrap();
+    assert!(
+        multi.contains("p.\"name\" AS \"previous_name\"") && multi.contains("p.\"score\" AS \"previous_score\""),
+        "got: {}",
+        multi
+    );
+    assert!(multi.contains("p.\"region\" = c.\"region\" AND p.\"id\" = c.\"id\""), "got: {}", multi);
+    assert!(!multi.contains("CURRENT_TIMESTAMP"), "no effective date when unset: {}", multi);
+    assert!(build_scd3(&ni, &serde_json::json!({ "trackColumns": ["v"] })).is_err());
+    let mut no_prev = NodeInputs::default();
+    no_prev.ports.insert("main".into(), vec!["c1".into()]);
+    assert!(build_scd3(&no_prev, &props).is_err());
+}
+
+#[test]
+fn qa_outlier_emits_iqr_and_zscore_pass_reject_sql() {
+    let mk = || {
         let mut ni = NodeInputs::default();
         ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_take(&ni, &serde_json::json!({"count": 5, "orderBy": ["id"]}), TakeKind::Offset).unwrap();
-        assert!(
-            sql.contains("ORDER BY \"id\" OFFSET 5"),
-            "skip with orderBy should sort before offset, got: {}",
-            sql
-        );
-    }
+        ni
+    };
+    let iqr_pass = build_outlier(&mk(), &serde_json::json!({"column": "amount", "method": "iqr"}), false).unwrap();
+    assert!(iqr_pass.contains("quantile_cont") && iqr_pass.contains("1.5"), "got: {}", iqr_pass);
+    assert!(iqr_pass.contains("\"amount\" IS NULL"), "got: {}", iqr_pass);
+    assert!(iqr_pass.contains("EXCLUDE (__dq_q1, __dq_q3)"), "got: {}", iqr_pass);
+    assert!(iqr_pass.contains("COALESCE") && !iqr_pass.contains("NOT COALESCE"), "got: {}", iqr_pass);
+    let iqr_rej = build_outlier(&mk(), &serde_json::json!({"column": "amount", "method": "iqr"}), true).unwrap();
+    assert!(iqr_rej.contains("NOT COALESCE"), "got: {}", iqr_rej);
+    let z_pass = build_outlier(&mk(), &serde_json::json!({"column": "amount", "method": "zscore"}), false).unwrap();
+    assert!(
+        z_pass.contains("stddev_pop") && z_pass.contains("__dq_sd = 0") && z_pass.contains("<= 3"),
+        "got: {}",
+        z_pass
+    );
+    assert!(build_outlier(&mk(), &serde_json::json!({"method": "iqr"}), false).is_err());
+    assert!(build_outlier(&mk(), &serde_json::json!({"column": "amount", "sensitivity": 0}), false).is_err());
+}
 
-    #[test]
-    fn distinct_orderby_prop_replaces_order_by_all() {
-        // audit B10: keyed DISTINCT defaults to ORDER BY ALL (deterministic
-        // but a full sort, >100x slower). An `orderBy` prop sorts only the
-        // keys + tiebreak columns; default is unchanged.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let default_sql = build_distinct(&ni, &serde_json::json!({"columns": ["status"]})).unwrap();
-        assert!(
-            default_sql.contains("ORDER BY ALL"),
-            "default keyed distinct must keep ORDER BY ALL, got: {}",
-            default_sql
-        );
-        let fast_sql = build_distinct(
-            &ni,
-            &serde_json::json!({"columns": ["status"], "orderBy": ["amount"]}),
-        )
-        .unwrap();
-        assert!(
-            fast_sql.contains("ORDER BY \"status\", \"amount\"") && !fast_sql.contains("ORDER BY ALL"),
-            "orderBy prop must sort keys+tiebreak, not ALL, got: {}",
-            fast_sql
-        );
-        assert!(
-            fast_sql.trim_end().ends_with(", *"),
-            "orderBy prop must append a trailing `, *` all-column tiebreaker for a deterministic survivor, got: {}",
-            fast_sql
-        );
-    }
+#[test]
+fn sessionize_builds_gap_window_sql() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_sessionize(&ni, &serde_json::json!({"partitionBy": ["user_id"], "orderBy": "ts", "gap": 30})).unwrap();
+    assert!(sql.starts_with("WITH __flag AS ("), "got: {}", sql);
+    assert!(
+        sql.contains("epoch(CAST(\"ts\" AS TIMESTAMP)) - epoch(CAST(lag(\"ts\") OVER w AS TIMESTAMP))) > 1800"),
+        "got: {}",
+        sql
+    );
+    assert!(sql.contains("WINDOW w AS (PARTITION BY \"user_id\" ORDER BY \"ts\")"), "got: {}", sql);
+    assert!(
+        sql.contains("SUM(__new_sess) OVER (PARTITION BY \"user_id\" ORDER BY \"ts\") AS \"session_id\""),
+        "got: {}",
+        sql
+    );
+    assert!(
+        sql.contains("ROW_NUMBER() OVER (PARTITION BY \"user_id\", \"session_id\" ORDER BY \"ts\") AS \"session_seq\""),
+        "got: {}",
+        sql
+    );
+    let hrs = build_sessionize(&ni, &serde_json::json!({ "orderBy": "ts", "gap": 1, "gapUnit": "hours", "emitSeq": false })).unwrap();
+    assert!(
+        hrs.contains("> 3600") && hrs.ends_with("SELECT * FROM __sid") && !hrs.contains("session_seq"),
+        "got: {}",
+        hrs
+    );
+    assert!(build_sessionize(&ni, &serde_json::json!({ "gap": 5 })).is_err());
+    assert!(build_sessionize(&ni, &serde_json::json!({ "orderBy": "ts", "gap": 0 })).is_err());
+    assert!(build_sessionize(&ni, &serde_json::json!({ "orderBy": "ts", "gap": 5, "gapUnit": "weeks" })).is_err());
+}
 
-    #[test]
-    fn setop_realigns_columns_by_name_without_invalid_syntax() {
-        // INTERSECT/EXCEPT BY NAME is a parser error in DuckDB; realign later
-        // legs to the first leg's columns via a 0-row UNION ALL BY NAME template
-        // and join with the plain set operator.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["a".into(), "b".into()]);
-        let sql = build_setop(&ni, "INTERSECT").unwrap();
-        assert!(!sql.contains("INTERSECT BY NAME"), "must not emit invalid INTERSECT BY NAME, got: {}", sql);
-        assert!(sql.contains(" INTERSECT "), "must join legs with plain INTERSECT, got: {}", sql);
-        assert!(sql.contains("WHERE false UNION ALL BY NAME"), "must realign later legs by name, got: {}", sql);
-        let ex = build_setop(&ni, "EXCEPT").unwrap();
-        assert!(ex.contains(" EXCEPT ") && !ex.contains("EXCEPT BY NAME"), "got: {}", ex);
-    }
+#[test]
+fn freshness_builds_gate_and_report() {
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let gate = build_freshness(&ni, &serde_json::json!({ "column": "ts", "maxAge": 24, "maxAgeUnit": "hours" })).unwrap();
+    assert!(
+        gate.contains("WITH _duckle_freshness AS MATERIALIZED") && gate.contains("SELECT u.* FROM \"up\" u"),
+        "got: {}",
+        gate
+    );
+    assert!(
+        gate.contains("date_diff('hour', MAX(CAST(\"ts\" AS TIMESTAMP)), CURRENT_TIMESTAMP) <= 24 THEN 'ok'"),
+        "got: {}",
+        gate
+    );
+    assert!(gate.contains("error('Data is stale: '"), "got: {}", gate);
+    let report = build_freshness(&ni, &serde_json::json!({ "column": "ts", "maxAge": 2, "maxAgeUnit": "days", "mode": "report" })).unwrap();
+    assert!(
+        report.contains("date_diff('day', MAX(CAST(\"ts\" AS TIMESTAMP)), CURRENT_TIMESTAMP) AS age_days"),
+        "got: {}",
+        report
+    );
+    assert!(
+        report.contains("2 AS threshold_days") && report.contains("<= 2) AS is_fresh"),
+        "got: {}",
+        report
+    );
+    assert!(build_freshness(&ni, &serde_json::json!({ "maxAge": 1 })).is_err());
+    assert!(build_freshness(&ni, &serde_json::json!({ "column": "ts" })).is_err());
+    assert!(build_freshness(&ni, &serde_json::json!({ "column": "ts", "maxAge": 1, "mode": "bogus" })).is_err());
+}
 
-    #[test]
-    fn cast_per_column_format_uses_strptime() {
-        // #10: each cast entry can carry its own strptime format so multiple
-        // columns with different date formats parse independently.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_cast(
-            &ni,
-            &serde_json::json!({"casts": [
-                {"column": "d1", "targetType": "date", "format": "%d/%m/%Y"},
-                {"column": "ts", "targetType": "timestamp", "format": "%Y.%m.%d %H:%M:%S"},
-                {"column": "amount", "targetType": "double"}
-            ]}),
-        )
-        .unwrap();
-        assert!(sql.contains("try_strptime(\"d1\", '%d/%m/%Y')::DATE AS \"d1\""), "got: {}", sql);
-        assert!(
-            sql.contains("try_strptime(\"ts\", '%Y.%m.%d %H:%M:%S')::TIMESTAMP AS \"ts\""),
-            "got: {}",
-            sql
-        );
-        assert!(sql.contains("TRY_CAST(\"amount\""), "non-date cast keeps TRY_CAST, got: {}", sql);
-        // A date cast WITHOUT a format still uses TRY_CAST (no regression).
-        let no_fmt =
-            build_cast(&ni, &serde_json::json!({"casts":[{"column":"d","targetType":"date"}]})).unwrap();
-        assert!(no_fmt.contains("TRY_CAST(\"d\" AS DATE)"), "got: {}", no_fmt);
-    }
+#[test]
+fn attach_prelude_loads_spatial_for_sql_template() {
+    // #84: spatial loads on opt-in OR when the SQL references an ST_ function,
+    // but not for unrelated SQL (and `list_` must not false-fire).
+    let opt = attach_prelude("code.sql", &serde_json::json!({ "loadSpatial": true }));
+    assert!(opt.contains("LOAD spatial"), "opt-in: {}", opt);
+    let auto = attach_prelude("code.sqltemplate", &serde_json::json!({ "sql": "SELECT ST_Point(lon,lat) FROM input" }));
+    assert!(auto.contains("LOAD spatial"), "auto-detect: {}", auto);
+    let none = attach_prelude("code.sql", &serde_json::json!({ "sql": "SELECT list_value(a), first_name FROM input" }));
+    assert!(!none.contains("spatial"), "must not false-fire on list_/first_: {}", none);
+}
 
-    #[test]
-    fn mask_builds_replace_per_mode() {
-        // qa.mask: SELECT * REPLACE with a per-column masking expression.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_mask(
-            &ni,
-            &serde_json::json!({"masks":[
-                {"column":"ssn","mode":"partial","showLast":4},
-                {"column":"email","mode":"hash","salt":"s7"},
-                {"column":"name","mode":"null"},
-                {"column":"note","mode":"constant","value":"X"}
-            ]}),
-        )
-        .unwrap();
-        assert!(sql.starts_with("SELECT * REPLACE ("), "got: {}", sql);
-        assert!(sql.contains("right(CAST(\"ssn\" AS VARCHAR), 4)"), "got: {}", sql);
-        assert!(sql.contains("md5('s7' || CAST(\"email\" AS VARCHAR)) AS \"email\""), "got: {}", sql);
-        assert!(sql.contains("NULL AS \"name\""), "got: {}", sql);
-        assert!(sql.contains("'X' AS \"note\""), "got: {}", sql);
-        assert!(sql.contains("FROM \"up\""), "got: {}", sql);
-        // hash without salt is unsalted md5; unknown mode is a loud error.
-        let nosalt = build_mask(&ni, &serde_json::json!({"column":"x","mode":"hash"})).unwrap();
-        assert!(nosalt.contains("md5(CAST(\"x\" AS VARCHAR))"), "got: {}", nosalt);
-        assert!(build_mask(&ni, &serde_json::json!({"column":"x","mode":"bogus"})).is_err());
-    }
+#[test]
+fn attach_prelude_loads_user_extensions_for_sql_template() {
+    // #113: loadExtensions installs + loads each named extension. Accepts a
+    // comma/space-separated string or a JSON array; names are sanitized so
+    // they can never inject SQL; spatial is not loaded twice.
+    let s = attach_prelude("code.sql", &serde_json::json!({ "loadExtensions": "h3, a5" }));
+    assert!(s.contains("INSTALL h3; LOAD h3;"), "h3: {}", s);
+    assert!(s.contains("INSTALL a5; LOAD a5;"), "a5: {}", s);
+    let arr = attach_prelude("code.sqltemplate", &serde_json::json!({ "loadExtensions": ["h3", "h3", "INET!"] }));
+    // Dedup + sanitize: "INET!" -> "inet", duplicate h3 collapsed.
+    assert_eq!(arr.matches("LOAD h3;").count(), 1, "dedup: {}", arr);
+    assert!(arr.contains("INSTALL inet; LOAD inet;"), "sanitized: {}", arr);
+    // spatial requested via both loadSpatial and loadExtensions -> once only.
+    let both = attach_prelude("code.sql", &serde_json::json!({ "loadSpatial": true, "loadExtensions": "spatial,h3" }));
+    assert_eq!(both.matches("LOAD spatial;").count(), 1, "spatial once: {}", both);
+    assert!(both.contains("LOAD h3;"), "h3 alongside spatial: {}", both);
+}
 
-    #[test]
-    fn survivor_builds_golden_record_groupby() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let freq = build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"most_frequent"})).unwrap();
-        assert!(freq.contains("mode(COLUMNS(* EXCLUDE (\"id\")))"), "got: {}", freq);
-        assert!(freq.contains("GROUP BY \"id\""), "got: {}", freq);
-        let recent = build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"most_recent","recencyColumn":"updated_at"})).unwrap();
-        assert!(recent.contains("arg_max(COLUMNS(* EXCLUDE (\"id\")), \"updated_at\")"), "got: {}", recent);
-        // most_recent without a recency column is a loud error; unknown rule too.
-        assert!(build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"most_recent"})).is_err());
-        assert!(build_survivor(&ni, &serde_json::json!({"groupBy":["id"],"rule":"bogus"})).is_err());
-        assert!(build_survivor(&ni, &serde_json::json!({"rule":"max"})).is_err());
-    }
-
-    #[test]
-    fn matchgroup_builds_recursive_cluster_sql() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_matchgroup(&ni, &serde_json::json!({})).unwrap();
-        assert!(sql.starts_with("WITH RECURSIVE"), "got: {}", sql);
-        assert!(sql.contains("CAST(\"id_a\" AS VARCHAR) AS s, CAST(\"id_b\" AS VARCHAR) AS t"), "got: {}", sql);
-        assert!(sql.contains("SELECT CAST(\"id_b\" AS VARCHAR), CAST(\"id_a\" AS VARCHAR)"), "got: {}", sql);
-        assert!(sql.contains("SELECT id, MIN(rep) AS cluster_id FROM reach GROUP BY id"), "got: {}", sql);
-        assert!(sql.contains("FROM \"up\""), "got: {}", sql);
-        let custom = build_matchgroup(&ni, &serde_json::json!({"leftKey":"left rec","rightKey":"right rec"})).unwrap();
-        assert!(custom.contains("CAST(\"left rec\" AS VARCHAR) AS s, CAST(\"right rec\" AS VARCHAR) AS t"), "got: {}", custom);
-        assert!(build_matchgroup(&NodeInputs::default(), &serde_json::json!({})).is_err());
-    }
-
-    #[test]
-    fn sample_adv_builds_using_sample_clause() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let seeded = build_sample_adv(&ni, &serde_json::json!({ "percent": 10, "method": "reservoir", "seed": 42 })).unwrap();
-        assert_eq!(seeded, "SELECT * FROM \"up\" USING SAMPLE 10 PERCENT (reservoir, 42)", "got: {}", seeded);
-        let no_seed = build_sample_adv(&ni, &serde_json::json!({ "percent": 5 })).unwrap();
-        assert_eq!(no_seed, "SELECT * FROM \"up\" USING SAMPLE 5 PERCENT (reservoir)", "got: {}", no_seed);
-        assert!(build_sample_adv(&ni, &serde_json::json!({})).is_err());
-        assert!(build_sample_adv(&ni, &serde_json::json!({ "percent": 150 })).is_err());
-        assert!(build_sample_adv(&ni, &serde_json::json!({ "percent": 10, "method": "bogus" })).is_err());
-        assert!(build_sample_adv(&ni, &serde_json::json!({ "percent": "10; DROP TABLE x" })).is_err());
-    }
-
-    #[test]
-    fn expect_builds_scorecard_per_rule() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_expect(
-            &ni,
-            &serde_json::json!({ "rules": [
-                { "column": "email", "check": "not_null" },
-                { "column": "amt",   "check": "in_range", "args": { "min": 0, "max": 10 } },
-                { "column": "status","check": "in_set",   "args": ["paid", "pending"] },
-                { "column": "code",  "check": "regex",    "args": "^[A-Z]+$" },
-                { "column": "qty",   "check": "non_negative" },
-                { "column": "id",    "check": "unique" }
-            ]}),
-        )
-        .unwrap();
-        assert!(sql.contains("AS pass_rate"), "got: {}", sql);
-        assert!(sql.contains("(failed = 0) AS passed"), "got: {}", sql);
-        assert!(sql.contains("COUNT(*) FILTER (WHERE NOT (\"email\" IS NOT NULL))"), "got: {}", sql);
-        assert!(sql.contains("COUNT(*) FILTER (WHERE NOT (\"amt\" BETWEEN 0 AND 10))"), "got: {}", sql);
-        assert!(sql.contains("\"status\" IN ('paid', 'pending')"), "got: {}", sql);
-        assert!(sql.contains("regexp_full_match(CAST(\"code\" AS VARCHAR), '^[A-Z]+$')"), "got: {}", sql);
-        assert!(sql.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", sql);
-        assert!(sql.contains("'in_set(status, 2 values)' AS expectation"), "got: {}", sql);
-        assert!(sql.contains("FROM \"up\""), "got: {}", sql);
-        assert!(build_expect(&ni, &serde_json::json!({ "rules": [] })).is_err());
-        assert!(build_expect(&ni, &serde_json::json!({ "rules": [{ "column": "x", "check": "bogus" }] })).is_err());
-        let kv = build_expect(&ni, &serde_json::json!({ "rules": { "amt": "in_range:0,10", "id": "unique" } })).unwrap();
-        // The key-value form parses 0,10 as floats, so the SQL is BETWEEN 0.0 AND 10.0.
-        assert!(kv.contains("\"amt\" BETWEEN 0.0 AND 10.0"), "got: {}", kv);
-        assert!(kv.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", kv);
-    }
-
-    #[test]
-    fn refintegrity_builds_semi_and_anti_join() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["m1".into()]);
-        ni.ports.insert("lookup".into(), vec!["r1".into()]);
-        let props = serde_json::json!({"leftKey": "cust_id", "rightKey": "id"});
-        let pass = build_refintegrity(&ni, &props, false).unwrap();
-        assert_eq!(
-            pass,
-            "SELECT \"m1\".* FROM \"m1\" WHERE EXISTS (SELECT 1 FROM \"r1\" WHERE \"r1\".\"id\" = \"m1\".\"cust_id\")",
-            "got: {}",
-            pass
-        );
-        let rej = build_refintegrity(&ni, &props, true).unwrap();
-        assert_eq!(
-            rej,
-            "SELECT \"m1\".* FROM \"m1\" WHERE NOT EXISTS (SELECT 1 FROM \"r1\" WHERE \"r1\".\"id\" = \"m1\".\"cust_id\")",
-            "got: {}",
-            rej
-        );
-        let mut no_ref = NodeInputs::default();
-        no_ref.ports.insert("main".into(), vec!["m1".into()]);
-        assert!(build_refintegrity(&no_ref, &props, false).is_err());
-        assert!(build_refintegrity(&ni, &serde_json::json!({"rightKey": "id"}), false).is_err());
-        assert!(build_refintegrity(&ni, &serde_json::json!({"leftKey": "cust_id"}), false).is_err());
-    }
-
-    #[test]
-    fn profile_adv_builds_metric_value_long_form() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_profile_adv(&ni, &serde_json::json!({ "column": "email", "topN": 3 })).unwrap();
-        assert!(sql.contains("SELECT CAST(\"email\" AS VARCHAR) AS v FROM \"up\""), "got: {}", sql);
-        assert!(sql.contains("approx_count_distinct(v) AS distinct_n"), "got: {}", sql);
-        assert!(sql.contains("regexp_full_match(v, '^-?[0-9]+$')"), "int pattern: {}", sql);
-        assert!(sql.contains("GROUP BY v ORDER BY freq DESC, v LIMIT 3"), "top-n: {}", sql);
-        assert!(sql.contains("SELECT \"metric\", \"value\", \"count\", \"pct\" FROM ("), "shape: {}", sql);
-        let def = build_profile_adv(&ni, &serde_json::json!({ "column": "x" })).unwrap();
-        assert!(def.contains("LIMIT 10"), "default top-n: {}", def);
-        assert!(build_profile_adv(&ni, &serde_json::json!({ "column": "x", "topN": 99999 })).unwrap().contains("LIMIT 1000"));
-        assert!(build_profile_adv(&ni, &serde_json::json!({})).is_err());
-        assert!(build_profile_adv(&NodeInputs::default(), &serde_json::json!({ "column": "x" })).is_err());
-    }
-
-    #[test]
-    fn link_builds_cross_join_over_two_inputs() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["m1".into()]);
-        ni.ports.insert("lookup".into(), vec!["r1".into()]);
-        let sql = build_record_link(&ni, &serde_json::json!({ "leftKey": "name", "rightKey": "company" })).unwrap();
-        assert!(sql.contains("FROM \"m1\"") && sql.contains("FROM \"r1\""), "got: {}", sql);
-        assert!(sql.contains("CROSS JOIN"), "got: {}", sql);
-        assert!(sql.contains("jaro_winkler_similarity(a._key, b._key)"), "got: {}", sql);
-        assert!(sql.contains(">= 0.85"), "got: {}", sql);
-        assert!(sql.contains("a._show AS left_key") && sql.contains("b._show AS right_key"), "got: {}", sql);
-        let lev = build_record_link(&ni, &serde_json::json!({"leftColumns":["first","last"],"rightColumns":["fname","lname"],"algorithm":"levenshtein","threshold":0.7})).unwrap();
-        assert!(lev.contains("levenshtein(a._key, b._key)"), "got: {}", lev);
-        assert!(lev.contains("concat_ws(' ', \"first\", \"last\")"), "got: {}", lev);
-        let mut no_ref = NodeInputs::default();
-        no_ref.ports.insert("main".into(), vec!["m1".into()]);
-        assert!(build_record_link(&no_ref, &serde_json::json!({"leftKey":"a","rightKey":"b"})).is_err());
-        assert!(build_record_link(&ni, &serde_json::json!({ "rightKey": "company" })).is_err());
-    }
-
-    #[test]
-    fn reconcile_builds_full_outer_join_report() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["m1".into()]);
-        ni.ports.insert("lookup".into(), vec!["r1".into()]);
-        let sql = build_reconcile(&ni, &serde_json::json!({ "keyColumns": ["id"], "measureColumns": ["amount"] })).unwrap();
-        assert!(sql.contains("FULL OUTER JOIN \"__r\" ON \"__m\".\"id\" IS NOT DISTINCT FROM \"__r\".\"id\""), "got: {}", sql);
-        assert!(sql.contains("'source_rows' AS metric"), "got: {}", sql);
-        assert!(sql.contains("'amount_difference', CAST((SELECT SUM(\"amount\") FROM \"__m\") AS DOUBLE) - CAST((SELECT SUM(\"amount\") FROM \"__r\") AS DOUBLE)"), "got: {}", sql);
-        let composite = build_reconcile(&ni, &serde_json::json!({ "keyColumns": ["region", "id"] })).unwrap();
-        assert!(composite.contains("\"__m\".\"region\" IS NOT DISTINCT FROM \"__r\".\"region\" AND \"__m\".\"id\" IS NOT DISTINCT FROM \"__r\".\"id\""), "got: {}", composite);
-        assert!(!composite.contains("_source_sum"), "no measures means no sum metrics: {}", composite);
-        assert!(build_reconcile(&ni, &serde_json::json!({ "measureColumns": ["amount"] })).is_err());
-    }
-
-    #[test]
-    fn classify_builds_pii_report_sql() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let all = build_classify(&ni, &serde_json::json!({})).unwrap();
-        assert!(all.contains("SELECT COLUMNS(*)::VARCHAR FROM \"up\""), "got: {}", all);
-        assert!(all.contains("UNPIVOT INCLUDE NULLS (col_val FOR col_name IN (COLUMNS(*)))"), "got: {}", all);
-        assert!(all.contains("n_email / NULLIF(sample_count, 0) AS r_email"), "got: {}", all);
-        assert!(all.contains("GREATEST(COALESCE(r_email, 0)"), "got: {}", all);
-        assert!(all.contains("CASE WHEN best_rate < 0.8 THEN 'text'"), "got: {}", all);
-        assert!(all.contains("WHEN r_email = best_rate THEN 'email'"), "got: {}", all);
-        assert!(all.contains("detected_type IN ('email', 'ssn', 'uuid', 'ipv4', 'credit_card', 'phone') AS is_pii"), "got: {}", all);
-        let some = build_classify(&ni, &serde_json::json!({"columns": ["email", "ssn"]})).unwrap();
-        assert!(some.contains("CAST(\"email\" AS VARCHAR) AS \"email\""), "got: {}", some);
-        assert!(!some.contains("COLUMNS(*)::VARCHAR"), "explicit columns must not melt all: {}", some);
-        let clamp = build_classify(&ni, &serde_json::json!({"threshold": 5})).unwrap();
-        assert!(clamp.contains("CASE WHEN best_rate < 1 THEN 'text'"), "got: {}", clamp);
-        assert!(build_classify(&NodeInputs::default(), &serde_json::json!({})).is_err());
-    }
-
-    #[test]
-    fn rename_from_mapping_file_json_csv() {
-        use std::io::Write;
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let dir = std::env::temp_dir().join(format!("duckle_rentest_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        // JSON object form.
-        let jpath = dir.join("map.json");
-        std::fs::File::create(&jpath).unwrap().write_all(br#"{"a":"alpha","b":"beta"}"#).unwrap();
-        let sql = build_rename(&ni, &serde_json::json!({ "mappingFile": jpath.to_string_lossy() })).unwrap();
-        assert!(sql.contains("\"a\" AS \"alpha\"") && sql.contains("\"b\" AS \"beta\""), "got: {}", sql);
-        // CSV form with a header row (skipped).
-        let cpath = dir.join("map.csv");
-        std::fs::File::create(&cpath).unwrap().write_all(b"old,new\nx,ex\ny,why\n").unwrap();
-        let csv = build_rename(&ni, &serde_json::json!({ "mappingFile": cpath.to_string_lossy() })).unwrap();
-        assert!(csv.contains("\"x\" AS \"ex\"") && csv.contains("\"y\" AS \"why\""), "got: {}", csv);
-        // Missing file is a loud error.
-        assert!(build_rename(&ni, &serde_json::json!({ "mappingFile": "/no/such/file.json" })).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn csv_extra_read_options_and_filename() {
-        // #83: filename=true + a readOptions passthrough land in read_csv args.
-        let sql = build_csv_source(
-            &serde_json::json!({
-                "path": "data/*.csv",
-                "hasHeader": true,
-                "filename": true,
-                "readOptions": [{ "key": "union_by_name", "value": "true" }, { "key": "sample_size", "value": "-1" }]
-            }),
-            None,
-        );
-        assert!(sql.contains("filename=true"), "got: {}", sql);
-        assert!(sql.contains("union_by_name=true"), "got: {}", sql);
-        assert!(sql.contains("sample_size=-1"), "got: {}", sql);
-        // Default: neither appears.
-        let plain = build_csv_source(&serde_json::json!({ "path": "d.csv", "hasHeader": true }), None);
-        assert!(!plain.contains("filename="), "got: {}", plain);
-    }
-
-    #[test]
-    fn csv_ignore_errors_and_null_padding() {
-        // #98: first-class toggles surface read_csv ignore_errors / null_padding.
-        let sql = build_csv_source(
-            &serde_json::json!({
-                "path": "d.csv",
-                "hasHeader": true,
-                "ignoreErrors": true,
-                "nullPadding": true
-            }),
-            None,
-        );
-        assert!(sql.contains("ignore_errors=true"), "got: {}", sql);
-        assert!(sql.contains("null_padding=true"), "got: {}", sql);
-        // Default off: neither appears.
-        let plain = build_csv_source(&serde_json::json!({ "path": "d.csv", "hasHeader": true }), None);
-        assert!(!plain.contains("ignore_errors"), "got: {}", plain);
-        assert!(!plain.contains("null_padding"), "got: {}", plain);
-    }
-
-    #[test]
-    fn json_ignore_errors_and_format() {
-        // #101: skip malformed records instead of aborting + wire the Format dropdown.
-        let sql = build_json_source(&serde_json::json!({
-            "path": "d.json", "format": "jsonl", "ignoreErrors": true
-        }));
-        assert!(sql.contains("ignore_errors=true"), "got: {}", sql);
-        assert!(sql.contains("format='newline_delimited'"), "got: {}", sql);
-        // The recordsPath branch carries the same args.
-        let nested = build_json_source(&serde_json::json!({
-            "path": "d.json", "recordsPath": "data", "ignoreErrors": true
-        }));
-        assert!(nested.contains("ignore_errors=true"), "got: {}", nested);
-        // Default off: neither appears, auto format omitted.
-        let plain = build_json_source(&serde_json::json!({ "path": "d.json" }));
-        assert!(!plain.contains("ignore_errors"), "got: {}", plain);
-        assert!(!plain.contains("format="), "got: {}", plain);
-    }
-
-    #[test]
-    fn custom_sql_raw_mode_skips_input_wrapper() {
-        // #102 item 3: rawSql=true emits the user SQL verbatim so a leading WITH
-        // is not broken by the "WITH input AS (...)" wrapper.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let raw = build_custom_sql(
-            &ni,
-            &serde_json::json!({
-                "sql": "WITH c AS (SELECT * FROM \"up\") SELECT * FROM c",
-                "rawSql": true
-            }),
-        )
-        .unwrap();
-        assert!(!raw.contains("WITH input AS"), "raw mode must not wrap: {}", raw);
-        assert!(raw.starts_with("WITH c AS"), "raw SQL emitted verbatim: {}", raw);
-        // Default (no rawSql) still wraps the upstream as `input`.
-        let wrapped =
-            build_custom_sql(&ni, &serde_json::json!({ "sql": "SELECT * FROM input" })).unwrap();
-        assert!(
-            wrapped.contains("WITH input AS (SELECT * FROM \"up\")"),
-            "default wraps: {}",
-            wrapped
-        );
-    }
-
-    #[test]
-    fn contract_builds_gated_passthrough() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_contract(
-            &ni,
-            &serde_json::json!({ "rules": [
-                { "column": "email", "check": "not_null" },
-                { "column": "amt",   "check": "in_range", "args": { "min": 0, "max": 10 } },
-                { "column": "id",    "check": "unique" }
-            ]}),
-        )
-        .unwrap();
-        assert!(sql.contains("SELECT u.* FROM \"up\" u"), "got: {}", sql);
-        assert!(sql.contains("WITH _duckle_contract AS MATERIALIZED"), "got: {}", sql);
-        assert!(sql.contains("error('Data contract violated: '"), "got: {}", sql);
-        assert!(sql.contains("COUNT(*) FILTER (WHERE NOT (\"amt\" BETWEEN 0 AND 10)) AS BIGINT) AS f1"), "got: {}", sql);
-        assert!(sql.contains("COUNT(*) OVER (PARTITION BY \"id\") = 1"), "got: {}", sql);
-        assert!(sql.contains("(f0 + f1 + f2) > 0"), "got: {}", sql);
-        assert!(build_contract(&ni, &serde_json::json!({ "rules": [] })).is_err());
-        assert!(build_contract(&NodeInputs::default(), &serde_json::json!({ "rules": [{ "column": "x", "check": "not_null" }] })).is_err());
-    }
-
-    #[test]
-    fn surrogate_key_builds_hash_and_sequence() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let hash = build_surrogate_key(&ni, &serde_json::json!({"mode":"hash","keyColumns":["company","country"]})).unwrap();
-        assert!(hash.contains("md5(concat_ws('||', CAST(\"company\" AS VARCHAR), CAST(\"country\" AS VARCHAR))) AS \"surrogate_key\""), "got: {}", hash);
-        let sep = build_surrogate_key(&ni, &serde_json::json!({"mode":"hash","keyColumns":["id"],"separator":"-","outputColumn":"dim_key"})).unwrap();
-        assert!(sep.contains("md5(concat_ws('-', CAST(\"id\" AS VARCHAR))) AS \"dim_key\""), "got: {}", sep);
-        let seq = build_surrogate_key(&ni, &serde_json::json!({"mode":"sequence","keyColumns":["company","country"]})).unwrap();
-        assert!(seq.contains("row_number() OVER (ORDER BY \"company\", \"country\") AS \"surrogate_key\""), "got: {}", seq);
-        assert!(build_surrogate_key(&ni, &serde_json::json!({"mode":"hash"})).is_err());
-        assert!(build_surrogate_key(&ni, &serde_json::json!({"mode":"bogus","keyColumns":["id"]})).is_err());
-    }
-
-    #[test]
-    fn bucketize_labeled_bounds_mode() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        // bounds (array) -> labeled half-open ranges + NULL guard.
-        let sql = build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":[18,40,65]})).unwrap();
-        assert!(sql.contains("CASE WHEN \"age\" IS NULL THEN NULL"), "got: {}", sql);
-        assert!(sql.contains("< 18 THEN '<18'"), "got: {}", sql);
-        assert!(sql.contains("< 40 THEN '18-40'"), "got: {}", sql);
-        assert!(sql.contains("ELSE '>=65'"), "got: {}", sql);
-        // comma-string bounds + custom labels.
-        let lab = build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":"18,65","labels":["minor","adult","senior"]})).unwrap();
-        assert!(lab.contains("THEN 'minor'") && lab.contains("THEN 'adult'") && lab.contains("ELSE 'senior'"), "got: {}", lab);
-        // wrong label count is a loud error; without bounds the equal-width path still needs low/high.
-        assert!(build_bucketize(&ni, &serde_json::json!({"column":"age","bounds":[18],"labels":["a","b","c"]})).is_err());
-        let eqw = build_bucketize(&ni, &serde_json::json!({"column":"age","low":0,"high":100,"buckets":4})).unwrap();
-        assert!(eqw.contains("floor(") && !eqw.contains("'<"), "equal-width path unchanged: {}", eqw);
-    }
-
-    #[test]
-    fn scd3_keeps_previous_value_in_sibling_column() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["c1".into()]);
-        ni.ports.insert("lookup".into(), vec!["p1".into()]);
-        let props = serde_json::json!({ "keyColumns": ["id"], "trackColumns": ["v"], "effectiveDateColumn": "effective_date" });
-        let sql = build_scd3(&ni, &props).unwrap();
-        assert_eq!(
-            sql,
-            "SELECT c.*, p.\"v\" AS \"previous_v\", CURRENT_TIMESTAMP AS \"effective_date\" FROM \"c1\" c LEFT JOIN \"p1\" p ON p.\"id\" = c.\"id\"",
-            "got: {}", sql
-        );
-        let multi = build_scd3(&ni, &serde_json::json!({ "keyColumns": ["region", "id"], "trackColumns": ["name", "score"] })).unwrap();
-        assert!(multi.contains("p.\"name\" AS \"previous_name\"") && multi.contains("p.\"score\" AS \"previous_score\""), "got: {}", multi);
-        assert!(multi.contains("p.\"region\" = c.\"region\" AND p.\"id\" = c.\"id\""), "got: {}", multi);
-        assert!(!multi.contains("CURRENT_TIMESTAMP"), "no effective date when unset: {}", multi);
-        assert!(build_scd3(&ni, &serde_json::json!({ "trackColumns": ["v"] })).is_err());
-        let mut no_prev = NodeInputs::default();
-        no_prev.ports.insert("main".into(), vec!["c1".into()]);
-        assert!(build_scd3(&no_prev, &props).is_err());
-    }
-
-    #[test]
-    fn qa_outlier_emits_iqr_and_zscore_pass_reject_sql() {
-        let mk = || { let mut ni = NodeInputs::default(); ni.ports.insert("main".into(), vec!["up".into()]); ni };
-        let iqr_pass = build_outlier(&mk(), &serde_json::json!({"column": "amount", "method": "iqr"}), false).unwrap();
-        assert!(iqr_pass.contains("quantile_cont") && iqr_pass.contains("1.5"), "got: {}", iqr_pass);
-        assert!(iqr_pass.contains("\"amount\" IS NULL"), "got: {}", iqr_pass);
-        assert!(iqr_pass.contains("EXCLUDE (__dq_q1, __dq_q3)"), "got: {}", iqr_pass);
-        assert!(iqr_pass.contains("COALESCE") && !iqr_pass.contains("NOT COALESCE"), "got: {}", iqr_pass);
-        let iqr_rej = build_outlier(&mk(), &serde_json::json!({"column": "amount", "method": "iqr"}), true).unwrap();
-        assert!(iqr_rej.contains("NOT COALESCE"), "got: {}", iqr_rej);
-        let z_pass = build_outlier(&mk(), &serde_json::json!({"column": "amount", "method": "zscore"}), false).unwrap();
-        assert!(z_pass.contains("stddev_pop") && z_pass.contains("__dq_sd = 0") && z_pass.contains("<= 3"), "got: {}", z_pass);
-        assert!(build_outlier(&mk(), &serde_json::json!({"method": "iqr"}), false).is_err());
-        assert!(build_outlier(&mk(), &serde_json::json!({"column": "amount", "sensitivity": 0}), false).is_err());
-    }
-
-    #[test]
-    fn sessionize_builds_gap_window_sql() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_sessionize(&ni, &serde_json::json!({"partitionBy": ["user_id"], "orderBy": "ts", "gap": 30})).unwrap();
-        assert!(sql.starts_with("WITH __flag AS ("), "got: {}", sql);
-        assert!(sql.contains("epoch(CAST(\"ts\" AS TIMESTAMP)) - epoch(CAST(lag(\"ts\") OVER w AS TIMESTAMP))) > 1800"), "got: {}", sql);
-        assert!(sql.contains("WINDOW w AS (PARTITION BY \"user_id\" ORDER BY \"ts\")"), "got: {}", sql);
-        assert!(sql.contains("SUM(__new_sess) OVER (PARTITION BY \"user_id\" ORDER BY \"ts\") AS \"session_id\""), "got: {}", sql);
-        assert!(sql.contains("ROW_NUMBER() OVER (PARTITION BY \"user_id\", \"session_id\" ORDER BY \"ts\") AS \"session_seq\""), "got: {}", sql);
-        let hrs = build_sessionize(&ni, &serde_json::json!({ "orderBy": "ts", "gap": 1, "gapUnit": "hours", "emitSeq": false })).unwrap();
-        assert!(hrs.contains("> 3600") && hrs.ends_with("SELECT * FROM __sid") && !hrs.contains("session_seq"), "got: {}", hrs);
-        assert!(build_sessionize(&ni, &serde_json::json!({ "gap": 5 })).is_err());
-        assert!(build_sessionize(&ni, &serde_json::json!({ "orderBy": "ts", "gap": 0 })).is_err());
-        assert!(build_sessionize(&ni, &serde_json::json!({ "orderBy": "ts", "gap": 5, "gapUnit": "weeks" })).is_err());
-    }
-
-    #[test]
-    fn freshness_builds_gate_and_report() {
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let gate = build_freshness(&ni, &serde_json::json!({ "column": "ts", "maxAge": 24, "maxAgeUnit": "hours" })).unwrap();
-        assert!(gate.contains("WITH _duckle_freshness AS MATERIALIZED") && gate.contains("SELECT u.* FROM \"up\" u"), "got: {}", gate);
-        assert!(gate.contains("date_diff('hour', MAX(CAST(\"ts\" AS TIMESTAMP)), CURRENT_TIMESTAMP) <= 24 THEN 'ok'"), "got: {}", gate);
-        assert!(gate.contains("error('Data is stale: '"), "got: {}", gate);
-        let report = build_freshness(&ni, &serde_json::json!({ "column": "ts", "maxAge": 2, "maxAgeUnit": "days", "mode": "report" })).unwrap();
-        assert!(report.contains("date_diff('day', MAX(CAST(\"ts\" AS TIMESTAMP)), CURRENT_TIMESTAMP) AS age_days"), "got: {}", report);
-        assert!(report.contains("2 AS threshold_days") && report.contains("<= 2) AS is_fresh"), "got: {}", report);
-        assert!(build_freshness(&ni, &serde_json::json!({ "maxAge": 1 })).is_err());
-        assert!(build_freshness(&ni, &serde_json::json!({ "column": "ts" })).is_err());
-        assert!(build_freshness(&ni, &serde_json::json!({ "column": "ts", "maxAge": 1, "mode": "bogus" })).is_err());
-    }
-
-    #[test]
-    fn attach_prelude_loads_spatial_for_sql_template() {
-        // #84: spatial loads on opt-in OR when the SQL references an ST_ function,
-        // but not for unrelated SQL (and `list_` must not false-fire).
-        let opt = attach_prelude("code.sql", &serde_json::json!({ "loadSpatial": true }));
-        assert!(opt.contains("LOAD spatial"), "opt-in: {}", opt);
-        let auto = attach_prelude("code.sqltemplate", &serde_json::json!({ "sql": "SELECT ST_Point(lon,lat) FROM input" }));
-        assert!(auto.contains("LOAD spatial"), "auto-detect: {}", auto);
-        let none = attach_prelude("code.sql", &serde_json::json!({ "sql": "SELECT list_value(a), first_name FROM input" }));
-        assert!(!none.contains("spatial"), "must not false-fire on list_/first_: {}", none);
-    }
-
-    #[test]
-    fn attach_prelude_loads_user_extensions_for_sql_template() {
-        // #113: loadExtensions installs + loads each named extension. Accepts a
-        // comma/space-separated string or a JSON array; names are sanitized so
-        // they can never inject SQL; spatial is not loaded twice.
-        let s = attach_prelude("code.sql", &serde_json::json!({ "loadExtensions": "h3, a5" }));
-        assert!(s.contains("INSTALL h3; LOAD h3;"), "h3: {}", s);
-        assert!(s.contains("INSTALL a5; LOAD a5;"), "a5: {}", s);
-        let arr = attach_prelude("code.sqltemplate", &serde_json::json!({ "loadExtensions": ["h3", "h3", "INET!"] }));
-        // Dedup + sanitize: "INET!" -> "inet", duplicate h3 collapsed.
-        assert_eq!(arr.matches("LOAD h3;").count(), 1, "dedup: {}", arr);
-        assert!(arr.contains("INSTALL inet; LOAD inet;"), "sanitized: {}", arr);
-        // spatial requested via both loadSpatial and loadExtensions -> once only.
-        let both = attach_prelude("code.sql", &serde_json::json!({ "loadSpatial": true, "loadExtensions": "spatial,h3" }));
-        assert_eq!(both.matches("LOAD spatial;").count(), 1, "spatial once: {}", both);
-        assert!(both.contains("LOAD h3;"), "h3 alongside spatial: {}", both);
-    }
-
-    #[test]
-    fn partial_run_loads_spatial_into_geometry_consumers() {
-        // #168: a partial ("Run from here") run executes each stage in its own
-        // process. A snk.parquet reading a stored GEOMETRY column must LOAD
-        // spatial itself, or DuckDB autoloads it only after binding the column
-        // and reconstructs the CRS as WKT2 -> the GeoParquet V1 writer rejects
-        // it ("only supports PROJJSON CRS definitions"). So every stage geometry
-        // flows into must carry the spatial load, propagated from the source.
-        let doc = pipeline_from_json(
-            r#"{
+#[test]
+fn partial_run_loads_spatial_into_geometry_consumers() {
+    // #168: a partial ("Run from here") run executes each stage in its own
+    // process. A snk.parquet reading a stored GEOMETRY column must LOAD
+    // spatial itself, or DuckDB autoloads it only after binding the column
+    // and reconstructs the CRS as WKT2 -> the GeoParquet V1 writer rejects
+    // it ("only supports PROJJSON CRS definitions"). So every stage geometry
+    // flows into must carry the spatial load, propagated from the source.
+    let doc = pipeline_from_json(
+        r#"{
               "nodes": [
                 {"id":"s","position":{"x":0,"y":0},"data":{"label":"Shp","componentId":"src.spatial","properties":{"path":"/tmp/cities.shp"}}},
                 {"id":"f","position":{"x":0,"y":0},"data":{"label":"Filter","componentId":"xf.filter","properties":{"predicate":"1=1"}}},
@@ -1808,17 +1975,17 @@
                 {"id":"e2","source":"f","target":"k","data":{"connectionType":"main"}}
               ]
             }"#,
-        );
-        let compiled = compile_partial(&doc, "k").unwrap();
-        for id in ["s", "f", "k"] {
-            let sql = &compiled.stages.iter().find(|s| s.node_id == id).unwrap().sql;
-            assert!(sql.contains("LOAD spatial"), "stage {id} must load spatial: {sql}");
-        }
-        // The parquet sink itself has no spatial prelude, so the load can only
-        // have come from the downstream-taint pass.
-        let sink = &compiled.stages.iter().find(|s| s.node_id == "k").unwrap().sql;
-        assert!(sink.contains("INSTALL spatial; LOAD spatial;"), "sink prelude: {sink}");
+    );
+    let compiled = compile_partial(&doc, "k").unwrap();
+    for id in ["s", "f", "k"] {
+        let sql = &compiled.stages.iter().find(|s| s.node_id == id).unwrap().sql;
+        assert!(sql.contains("LOAD spatial"), "stage {id} must load spatial: {sql}");
     }
+    // The parquet sink itself has no spatial prelude, so the load can only
+    // have come from the downstream-taint pass.
+    let sink = &compiled.stages.iter().find(|s| s.node_id == "k").unwrap().sql;
+    assert!(sink.contains("INSTALL spatial; LOAD spatial;"), "sink prelude: {sink}");
+}
 
     #[test]
     fn partial_run_does_not_load_spatial_without_geometry() {
@@ -1832,12 +1999,12 @@
               ],
               "edges":[{"id":"e1","source":"s","target":"k","data":{"connectionType":"main"}}]
             }"#,
-        );
-        let compiled = compile_partial(&doc, "k").unwrap();
-        for st in &compiled.stages {
-            assert!(!st.sql.contains("spatial"), "non-geo stage {} must not load spatial: {}", st.node_id, st.sql);
-        }
+    );
+    let compiled = compile_partial(&doc, "k").unwrap();
+    for st in &compiled.stages {
+        assert!(!st.sql.contains("spatial"), "non-geo stage {} must not load spatial: {}", st.node_id, st.sql);
     }
+}
 
     #[test]
     fn cap_preview_query_wraps_per_dialect() {
@@ -3005,437 +3172,383 @@
                   "data":{"connectionType":"main"}}
               ]
             }"#,
-        );
-        let compiled = compile(&p).unwrap();
+    );
+    let compiled = compile(&p).unwrap();
+    assert!(
+        !compiled.stages[0].sql.contains("types = {"),
+        "should not emit types clause without a declared schema: {}",
+        compiled.stages[0].sql
+    );
+}
+
+#[test]
+fn cloud_parquet_source_projects_declared_columns() {
+    // audit B1: a cloud parquet source must honor the `columns`
+    // projection like the local builder (delegation), not read SELECT *.
+    let sql = build_cloud_source(
+        "s3",
+        &serde_json::json!({"format": "parquet", "path": "s3://b/k.parquet", "columns": "id, amount"}),
+        None,
+    )
+    .unwrap();
+    assert!(
+        sql.contains("SELECT \"id\", \"amount\" FROM read_parquet('s3://b/k.parquet')"),
+        "cloud parquet must project declared columns, got: {}",
+        sql
+    );
+}
+
+#[test]
+fn cloud_csv_source_threads_declared_schema() {
+    // audit B1: a cloud CSV source must honor a Schema-panel declaration
+    // via types= (issue #3 parity), not a bare read_csv_auto.
+    let cols = vec![duckle_metadata::Column {
+        name: "amt".into(),
+        data_type: duckle_metadata::DataType::String,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    let sql = build_cloud_source(
+        "s3",
+        &serde_json::json!({"format": "csv", "path": "s3://b/k.csv", "hasHeader": true}),
+        Some(&cols),
+    )
+    .unwrap();
+    assert!(
+        sql.contains("types = {") && sql.contains("'amt': 'VARCHAR'"),
+        "cloud csv must thread declared schema via types=, got: {}",
+        sql
+    );
+}
+
+#[test]
+fn csv_reject_and_split_partition_bad_rows() {
+    // issue #15: a declared DATE column must yield a reject relation of the
+    // rows that fail to parse (raw text), and a tolerant split main that
+    // drops exactly those rows. The two predicates must be complementary.
+    let cols = vec![duckle_metadata::Column {
+        name: "order_date".into(),
+        data_type: duckle_metadata::DataType::Date,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    let props = serde_json::json!({"path": "orders.csv", "hasHeader": true});
+
+    let reject = build_csv_reject_sql(&props, Some(&cols), false).expect("a declared DATE column must produce a reject relation");
+    // raw text read + present-but-unparseable predicate
+    assert!(reject.contains("'order_date': 'VARCHAR'"), "reject reads raw text: {reject}");
+    assert!(
+        reject.contains("try_cast(\"order_date\" AS DATE) IS NULL") && reject.contains("\"order_date\" <> ''"),
+        "reject keeps only present-but-unparseable values: {reject}"
+    );
+
+    let split = build_csv_source_split(&props, Some(&cols), false);
+    // tolerant: casts back to the declared type and drops the failing rows
+    assert!(
+        split.contains("try_cast(\"order_date\" AS DATE) AS \"order_date\"") && split.contains("WHERE NOT ("),
+        "split main casts + excludes the rejected rows: {split}"
+    );
+
+    // No declared schema (or all-text schema) => nothing to reject.
+    assert!(build_csv_reject_sql(&props, None, false).is_none());
+    let text_cols = vec![duckle_metadata::Column {
+        name: "name".into(),
+        data_type: duckle_metadata::DataType::String,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    }];
+    assert!(build_csv_reject_sql(&props, Some(&text_cols), false).is_none());
+}
+
+#[test]
+fn parquet_sink_forwards_row_group_size() {
+    // issue-#16 perf report: the "Row group size" UI field was dropped by
+    // build_parquet_sink, so DuckDB used its internal default. Forward it.
+    let sql = build_parquet_sink(&serde_json::json!({"path": "out.parquet", "rowGroupSize": 1_000_000}), "input");
+    assert!(sql.contains("ROW_GROUP_SIZE 1000000"), "row group size not forwarded: {sql}");
+
+    // A numeric string (forms sometimes serialize integers as strings).
+    let sql_str = build_parquet_sink(&serde_json::json!({"path": "out.parquet", "rowGroupSize": "250000"}), "input");
+    assert!(sql_str.contains("ROW_GROUP_SIZE 250000"), "string row group size not forwarded: {sql_str}");
+
+    // Absent or zero => omit it, leaving DuckDB's default.
+    let sql_none = build_parquet_sink(&serde_json::json!({"path": "out.parquet"}), "input");
+    assert!(!sql_none.contains("ROW_GROUP_SIZE"), "must not emit a default: {sql_none}");
+    let sql_zero = build_parquet_sink(&serde_json::json!({"path": "out.parquet", "rowGroupSize": 0}), "input");
+    assert!(!sql_zero.contains("ROW_GROUP_SIZE"), "zero must be ignored: {sql_zero}");
+}
+
+#[test]
+fn parquet_sink_partition_guard() {
+    // Partitioned write gets a fail-fast guard (default cap 10000).
+    let guarded = build_parquet_sink(&serde_json::json!({"path": "out", "partitionBy": ["sender", "receiver"]}), "input");
+    assert!(guarded.contains("PARTITION_BY (\"sender\", \"receiver\")"), "{guarded}");
+    assert!(
+        guarded.contains("approx_count_distinct") && guarded.contains("> 10000") && guarded.contains("error("),
+        "partitioned write must be guarded: {guarded}"
+    );
+
+    // maxPartitions = 0 disables the guard (explicit opt-out).
+    let unlimited = build_parquet_sink(&serde_json::json!({"path": "out", "partitionBy": ["sender"], "maxPartitions": 0}), "input");
+    assert!(unlimited.contains("PARTITION_BY"), "{unlimited}");
+    assert!(!unlimited.contains("error("), "cap 0 must skip the guard: {unlimited}");
+
+    // No partitioning => no guard, plain source.
+    let plain = build_parquet_sink(&serde_json::json!({"path": "out.parquet"}), "input");
+    assert!(!plain.contains("approx_count_distinct") && !plain.contains("error("), "{plain}");
+}
+
+#[test]
+fn cloud_csv_sink_honors_options_but_not_partitionby() {
+    // audit B1: a cloud CSV sink must honor delimiter/nullValue (ignored
+    // before), but must NOT emit PARTITION_BY (unvalidated over httpfs).
+    let sql = build_cloud_sink(
+        "s3",
+        &serde_json::json!({
+            "format": "csv", "path": "s3://b/out.csv",
+            "delimiter": "|", "nullValue": "NA", "partitionBy": "id"
+        }),
+        "v",
+    )
+    .unwrap();
+    assert!(
+        sql.contains("FORMAT CSV") && sql.contains("DELIM '|'") && sql.contains("NULLSTR 'NA'"),
+        "cloud csv sink must honor options, got: {}",
+        sql
+    );
+    assert!(!sql.contains("PARTITION_BY"), "cloud sink must not emit PARTITION_BY, got: {}", sql);
+    assert!(sql.contains("'s3://b/out.csv'"), "must write to the cloud path, got: {}", sql);
+}
+
+#[test]
+fn minio_sink_composes_s3_url_from_bucket_and_key() {
+    // #116: snk.minio / snk.r2 / snk.b2 are S3-compatible sinks that take
+    // bucket + key (not a full URI); the planner must assemble s3://b/k and
+    // route the COPY through the cloud sink builder (the endpoint itself
+    // lives in the SECRET, so only the s3:// URL shows here).
+    let sql = build_sink_sql(
+        "snk.minio",
+        &serde_json::json!({
+            "bucket": "warehouse", "key": "out/orders.parquet"
+        }),
+        "v",
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(
+        sql.contains("'s3://warehouse/out/orders.parquet'"),
+        "minio sink must COPY to the composed s3:// url, got: {}",
+        sql
+    );
+    assert!(sql.contains("FORMAT PARQUET"), "extension picks parquet, got: {}", sql);
+}
+
+#[test]
+fn cloud_source_rejects_avro_and_orc_formats() {
+    // audit pass-3: the cloud reader has no Avro/ORC path; selecting either
+    // used to fall through to read_csv_auto on the binary container. It must
+    // now fail loud instead.
+    for fmt in ["avro", "orc"] {
+        let err = build_cloud_source("s3", &serde_json::json!({"format": fmt, "path": format!("s3://b/k.{}", fmt)}), None).unwrap_err();
         assert!(
-            !compiled.stages[0].sql.contains("types = {"),
-            "should not emit types clause without a declared schema: {}",
-            compiled.stages[0].sql
-        );
-    }
-
-    #[test]
-    fn cloud_parquet_source_projects_declared_columns() {
-        // audit B1: a cloud parquet source must honor the `columns`
-        // projection like the local builder (delegation), not read SELECT *.
-        let sql = build_cloud_source(
-            "s3",
-            &serde_json::json!({"format": "parquet", "path": "s3://b/k.parquet", "columns": "id, amount"}),
-            None,
-        )
-        .unwrap();
-        assert!(
-            sql.contains("SELECT \"id\", \"amount\" FROM read_parquet('s3://b/k.parquet')"),
-            "cloud parquet must project declared columns, got: {}",
-            sql
-        );
-    }
-
-    #[test]
-    fn cloud_csv_source_threads_declared_schema() {
-        // audit B1: a cloud CSV source must honor a Schema-panel declaration
-        // via types= (issue #3 parity), not a bare read_csv_auto.
-        let cols = vec![duckle_metadata::Column {
-            name: "amt".into(),
-            data_type: duckle_metadata::DataType::String,
-            nullable: true,
-            primary_key: None,
-            format: None,
-        }];
-        let sql = build_cloud_source(
-            "s3",
-            &serde_json::json!({"format": "csv", "path": "s3://b/k.csv", "hasHeader": true}),
-            Some(&cols),
-        )
-        .unwrap();
-        assert!(
-            sql.contains("types = {") && sql.contains("'amt': 'VARCHAR'"),
-            "cloud csv must thread declared schema via types=, got: {}",
-            sql
-        );
-    }
-
-    #[test]
-    fn csv_reject_and_split_partition_bad_rows() {
-        // issue #15: a declared DATE column must yield a reject relation of the
-        // rows that fail to parse (raw text), and a tolerant split main that
-        // drops exactly those rows. The two predicates must be complementary.
-        let cols = vec![duckle_metadata::Column {
-            name: "order_date".into(),
-            data_type: duckle_metadata::DataType::Date,
-            nullable: true,
-            primary_key: None,
-            format: None,
-        }];
-        let props = serde_json::json!({"path": "orders.csv", "hasHeader": true});
-
-        let reject = build_csv_reject_sql(&props, Some(&cols), false)
-            .expect("a declared DATE column must produce a reject relation");
-        // raw text read + present-but-unparseable predicate
-        assert!(reject.contains("'order_date': 'VARCHAR'"), "reject reads raw text: {reject}");
-        assert!(
-            reject.contains("try_cast(\"order_date\" AS DATE) IS NULL")
-                && reject.contains("\"order_date\" <> ''"),
-            "reject keeps only present-but-unparseable values: {reject}"
-        );
-
-        let split = build_csv_source_split(&props, Some(&cols), false);
-        // tolerant: casts back to the declared type and drops the failing rows
-        assert!(
-            split.contains("try_cast(\"order_date\" AS DATE) AS \"order_date\"")
-                && split.contains("WHERE NOT ("),
-            "split main casts + excludes the rejected rows: {split}"
-        );
-
-        // No declared schema (or all-text schema) => nothing to reject.
-        assert!(build_csv_reject_sql(&props, None, false).is_none());
-        let text_cols = vec![duckle_metadata::Column {
-            name: "name".into(),
-            data_type: duckle_metadata::DataType::String,
-            nullable: true,
-            primary_key: None,
-            format: None,
-        }];
-        assert!(build_csv_reject_sql(&props, Some(&text_cols), false).is_none());
-    }
-
-    #[test]
-    fn parquet_sink_forwards_row_group_size() {
-        // issue-#16 perf report: the "Row group size" UI field was dropped by
-        // build_parquet_sink, so DuckDB used its internal default. Forward it.
-        let sql = build_parquet_sink(
-            &serde_json::json!({"path": "out.parquet", "rowGroupSize": 1_000_000}),
-            "input",
-        );
-        assert!(sql.contains("ROW_GROUP_SIZE 1000000"), "row group size not forwarded: {sql}");
-
-        // A numeric string (forms sometimes serialize integers as strings).
-        let sql_str = build_parquet_sink(
-            &serde_json::json!({"path": "out.parquet", "rowGroupSize": "250000"}),
-            "input",
-        );
-        assert!(sql_str.contains("ROW_GROUP_SIZE 250000"), "string row group size not forwarded: {sql_str}");
-
-        // Absent or zero => omit it, leaving DuckDB's default.
-        let sql_none = build_parquet_sink(&serde_json::json!({"path": "out.parquet"}), "input");
-        assert!(!sql_none.contains("ROW_GROUP_SIZE"), "must not emit a default: {sql_none}");
-        let sql_zero = build_parquet_sink(
-            &serde_json::json!({"path": "out.parquet", "rowGroupSize": 0}),
-            "input",
-        );
-        assert!(!sql_zero.contains("ROW_GROUP_SIZE"), "zero must be ignored: {sql_zero}");
-    }
-
-    #[test]
-    fn parquet_sink_partition_guard() {
-        // Partitioned write gets a fail-fast guard (default cap 10000).
-        let guarded = build_parquet_sink(
-            &serde_json::json!({"path": "out", "partitionBy": ["sender", "receiver"]}),
-            "input",
-        );
-        assert!(guarded.contains("PARTITION_BY (\"sender\", \"receiver\")"), "{guarded}");
-        assert!(
-            guarded.contains("approx_count_distinct")
-                && guarded.contains("> 10000")
-                && guarded.contains("error("),
-            "partitioned write must be guarded: {guarded}"
-        );
-
-        // maxPartitions = 0 disables the guard (explicit opt-out).
-        let unlimited = build_parquet_sink(
-            &serde_json::json!({"path": "out", "partitionBy": ["sender"], "maxPartitions": 0}),
-            "input",
-        );
-        assert!(unlimited.contains("PARTITION_BY"), "{unlimited}");
-        assert!(!unlimited.contains("error("), "cap 0 must skip the guard: {unlimited}");
-
-        // No partitioning => no guard, plain source.
-        let plain = build_parquet_sink(&serde_json::json!({"path": "out.parquet"}), "input");
-        assert!(!plain.contains("approx_count_distinct") && !plain.contains("error("), "{plain}");
-    }
-
-    #[test]
-    fn cloud_csv_sink_honors_options_but_not_partitionby() {
-        // audit B1: a cloud CSV sink must honor delimiter/nullValue (ignored
-        // before), but must NOT emit PARTITION_BY (unvalidated over httpfs).
-        let sql = build_cloud_sink(
-            "s3",
-            &serde_json::json!({
-                "format": "csv", "path": "s3://b/out.csv",
-                "delimiter": "|", "nullValue": "NA", "partitionBy": "id"
-            }),
-            "v",
-        )
-        .unwrap();
-        assert!(
-            sql.contains("FORMAT CSV") && sql.contains("DELIM '|'") && sql.contains("NULLSTR 'NA'"),
-            "cloud csv sink must honor options, got: {}",
-            sql
-        );
-        assert!(
-            !sql.contains("PARTITION_BY"),
-            "cloud sink must not emit PARTITION_BY, got: {}",
-            sql
-        );
-        assert!(sql.contains("'s3://b/out.csv'"), "must write to the cloud path, got: {}", sql);
-    }
-
-    #[test]
-    fn minio_sink_composes_s3_url_from_bucket_and_key() {
-        // #116: snk.minio / snk.r2 / snk.b2 are S3-compatible sinks that take
-        // bucket + key (not a full URI); the planner must assemble s3://b/k and
-        // route the COPY through the cloud sink builder (the endpoint itself
-        // lives in the SECRET, so only the s3:// URL shows here).
-        let sql = build_sink_sql(
-            "snk.minio",
-            &serde_json::json!({
-                "bucket": "warehouse", "key": "out/orders.parquet"
-            }),
-            "v",
-            &[],
-            None,
-        )
-        .unwrap();
-        assert!(
-            sql.contains("'s3://warehouse/out/orders.parquet'"),
-            "minio sink must COPY to the composed s3:// url, got: {}",
-            sql
-        );
-        assert!(sql.contains("FORMAT PARQUET"), "extension picks parquet, got: {}", sql);
-    }
-
-    #[test]
-    fn cloud_source_rejects_avro_and_orc_formats() {
-        // audit pass-3: the cloud reader has no Avro/ORC path; selecting either
-        // used to fall through to read_csv_auto on the binary container. It must
-        // now fail loud instead.
-        for fmt in ["avro", "orc"] {
-            let err = build_cloud_source(
-                "s3",
-                &serde_json::json!({"format": fmt, "path": format!("s3://b/k.{}", fmt)}),
-                None,
-            )
-            .unwrap_err();
-            assert!(
-                err.to_string().to_lowercase().contains("not supported"),
-                "cloud {} source should fail loud, got: {:?}",
-                fmt,
-                err
-            );
-        }
-    }
-
-    #[test]
-    fn cloud_sink_rejects_avro_and_orc_formats() {
-        // audit pass-3: no Avro/ORC writer exists; selecting either used to
-        // silently write Parquet to the user's .avro/.orc path. Fail loud now.
-        for fmt in ["avro", "orc"] {
-            let err = build_cloud_sink(
-                "s3",
-                &serde_json::json!({"format": fmt, "path": format!("s3://b/out.{}", fmt)}),
-                "v",
-            )
-            .unwrap_err();
-            assert!(
-                err.to_string().to_lowercase().contains("not supported"),
-                "cloud {} sink should fail loud, got: {:?}",
-                fmt,
-                err
-            );
-        }
-    }
-
-    #[test]
-    fn csv_windows_1252_encoding_is_remapped_to_cp1252() {
-        // audit pass-3: DuckDB's CSV reader rejects the spelling "windows-1252"
-        // (it wants CP1252); the UI/docs offer "Windows-1252", so the engine
-        // must remap it rather than aborting the read.
-        let sql = build_csv_source(
-            &serde_json::json!({"path": "f.csv", "hasHeader": true, "encoding": "windows-1252"}),
-            None,
-        );
-        assert!(sql.contains("encoding='CP1252'"), "windows-1252 must remap to CP1252, got: {}", sql);
-        // latin-1 (a DuckDB-accepted spelling) passes through unchanged.
-        let latin = build_csv_source(
-            &serde_json::json!({"path": "f.csv", "hasHeader": true, "encoding": "latin-1"}),
-            None,
-        );
-        assert!(latin.contains("encoding='latin-1'"), "latin-1 must pass through, got: {}", latin);
-    }
-
-    #[test]
-    fn db_sink_unknown_mode_fails_loud_not_destructive_overwrite() {
-        // audit pass-3: snk.sqlite/snk.duckdb used to DROP+CREATE for ANY
-        // unrecognized mode, so a typo like "appnd" silently wiped the table.
-        let err = build_sink_sql(
-            "snk.sqlite",
-            &serde_json::json!({"tableName": "t", "mode": "appnd"}),
-            "v",
-            &[],
-            None,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("write mode") && err.to_string().contains("appnd"),
-            "an unknown mode must fail loud, got: {:?}",
-            err
-        );
-        // The explicit "overwrite" default is still the destructive recreate.
-        let ok = build_sink_sql(
-            "snk.sqlite",
-            &serde_json::json!({"tableName": "t", "mode": "overwrite"}),
-            "v",
-            &[],
-            None,
-        )
-        .unwrap();
-        assert!(ok.contains("DROP TABLE IF EXISTS"), "overwrite stays a recreate, got: {}", ok);
-    }
-
-    #[test]
-    fn relational_sink_append_creates_table_on_first_write() {
-        // A MotherDuck (relational) sink in append mode used to emit a bare
-        // INSERT INTO, which fails the first time the target doesn't exist
-        // (e.g. appending ledger rows from a foreach). Append now creates the
-        // table from the upstream's types before inserting, like truncate/upsert.
-        let sql = build_sink_sql(
-            "snk.motherduck",
-            &serde_json::json!({"database": "my_db", "tableName": "process_ledger", "mode": "append"}),
-            "v",
-            &[],
-            None,
-        )
-        .unwrap();
-        assert!(
-            sql.contains("CREATE TABLE IF NOT EXISTS") && sql.contains("LIMIT 0"),
-            "append must create-if-missing from upstream types, got: {}",
-            sql
-        );
-        assert!(sql.contains("INSERT INTO"), "append must still insert, got: {}", sql);
-    }
-
-    #[test]
-    fn merge_mode_emits_partial_column_merge() {
-        // Issue #39: merge updates only non-key columns the source carries and
-        // inserts new rows; the key column is never in the UPDATE SET.
-        let sql = build_sink_sql(
-            "snk.duckdb",
-            &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
-            "v",
-            &["k".to_string(), "a".to_string(), "b".to_string()],
-            None,
-        )
-        .unwrap();
-        assert!(sql.contains("MERGE INTO"), "got: {}", sql);
-        assert!(sql.contains("ON (tgt.\"k\" = src.\"k\")"), "got: {}", sql);
-        // The UPDATE SET lists exactly the non-key columns (the key is matched
-        // on, never updated).
-        assert!(
-            sql.contains("WHEN MATCHED THEN UPDATE SET \"a\" = src.\"a\", \"b\" = src.\"b\" WHEN NOT MATCHED"),
-            "UPDATE SET must list only the non-key columns, got: {}",
-            sql
-        );
-        assert!(
-            sql.contains("WHEN NOT MATCHED THEN INSERT (\"k\", \"a\", \"b\") VALUES (src.\"k\", src.\"a\", src.\"b\")"),
-            "INSERT must list all source columns, got: {}",
-            sql
-        );
-    }
-
-    #[test]
-    fn merge_mode_rejected_for_non_duckdb_target() {
-        let err = build_sink_sql(
-            "snk.postgres",
-            &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
-            "v",
-            &["k".to_string(), "a".to_string()],
-            None,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("merge"), "got: {:?}", err);
-    }
-
-    #[test]
-    fn merge_mode_needs_input_columns() {
-        let err = build_sink_sql(
-            "snk.duckdb",
-            &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
-            "v",
-            &[],
-            None,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("input columns"), "got: {:?}", err);
-    }
-
-    #[test]
-    fn db_sink_upsert_rejects_empty_conflict_columns() {
-        // audit pass-3: conflictColumns=[""] used to pass the length-based
-        // guard and emit a zero-length quoted identifier. The empty entry is
-        // now dropped, so the "needs a conflict column" guard fires.
-        let err = build_sink_sql(
-            "snk.sqlite",
-            &serde_json::json!({"tableName": "t", "mode": "upsert", "conflictColumns": ["", "  "]}),
-            "v",
-            &[],
-            None,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("conflict column"),
-            "blank conflict columns must be rejected, got: {:?}",
+            err.to_string().to_lowercase().contains("not supported"),
+            "cloud {} source should fail loud, got: {:?}",
+            fmt,
             err
         );
     }
+}
 
-    #[test]
-    fn aggregate_missing_function_on_named_column_fails_loud() {
-        // audit pass-3: {column: "amount"} with no function used to silently
-        // become COUNT(amount); it must require an explicit function now.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let err = build_aggregate(
-            &ni,
-            &serde_json::json!({"groupBy": ["g"], "aggregations": [{"column": "amount", "output": "total"}]}),
-            GroupMode::Plain,
-        )
-        .unwrap_err();
-        assert!(err.contains("needs a function"), "named column without function must fail, got: {}", err);
-        // A bare row count (column "*", no function) is still allowed as COUNT.
-        let ok = build_aggregate(
-            &ni,
-            &serde_json::json!({"groupBy": ["g"], "aggregations": [{"column": "*", "output": "n"}]}),
-            GroupMode::Plain,
-        )
-        .unwrap();
-        assert!(ok.contains("COUNT(*)"), "count(*) default for '*' stays, got: {}", ok);
-    }
-
-    #[test]
-    fn aggwin_with_order_by_pins_full_partition_frame() {
-        // audit pass-3: an ORDER BY in the window without an explicit frame
-        // silently becomes a running aggregate. xf.aggwin keeps a whole-
-        // partition total on every row, so the full frame must be pinned.
-        let mut ni = NodeInputs::default();
-        ni.ports.insert("main".into(), vec!["up".into()]);
-        let sql = build_window_aggregate(
-            &ni,
-            &serde_json::json!({"function": "sum", "column": "amt", "partitionBy": ["region"], "orderBy": ["dt"]}),
-        )
-        .unwrap();
+#[test]
+fn cloud_sink_rejects_avro_and_orc_formats() {
+    // audit pass-3: no Avro/ORC writer exists; selecting either used to
+    // silently write Parquet to the user's .avro/.orc path. Fail loud now.
+    for fmt in ["avro", "orc"] {
+        let err = build_cloud_sink("s3", &serde_json::json!({"format": fmt, "path": format!("s3://b/out.{}", fmt)}), "v").unwrap_err();
         assert!(
-            sql.contains("ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"),
-            "aggwin with orderBy must pin the full-partition frame, got: {}",
-            sql
+            err.to_string().to_lowercase().contains("not supported"),
+            "cloud {} sink should fail loud, got: {:?}",
+            fmt,
+            err
         );
     }
+}
 
-    #[test]
-    fn kafka_offset_latest_maps_to_the_latest_sentinel() {
-        // audit pass-3: the UI emits offset=latest/earliest; the engine reads
-        // it onto its start_offset sentinel (-2 = latest, -1 = earliest).
-        let p = pipeline_from_json(
-            r#"{"nodes":[
+#[test]
+fn csv_windows_1252_encoding_is_remapped_to_cp1252() {
+    // audit pass-3: DuckDB's CSV reader rejects the spelling "windows-1252"
+    // (it wants CP1252); the UI/docs offer "Windows-1252", so the engine
+    // must remap it rather than aborting the read.
+    let sql = build_csv_source(&serde_json::json!({"path": "f.csv", "hasHeader": true, "encoding": "windows-1252"}), None);
+    assert!(sql.contains("encoding='CP1252'"), "windows-1252 must remap to CP1252, got: {}", sql);
+    // latin-1 (a DuckDB-accepted spelling) passes through unchanged.
+    let latin = build_csv_source(&serde_json::json!({"path": "f.csv", "hasHeader": true, "encoding": "latin-1"}), None);
+    assert!(latin.contains("encoding='latin-1'"), "latin-1 must pass through, got: {}", latin);
+}
+
+#[test]
+fn db_sink_unknown_mode_fails_loud_not_destructive_overwrite() {
+    // audit pass-3: snk.sqlite/snk.duckdb used to DROP+CREATE for ANY
+    // unrecognized mode, so a typo like "appnd" silently wiped the table.
+    let err = build_sink_sql("snk.sqlite", &serde_json::json!({"tableName": "t", "mode": "appnd"}), "v", &[], None).unwrap_err();
+    assert!(
+        err.to_string().contains("write mode") && err.to_string().contains("appnd"),
+        "an unknown mode must fail loud, got: {:?}",
+        err
+    );
+    // The explicit "overwrite" default is still the destructive recreate.
+    let ok = build_sink_sql("snk.sqlite", &serde_json::json!({"tableName": "t", "mode": "overwrite"}), "v", &[], None).unwrap();
+    assert!(ok.contains("DROP TABLE IF EXISTS"), "overwrite stays a recreate, got: {}", ok);
+}
+
+#[test]
+fn relational_sink_append_creates_table_on_first_write() {
+    // A MotherDuck (relational) sink in append mode used to emit a bare
+    // INSERT INTO, which fails the first time the target doesn't exist
+    // (e.g. appending ledger rows from a foreach). Append now creates the
+    // table from the upstream's types before inserting, like truncate/upsert.
+    let sql = build_sink_sql(
+        "snk.motherduck",
+        &serde_json::json!({"database": "my_db", "tableName": "process_ledger", "mode": "append"}),
+        "v",
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(
+        sql.contains("CREATE TABLE IF NOT EXISTS") && sql.contains("LIMIT 0"),
+        "append must create-if-missing from upstream types, got: {}",
+        sql
+    );
+    assert!(sql.contains("INSERT INTO"), "append must still insert, got: {}", sql);
+}
+
+#[test]
+fn merge_mode_emits_partial_column_merge() {
+    // Issue #39: merge updates only non-key columns the source carries and
+    // inserts new rows; the key column is never in the UPDATE SET.
+    let sql = build_sink_sql(
+        "snk.duckdb",
+        &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
+        "v",
+        &["k".to_string(), "a".to_string(), "b".to_string()],
+        None,
+    )
+    .unwrap();
+    assert!(sql.contains("MERGE INTO"), "got: {}", sql);
+    assert!(sql.contains("ON (tgt.\"k\" = src.\"k\")"), "got: {}", sql);
+    // The UPDATE SET lists exactly the non-key columns (the key is matched
+    // on, never updated).
+    assert!(
+        sql.contains("WHEN MATCHED THEN UPDATE SET \"a\" = src.\"a\", \"b\" = src.\"b\" WHEN NOT MATCHED"),
+        "UPDATE SET must list only the non-key columns, got: {}",
+        sql
+    );
+    assert!(
+        sql.contains("WHEN NOT MATCHED THEN INSERT (\"k\", \"a\", \"b\") VALUES (src.\"k\", src.\"a\", src.\"b\")"),
+        "INSERT must list all source columns, got: {}",
+        sql
+    );
+}
+
+#[test]
+fn merge_mode_rejected_for_non_duckdb_target() {
+    let err = build_sink_sql(
+        "snk.postgres",
+        &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
+        "v",
+        &["k".to_string(), "a".to_string()],
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("merge"), "got: {:?}", err);
+}
+
+#[test]
+fn merge_mode_needs_input_columns() {
+    let err = build_sink_sql(
+        "snk.duckdb",
+        &serde_json::json!({"tableName": "t", "mode": "merge", "conflictColumns": ["k"]}),
+        "v",
+        &[],
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("input columns"), "got: {:?}", err);
+}
+
+#[test]
+fn db_sink_upsert_rejects_empty_conflict_columns() {
+    // audit pass-3: conflictColumns=[""] used to pass the length-based
+    // guard and emit a zero-length quoted identifier. The empty entry is
+    // now dropped, so the "needs a conflict column" guard fires.
+    let err = build_sink_sql(
+        "snk.sqlite",
+        &serde_json::json!({"tableName": "t", "mode": "upsert", "conflictColumns": ["", "  "]}),
+        "v",
+        &[],
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("conflict column"),
+        "blank conflict columns must be rejected, got: {:?}",
+        err
+    );
+}
+
+#[test]
+fn aggregate_missing_function_on_named_column_fails_loud() {
+    // audit pass-3: {column: "amount"} with no function used to silently
+    // become COUNT(amount); it must require an explicit function now.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let err = build_aggregate(
+        &ni,
+        &serde_json::json!({"groupBy": ["g"], "aggregations": [{"column": "amount", "output": "total"}]}),
+        GroupMode::Plain,
+    )
+    .unwrap_err();
+    assert!(err.contains("needs a function"), "named column without function must fail, got: {}", err);
+    // A bare row count (column "*", no function) is still allowed as COUNT.
+    let ok = build_aggregate(
+        &ni,
+        &serde_json::json!({"groupBy": ["g"], "aggregations": [{"column": "*", "output": "n"}]}),
+        GroupMode::Plain,
+    )
+    .unwrap();
+    assert!(ok.contains("COUNT(*)"), "count(*) default for '*' stays, got: {}", ok);
+}
+
+#[test]
+fn aggwin_with_order_by_pins_full_partition_frame() {
+    // audit pass-3: an ORDER BY in the window without an explicit frame
+    // silently becomes a running aggregate. xf.aggwin keeps a whole-
+    // partition total on every row, so the full frame must be pinned.
+    let mut ni = NodeInputs::default();
+    ni.ports.insert("main".into(), vec!["up".into()]);
+    let sql = build_window_aggregate(
+        &ni,
+        &serde_json::json!({"function": "sum", "column": "amt", "partitionBy": ["region"], "orderBy": ["dt"]}),
+    )
+    .unwrap();
+    assert!(
+        sql.contains("ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"),
+        "aggwin with orderBy must pin the full-partition frame, got: {}",
+        sql
+    );
+}
+
+#[test]
+fn kafka_offset_latest_maps_to_the_latest_sentinel() {
+    // audit pass-3: the UI emits offset=latest/earliest; the engine reads
+    // it onto its start_offset sentinel (-2 = latest, -1 = earliest).
+    let p = pipeline_from_json(
+        r#"{"nodes":[
                 {"id":"k","position":{"x":0,"y":0},"data":{"label":"Kafka","componentId":"src.kafka","properties":{"brokers":"b:9092","topic":"t","offset":"latest"}}},
                 {"id":"o","position":{"x":1,"y":0},"data":{"label":"CSV","componentId":"snk.csv","properties":{"path":"/tmp/out.csv"}}}
             ],"edges":[
@@ -3855,18 +3968,18 @@
                 {"id":"e1","source":"a","target":"d","sourceHandle":"main","targetHandle":"main","data":{"connectionType":"main"}},
                 {"id":"e2","source":"b","target":"d","sourceHandle":"main","targetHandle":"main","data":{"connectionType":"main"}}
             ]}"#,
-        );
-        let stages = compile(&doc).unwrap().stages;
-        let dbt = stages.iter().find(|s| s.node_id == "d").expect("dbt stage");
-        match &dbt.runtime {
-            Some(RuntimeSpec::Dbt(spec)) => {
-                assert_eq!(spec.from_views.len(), 2, "both inputs expected: {:?}", spec.from_views);
-                assert!(spec.from_views.contains(&"a".to_string()));
-                assert!(spec.from_views.contains(&"b".to_string()));
-            }
-            other => panic!("expected a Dbt runtime spec, got {:?}", other),
+    );
+    let stages = compile(&doc).unwrap().stages;
+    let dbt = stages.iter().find(|s| s.node_id == "d").expect("dbt stage");
+    match &dbt.runtime {
+        Some(RuntimeSpec::Dbt(spec)) => {
+            assert_eq!(spec.from_views.len(), 2, "both inputs expected: {:?}", spec.from_views);
+            assert!(spec.from_views.contains(&"a".to_string()));
+            assert!(spec.from_views.contains(&"b".to_string()));
         }
+        other => panic!("expected a Dbt runtime spec, got {:?}", other),
     }
+}
 
     #[test]
     fn teradata_conn_string_friendly_dsn_and_raw() {

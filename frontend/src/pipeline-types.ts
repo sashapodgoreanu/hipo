@@ -54,3 +54,12 @@ export type DuckleNodeData = {
     sampleRows?: Record<string, unknown>[];
     [key: string]: unknown;
 };
+
+/** Properties persisted by the shared read-only Query Source component. */
+export type QuerySourceProperties = {
+    dataSourceRefs: string[];
+    sql: string;
+    previewLimit?: number;
+    schema?: Column[];
+    invalidDataSourceRefs?: string[];
+};

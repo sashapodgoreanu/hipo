@@ -30,6 +30,10 @@ dist/
 # Claude Code local-user settings - keep out of version control
 .claude/settings.local.json
 .vscode/*
+!.vscode/
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
 !.vscode/settings.json.example
 !.vscode/extensions.json
 .idea/

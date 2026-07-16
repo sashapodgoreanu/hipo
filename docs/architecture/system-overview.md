@@ -73,3 +73,11 @@ checksum, non installer firmati secondo la CI rilevata.
 - `Engine`, `Connection`, `Context`, `Secret` e `StageResult` non sono tutti
   tipi centrali condivisi: alcuni sono confini concettuali composti da più
   strutture concrete.
+
+## Shared Data Sources
+
+Un item `data_source` persiste solo `kind`, `sqlAlias` e `connectionRef` in
+`data-sources/<id>.json`. `src.query` conserva gli id dei Data Source e SQL
+read-only; il desktop o il runner risolvono gli id in memoria prima del run o
+della preview. Le credenziali non attraversano il frontend e non vengono
+persistite nel `PipelineDoc` salvato.

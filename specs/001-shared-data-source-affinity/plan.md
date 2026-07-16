@@ -85,3 +85,23 @@ Nessuna migrazione automatica dei Source. Vecchie pipeline ignorano gli item Dat
 **Nuova dipendenza/plugin/extension/sidecar?** No. Si riusa il DuckDB CLI e le estensioni già presenti.
 
 **ADR needed?** Yes. Va registrata la scelta del worker CLI persistente, il framing/cancellation e la politica di fallback, perché modifica il confine di sessione dell’executor e i contratti IPC.
+
+## Compatibility inventory
+
+| Boundary | Existing contract | Feature impact and compatibility rule |
+|---|---|---|
+| Workspace repository | `RepoItemType`, `RepoPayload`, `repository.json`, per-item payload files | Additive `data_source` item and `data-sources/<id>.json`; existing item types and old workspaces remain readable. |
+| Pipeline JSON | `PipelineDoc`, `PipelineNode.properties` and TypeScript `DuckleNodeData.properties` | `src.query` is an additive component; `dataSourceRefs`, SQL and preview metadata are optional to old nodes. |
+| Planner | `compile_pipeline_sql`, `Stage`, `RuntimeSpec`, `CompiledPipeline` | Existing stages compile unchanged; affinity metadata/errors are additive and old Source branches retain their current execution path. |
+| Desktop IPC | Tauri commands in `apps/desktop/src/lib.rs`, `Channel<PipelineEvent>`, `RunResult` | New test/preview/event DTOs must be versioned; current run commands and event fields remain compatible. |
+| Web IPC | `/api/cmd/*`, `/api/run_stream`, `/api/inspect` and filesystem bridge in `duckle-runner` | New routes mirror desktop result/error shapes; existing command paths and local-request protections remain unchanged. |
+| Runtime persistence | run history, logs, materialized relations and temporary files | Affinity context is run-local; only sanitized ids, aliases, statuses and diagnostics may cross history/event boundaries. |
+| Secrets | encrypted Connection payload and runtime connection resolver | Data Source stores only `connectionRef`; secrets are resolved in memory and never copied into pipeline JSON, previews or errors. |
+
+### Capability review
+
+The new `data_source_test` and `query_source_preview` commands use the existing
+Tauri IPC surface and do not add filesystem, shell, network, or window
+permissions. Workspace reads continue through the already-scoped `fs` access;
+connections and DuckDB execution remain behind the existing Rust command
+boundary. The web preview uses the runner's existing local-request guard.

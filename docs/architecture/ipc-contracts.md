@@ -97,3 +97,16 @@ must document these effects and their serialization in the feature plan.
 No uniform generated schema or machine-checked contract exists between the
 Rust command signatures and `tauri-bridge.ts`; the two sides are manually
 mirrored. No frontend IPC/E2E test harness was detected.
+
+## Shared Data Source commands
+
+| Command/route | Input → output | Effects and guarantees |
+|---|---|---|
+| `data_source_test` / `/api/data-source-test` | connector kind → support diagnostic | Validates only `duckdb`/`postgres`; no credentials are accepted. |
+| `query_source_preview` / `/api/query-source-preview` | pipeline, node id, workspace → versioned preview DTO | Resolves Data Source ids server-side, attaches in memory, returns max 1000 rows within 30 seconds and masks engine errors. |
+
+Affinity DTOs are additive to the legacy `PipelineEvent`: every new event
+contains `schemaVersion`, `runId`, `contextId`, `sequence`, `timestamp` and
+`status`. Diagnostics use the sanitized `{code, message, retryable, nodeId?,
+dataSourceId?, sanitized}` envelope. The current frontend keeps the legacy run
+event union until lifecycle events are emitted by the affinity worker.

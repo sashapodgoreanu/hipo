@@ -20,6 +20,7 @@ import { ConnectionRefField } from './ConnectionRefField';
 import { RoutineRefField } from './RoutineRefField';
 import { SnapshotPickerField } from './SnapshotPickerField';
 import { PipelineRefField } from './PipelineRefField';
+import DataSourceRefField from '../../DataSourceRefField';
 import { FieldContext } from './FieldContext';
 import { buildContextVars, builtinVars } from '../../run-resolve';
 import type { ContextPayload } from '../../repo-types';
@@ -288,6 +289,8 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
                     onChange={onChange}
                 />
             );
+        case 'data-source-ref':
+            return <DataSourceRefField value={value} onChange={v => onChange(v)} />;
         case 'routine-ref':
             return (
                 <RoutineRefField

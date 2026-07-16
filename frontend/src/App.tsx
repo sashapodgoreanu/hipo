@@ -77,6 +77,9 @@ import {
     saveRepository,
     setWorkspacePath,
     WorkspaceLoadError,
+    findDataSourceDependents,
+    invalidateDataSourceRefs,
+    propagateDataSourceAliasRename,
 } from './workspace';
 import { openExternal } from './tauri-io';
 import { GuidedTour } from './GuidedTour';
@@ -300,6 +303,33 @@ const INITIAL_REPO: RepoItem[] = [
     { id: 'j1', name: 'orders_etl', type: 'pipeline', parentId: 'pipelines' },
 ];
 
+// Older workspaces (and browser localStorage snapshots) predate the Data
+// Sources system folder. Keep the repository tree self-healing so a newly
+// created item never points at an invisible parent.
+function normalizeRepoItems(items: RepoItem[]): RepoItem[] {
+    const next = [...items];
+    const builtins: RepoItem[] = [
+        { id: 'root', name: 'Duckle Project', type: 'project' },
+        { id: 'pipelines', name: 'Pipelines', type: 'folder', parentId: 'root' },
+        { id: 'connections', name: 'Connections', type: 'folder', parentId: 'root' },
+        { id: 'data-sources', name: 'Data Sources', type: 'folder', parentId: 'root' },
+        { id: 'contexts', name: 'Contexts', type: 'folder', parentId: 'root' },
+        { id: 'routines', name: 'Routines', type: 'folder', parentId: 'root' },
+        { id: 'docs', name: 'Documentation', type: 'folder', parentId: 'root' },
+        { id: 'dives', name: 'Dives', type: 'folder', parentId: 'root' },
+        { id: 'dashboards', name: 'Dashboards', type: 'folder', parentId: 'root' },
+    ];
+    for (const builtin of builtins) {
+        if (!next.some(item => item.id === builtin.id)) next.push(builtin);
+    }
+    const ids = new Set(next.map(item => item.id));
+    return next.map(item => {
+        if (item.type !== 'data_source') return item;
+        if (!item.parentId || !ids.has(item.parentId)) return { ...item, parentId: 'data-sources' };
+        return item;
+    });
+}
+
 function paletteKindToFlowType(kind: PaletteKind): string {
     switch (kind) {
         case 'source':
@@ -368,7 +398,7 @@ export default function App() {
         [],
     );
     const [renameRequest, setRenameRequest] = useState<number>(0);
-    const [repo, setRepo] = useState<RepoItem[]>(() => loadPersisted('repo', INITIAL_REPO));
+    const [repo, setRepo] = useState<RepoItem[]>(() => normalizeRepoItems(loadPersisted('repo', INITIAL_REPO)));
     const [activeContextId, setActiveContextId] = useState<string | null>(() =>
         loadPersisted<string | null>('active-context', null),
     );
@@ -496,7 +526,7 @@ export default function App() {
                     if (state.engine) setEngine(state.engine as EngineId);
                     if (state.pipelineData)
                         setPipelineData(state.pipelineData as Record<string, PipelineState>);
-                    if (state.repo) setRepo(state.repo as RepoItem[]);
+                    if (state.repo) setRepo(normalizeRepoItems(state.repo as RepoItem[]));
                     if (state.jobs) setJobs(state.jobs as Job[]);
                     if (state.activeJobId) setActiveJobId(state.activeJobId);
                     if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
@@ -1942,6 +1972,31 @@ export default function App() {
                 }
             };
             addDescendants(id);
+            const deletedDataSources = [...toDelete].filter(
+                deletedId => repo.find(repoItem => repoItem.id === deletedId)?.type === 'data_source',
+            );
+            const dependencies = deletedDataSources.flatMap(dataSourceId =>
+                findDataSourceDependents(pipelineData, dataSourceId).map(dependency => ({
+                    ...dependency,
+                    dataSourceId,
+                })),
+            );
+            if (dependencies.length > 0) {
+                const detail = dependencies
+                    .map(dependency => `${dependency.pipelineId} / ${dependency.nodeId}`)
+                    .join('\n');
+                const confirmed = window.confirm(
+                    `Delete ${deletedDataSources.length === 1 ? 'this Data Source' : 'these Data Sources'}?\n\n` +
+                    `The following Query Source references will become invalid:\n${detail}`,
+                );
+                if (!confirmed) return;
+            }
+            if (deletedDataSources.length > 0) {
+                setPipelineData(d => deletedDataSources.reduce(
+                    (next, dataSourceId) => invalidateDataSourceRefs(next, dataSourceId),
+                    d,
+                ));
+            }
             setRepo(r => r.filter(i => !toDelete.has(i.id)));
             setJobs(js => js.filter(j => !toDelete.has(j.id)));
             setPipelineData(d => {
@@ -2136,6 +2191,25 @@ export default function App() {
         ) => {
             if (!repoEditor) return;
             if (repoEditor.itemId) {
+                const previous = repo.find(i => i.id === repoEditor.itemId);
+                if (previous?.type === 'data_source' && type === 'data_source') {
+                    const before = (previous.payload as DataSourcePayload | undefined)?.sqlAlias;
+                    const after = (payload as DataSourcePayload).sqlAlias;
+                    if (before && after && before !== after) {
+                        const dependencies = findDataSourceDependents(pipelineData, previous.id);
+                        if (dependencies.length > 0) {
+                            const detail = dependencies
+                                .map(dependency => `${dependency.pipelineId} / ${dependency.nodeId}`)
+                                .join('\n');
+                            const confirmed = window.confirm(
+                                `Rename SQL alias "${before}" to "${after}"?\n\n` +
+                                `The following Query Source SQL statements will be updated:\n${detail}`,
+                            );
+                            if (!confirmed) return;
+                        }
+                        setPipelineData(data => propagateDataSourceAliasRename(data, before, after, previous.id));
+                    }
+                }
                 setRepo(r =>
                     r.map(i =>
                         i.id === repoEditor.itemId
@@ -2150,20 +2224,26 @@ export default function App() {
                     Date.now().toString(36) +
                     '_' +
                     Math.random().toString(36).slice(2, 6);
+                const parentId =
+                    type === 'data_source'
+                        ? repo.find(i => i.id === repoEditor.parentId && (i.type === 'folder' || i.type === 'project'))
+                            ? repoEditor.parentId
+                            : 'data-sources'
+                        : repoEditor.parentId;
                 setRepo(r => [
                     ...r,
                     {
                         id,
                         name,
                         type,
-                        parentId: repoEditor.parentId,
+                        parentId,
                         payload: payload as RepoItem['payload'],
                     },
                 ]);
             }
             setRepoEditor(null);
         },
-        [repoEditor],
+        [repoEditor, repo, pipelineData],
     );
 
     const handleSaveConnection = useCallback(

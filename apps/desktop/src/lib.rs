@@ -8,6 +8,9 @@ use duckle_duckdb_engine::{
     append_run_record, compile_pipeline_sql, load_run_history, DuckdbEngine, PipelineDoc,
     PipelineEvent, RunRecord, RunResult, StageSql,
 };
+pub use duckle_duckdb_engine::{
+    AffinityEventDto, AffinityEventPayload, DataSourceDto, QuerySourcePreviewDto, SanitizedErrorEnvelope, AFFINITY_CONTRACT_SCHEMA_VERSION,
+};
 use duckle_metadata::Schema;
 use duckle_plugin_sdk::{InspectError, SchemaInspector};
 use duckle_scheduler::{Schedule, Scheduler};
@@ -15,6 +18,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -172,6 +176,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            data_source_test,
+            query_source_preview,
             autodetect_schema,
             run_pipeline,
             run_pipeline_partial,
@@ -244,6 +250,98 @@ pub fn run() {
 #[tauri::command]
 fn ping() -> &'static str {
     "pong"
+}
+
+#[derive(Debug, Serialize)]
+struct DataSourceTestResult {
+    supported: bool,
+    kind: String,
+    message: String,
+}
+
+/// Validate the non-secret portion of a Data Source before a run.
+#[tauri::command]
+fn data_source_test(kind: String) -> Result<DataSourceTestResult, String> {
+    let normalized = kind.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "duckdb" | "postgres") {
+        return Err(format!("unsupported Data Source kind: {normalized}"));
+    }
+    Ok(DataSourceTestResult {
+        supported: true,
+        kind: normalized,
+        message: "Data Source kind is supported; Connection and extension availability are checked at run time".into(),
+    })
+}
+
+/// Preview a Query Source after resolving its Data Source ids in memory. The
+/// query runs in a cancellable worker and never returns the underlying engine
+/// error because DuckDB drivers may echo connection details.
+#[tauri::command]
+async fn query_source_preview(pipeline: PipelineDoc, node_id: String, workspace_path: String) -> Result<QuerySourcePreviewDto, String> {
+    let mut pipeline = pipeline;
+    resolve_saved_connections(&mut pipeline, &Some(workspace_path.clone()))?;
+    duckle_duckdb_engine::context::apply_env(&mut pipeline);
+    duckle_duckdb_engine::context::apply_time_builtins(&mut pipeline);
+    duckle_duckdb_engine::context::apply_workspace_context(&mut pipeline, std::path::Path::new(&workspace_path));
+    let node = pipeline
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id)
+        .ok_or_else(|| "query_source_preview.node_not_found".to_string())?;
+    if node.data.component_id.as_deref() != Some("src.query") {
+        return Err("query_source_preview.invalid_node".to_string());
+    }
+    let props = node
+        .data
+        .properties
+        .clone()
+        .ok_or_else(|| "query_source_preview.missing_properties".to_string())?;
+    let sql = duckle_duckdb_engine::plan::query_source_sql(&props).map_err(|error| format!("query_source_preview.invalid_sql: {}", error.code()))?;
+    let prelude = duckle_duckdb_engine::plan::query_source_attach_prelude(&props);
+    let limit = props.get("previewLimit").and_then(JsonValue::as_u64).unwrap_or(1000).clamp(1, 1000) as usize;
+    let schema_version = AFFINITY_CONTRACT_SCHEMA_VERSION;
+    let context_id = format!(
+        "preview-{}-{}",
+        node_id,
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+    );
+    let started = Instant::now();
+    let engine = engine()?.for_new_run();
+    let worker_engine = engine.clone();
+    let joined = tokio::task::spawn_blocking(move || worker_engine.query_with_prelude(&prelude, &sql, limit));
+    let query = match tokio::time::timeout(Duration::from_secs(30), joined).await {
+        Ok(Ok(Ok(result))) => result,
+        Ok(Ok(Err(_))) => {
+            return Ok(QuerySourcePreviewDto {
+                schema_version,
+                context_id,
+                schema: Vec::new(),
+                rows: Vec::new(),
+                duration_ms: started.elapsed().as_millis() as u64,
+                error: Some(SanitizedErrorEnvelope {
+                    code: "query_source_preview.failed".into(),
+                    message: "Query Source preview failed; inspect the Data Source connection and SQL".into(),
+                    retryable: true,
+                    node_id: Some(node_id),
+                    data_source_id: None,
+                    sanitized: true,
+                }),
+            });
+        }
+        Ok(Err(_)) => return Err("query_source_preview.worker_failed".to_string()),
+        Err(_) => {
+            engine.request_cancel();
+            return Err("query_source_preview.timeout".to_string());
+        }
+    };
+    Ok(QuerySourcePreviewDto {
+        schema_version,
+        context_id,
+        schema: query.columns,
+        rows: query.rows,
+        duration_ms: started.elapsed().as_millis() as u64,
+        error: None,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -397,13 +495,15 @@ fn resolve_saved_connections(
 ) -> Result<(), String> {
     match workspace_path {
         Some(ws) => {
-            duckle_secrets::resolve_connection_refs(std::path::Path::new(ws), &mut pipeline.nodes)
+            let workspace = std::path::Path::new(ws);
+            duckle_secrets::resolve_connection_refs(workspace, &mut pipeline.nodes)?;
+            duckle_secrets::resolve_data_source_refs(workspace, &mut pipeline.nodes)
         }
-        None if duckle_secrets::has_connection_refs(&pipeline.nodes) => Err(
-            "this pipeline uses a saved Salesforce connection; run it from a workspace \
-             so the connection can be resolved"
-            .into(),
-        ),
+        None if duckle_secrets::has_connection_refs(&pipeline.nodes) || duckle_secrets::has_data_source_refs(&pipeline.nodes) => {
+            Err("this pipeline uses saved Connections or Data Sources; run it from a workspace \
+             so references can be resolved"
+                .into())
+        }
         None => Ok(()),
     }
 }

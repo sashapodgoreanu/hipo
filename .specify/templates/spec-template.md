@@ -11,6 +11,7 @@
 **Requested change**: [User-visible outcome.]
 **Out of scope**: [Explicit exclusions.]
 **Behavior to preserve**: [Pipeline/runtime/UI behavior that must not regress.]
+**UI continuity (when UI changes)**: [Existing components, layout patterns, tokens, typography, spacing, control states, and interactions to reuse; document any intentional deviation.]
 
 ## User Scenarios and Acceptance
 
@@ -39,11 +40,20 @@
 | Stage / RuntimeSpec / materialization | [Y/N] | `plan/mod.rs`, engine | [ ] |
 | Tauri IPC / web bridge | [Y/N] | desktop `lib.rs`, `tauri-bridge.ts` | [ ] |
 | Workspace persistence / migration | [Y/N] | `workspace.ts`, engine history/state | [ ] |
+| Frontend UI / design system | [Y/N] | existing `frontend/src/...` components and styles | Reuse established visual and interaction patterns; no unintended style regression. |
 
 ## Functional Requirements
 
 - **FR-001**: [Specific behavior.]
 - **FR-002**: [Specific behavior.]
+
+## Duckle Component Invariants
+
+For every new or modified Duckle connector, source, sink, or component:
+
+- [ ] The MCP API is implemented and exposed through `crates/duckle-mcp`, with compatible request/response contracts and coverage.
+- [ ] The node exposes both required output flows: `main` and `reject`.
+- [ ] The palette/manifest, Rust metadata, planner, executor, frontend validation, and MCP contract define the same `main` and `reject` port semantics.
 
 ## Execution and Security Impact
 
@@ -64,6 +74,9 @@
 
 - [ ] [Observable user outcome.]
 - [ ] Existing affected pipeline(s) preserve behavior or use an approved migration.
+- [ ] Every added or modified connector, source, sink, or component exposes its MCP API.
+- [ ] Every added or modified node exposes both `main` and `reject` output flows.
+- [ ] UI changes reuse the existing visual language and interaction patterns, or an intentional deviation is documented and approved.
 - [ ] Errors do not expose secrets.
 - [ ] Relevant regression, unit, integration, and build checks are identified.
 

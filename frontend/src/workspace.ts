@@ -473,47 +473,95 @@ export async function listPipelineFiles(path: string): Promise<string[]> {
     return readDirEntries(joinPath(path, PIPELINES_DIR));
 }
 
+export type DataSourceDependency = {
+    pipelineId: string;
+    nodeId: string;
+};
+
+/** Return the Query Source nodes that reference a Data Source id. */
+export function findDataSourceDependents<T>(
+    pipelineData: Record<string, T>,
+    dataSourceId: string,
+): DataSourceDependency[] {
+    const dependents: DataSourceDependency[] = [];
+    for (const [pipelineId, pipeline] of Object.entries(pipelineData)) {
+        const value = pipeline as unknown as {
+            nodes?: Array<{ id?: string; data?: { componentId?: string; properties?: Record<string, unknown> } }>;
+        };
+        for (const node of value.nodes ?? []) {
+            if (node.data?.componentId !== 'src.query') continue;
+            const refs = Array.isArray(node.data.properties?.dataSourceRefs)
+                ? node.data.properties?.dataSourceRefs.map(String)
+                : [];
+            if (node.id && refs.includes(dataSourceId)) dependents.push({ pipelineId, nodeId: node.id });
+        }
+    }
+    return dependents;
+}
+
 /** Pure pipeline migration helpers used by Data Source rename/delete flows. */
 export function propagateDataSourceAliasRename<T>(
     pipelineData: Record<string, T>,
     oldAlias: string,
     newAlias: string,
+    dataSourceId?: string,
 ): Record<string, T> {
     if (!oldAlias || oldAlias === newAlias) return pipelineData;
     const escaped = oldAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const token = new RegExp(`\\b${escaped}\\b`, 'gi');
     const replaceSql = (sql: string): string => {
-        let out = '';
-        let quote: string | null = null;
-        for (let i = 0; i < sql.length; i += 1) {
-            const ch = sql[i];
-            if ((ch === "'" || ch === '"') && sql[i - 1] !== '\\') {
-                quote = quote === ch ? null : quote ?? ch;
-                out += ch;
-            } else {
-                out += quote ? ch : ch;
-            }
-        }
-        if (!quote) return out.replace(token, newAlias);
-        // Preserve quoted literals by replacing only unquoted spans.
         let result = '';
-        let start = 0;
-        let active: string | null = null;
+        let plain = '';
+        const flush = () => {
+            if (plain) result += plain.replace(token, newAlias);
+            plain = '';
+        };
         for (let i = 0; i < sql.length; i += 1) {
             const ch = sql[i];
-            if ((ch === "'" || ch === '"') && sql[i - 1] !== '\\') {
-                if (!active) { result += sql.slice(start, i).replace(token, newAlias); active = ch; }
-                else { result += sql.slice(start, i + 1); active = null; }
-                start = i + 1;
+            const next = sql[i + 1];
+            if (ch === "'" || ch === '"') {
+                flush();
+                const quote = ch;
+                let end = i + 1;
+                while (end < sql.length) {
+                    if (sql[end] === quote && sql[end + 1] === quote) {
+                        end += 2;
+                        continue;
+                    }
+                    if (sql[end] === quote) {
+                        end += 1;
+                        break;
+                    }
+                    end += 1;
+                }
+                result += sql.slice(i, end);
+                i = end - 1;
+            } else if (ch === '-' && next === '-') {
+                flush();
+                const end = sql.indexOf('\n', i + 2);
+                const stop = end < 0 ? sql.length : end;
+                result += sql.slice(i, stop);
+                i = stop - 1;
+            } else if (ch === '/' && next === '*') {
+                flush();
+                const end = sql.indexOf('*/', i + 2);
+                const stop = end < 0 ? sql.length : end + 2;
+                result += sql.slice(i, stop);
+                i = stop - 1;
+            } else {
+                plain += ch;
             }
         }
-        return result + (active ? sql.slice(start) : sql.slice(start).replace(token, newAlias));
+        flush();
+        return result;
     };
     return Object.fromEntries(Object.entries(pipelineData).map(([id, pipeline]) => {
         const value = pipeline as unknown as { nodes?: Array<{ data?: { componentId?: string; properties?: Record<string, unknown> } }> };
         const nodes = value.nodes?.map(node => {
             if (node.data?.componentId !== 'src.query') return node;
             const props = node.data.properties ?? {};
+            const refs = Array.isArray(props.dataSourceRefs) ? props.dataSourceRefs.map(String) : [];
+            if (dataSourceId && !refs.includes(dataSourceId)) return node;
             const sql = typeof props.sql === 'string' ? replaceSql(props.sql) : props.sql;
             return { ...node, data: { ...node.data, properties: { ...props, sql } } };
         });

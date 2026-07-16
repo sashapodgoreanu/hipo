@@ -25,8 +25,14 @@ export function friendlyError(raw: string | undefined): string {
     const wrap = (msg: string) => stagePrefix + msg;
 
     if ((m = body.match(/Catalog Error: Table with name (\S+) does not exist/i))) {
+        const table = m[1].replace(/^['\"]|['\"]$/g, '');
+        if (table.includes('.')) {
+            return wrap(
+                `Data Source table '${table}' isn't available. Check the Data Source alias, connection, catalog, and schema.`,
+            );
+        }
         return wrap(
-            `Upstream view '${m[1]}' doesn't exist yet. Did the previous stage fail, or is the edge disconnected?`,
+            `Upstream view '${table}' doesn't exist yet. Did the previous stage fail, or is the edge disconnected?`,
         );
     }
     if ((m = body.match(/Catalog Error: Schema with name (\S+) does not exist/i))) {

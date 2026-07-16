@@ -24,6 +24,9 @@
 - [ ] Documents materialization, RuntimeSpec, secrets, and security impact where relevant.
 - [ ] Justifies new dependency/plugin/extension/sidecar, if any.
 - [ ] Identifies affected regression tests.
+- [ ] For every new or modified Duckle connector, source, sink, or component, includes implementation and tests for its MCP API in `crates/duckle-mcp`.
+- [ ] For every new or modified node, defines and verifies both mandatory output flows: `main` and `reject`.
+- [ ] For UI changes, identifies the existing components/styles/tokens to reuse and documents any intentional visual or interaction deviation.
 
 ## Affected Modules and Contracts
 
@@ -49,7 +52,7 @@
 
 ### Frontend and IPC
 
-[Component manifest/palette, bridge DTOs, command/event impacts, no duplicated planner semantics.]
+[Component manifest/palette, bridge DTOs, command/event impacts, no duplicated planner semantics. For connectors, sources, sinks, and components, include the matching MCP API contract. For every node, align the required `main` and `reject` output flows across palette/manifest, metadata, frontend validation, planner, executor, and MCP. Reuse existing UI components, tokens, typography, spacing, control states, and interaction patterns; document intentional deviations.]
 
 ### Secrets, security, and operations
 
@@ -63,7 +66,8 @@
 
 - Unit: [planner/domain/secret/context tests].
 - Integration: [DuckDB or service-gated tests].
-- Frontend: [type-check/build and test coverage if introduced].
+- MCP: [API registration, request/response contract, and `main`/`reject` output coverage for every affected Duckle connector, source, sink, or component].
+- Frontend: [type-check/build and test coverage if introduced; visual and interaction regression checks for UI changes].
 - Desktop/IPC: [command/channel coverage or explicit gap].
 - Commands: local `cargo fmt --all --check`; optional strict `cargo clippy --workspace --all-targets --all-features`; `cargo test --workspace`; `npm --prefix frontend run lint`; `npm --prefix frontend run build`. CI parity uses `cargo test --workspace --exclude duckle-lance` and `cargo clippy --workspace --all-targets --exclude duckle-lance`.
 

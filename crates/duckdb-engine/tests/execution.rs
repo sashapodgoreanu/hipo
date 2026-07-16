@@ -4,7 +4,7 @@
 //! exercise the real read → transform → write path against temp files
 //! and then read the output back to prove the data actually landed.
 
-use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc};
+use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc, PipelineEvent};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
@@ -1263,6 +1263,252 @@ fn two_duckdb_sources_same_database() {
     assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
     // 3 orders, each matching its customer on id -> 3 joined rows.
     assert_eq!(count(&format!("read_csv_auto('{}')", out)), 3);
+}
+
+#[test]
+fn query_source_attaches_data_source_alias_and_materializes() {
+    // Regression fixture for the shared Data Source path: the alias is
+    // attached only for the Query Source stage. Its result must be a run-db
+    // table before the alias is detached, so the downstream sink can consume
+    // it in the same batched CLI session.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "shared.duckdb");
+    duckdb_exec(&srcdb, "CREATE TABLE orders AS SELECT * FROM (VALUES (1,'paid'),(2,'pending')) t(id,status)");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node(
+                "q",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT * FROM sales.orders",
+                    "_duckleDataSourceRuntime": [{
+                        "id": "ds-orders",
+                        "alias": "sales",
+                        "kind": "duckdb",
+                        "connection": {"database": &srcdb}
+                    }]
+                })
+            ),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true }))
+        ]),
+        json!([main_edge("e1", "q", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+}
+
+#[test]
+fn query_sources_sharing_a_data_source_join_in_one_affinity_worker() {
+    // Matches the canvas case: two Query Sources feed a Join and refer to the
+    // same Data Source alias. The second source must reuse the worker's
+    // attachment, while both results are materialized before the Join runs.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "shared.duckdb");
+    duckdb_exec(&srcdb, "CREATE TABLE orders AS SELECT * FROM (VALUES (1,'paid'),(2,'pending')) t(id,status)");
+    let out = out_path(tmp.path(), "joined.csv");
+    let runtime = json!([{
+        "id": "ds-orders",
+        "alias": "sales",
+        "kind": "duckdb",
+        "connection": {"database": &srcdb}
+    }]);
+    let d = doc(
+        json!([
+            node(
+                "left",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status FROM sales.orders",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node(
+                "right",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status AS lookup_status FROM sales.orders",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node("join", "xf.join.inner", json!({"leftKey": "id", "rightKey": "id"})),
+            node("out", "snk.csv", json!({"path": out, "hasHeader": true}))
+        ]),
+        json!([
+            main_edge("e1", "left", "join"),
+            lookup_edge("e2", "right", "join"),
+            main_edge("e3", "join", "out")
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+}
+
+#[test]
+fn query_source_join_writes_unmatched_reject_output_to_csv() {
+    // The Join manifest calls the secondary output "unmatched", but persists
+    // it as the standard `reject` handle. This is the exact graph shape used
+    // by a reject-to-CSV branch in the canvas.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "shared.duckdb");
+    duckdb_exec(
+        &srcdb,
+        "CREATE TABLE orders AS SELECT * FROM (VALUES (1,'paid'),(2,'pending'),(3,'shipped')) t(id,status)",
+    );
+    let matched_out = out_path(tmp.path(), "matched.csv");
+    let unmatched_out = out_path(tmp.path(), "unmatched.csv");
+    let runtime = json!([{
+        "id": "ds-orders",
+        "alias": "sales",
+        "kind": "duckdb",
+        "connection": {"database": &srcdb}
+    }]);
+    let d = doc(
+        json!([
+            node(
+                "left",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status FROM sales.orders WHERE id < 3",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node(
+                "right",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status AS lookup_status FROM sales.orders WHERE id > 1",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node("join", "xf.join.inner", json!({"leftKey": "id", "rightKey": "id"})),
+            node("matched", "snk.csv", json!({"path": matched_out, "hasHeader": true})),
+            node("unmatched", "snk.csv", json!({"path": unmatched_out, "hasHeader": true}))
+        ]),
+        json!([
+            main_edge("e1", "left", "join"),
+            lookup_edge("e2", "right", "join"),
+            main_edge("e3", "join", "matched"),
+            port_edge("e4", "join", "reject", "unmatched")
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", matched_out)), 1);
+    assert_eq!(count(&format!("read_csv_auto('{}')", unmatched_out)), 1);
+    assert_eq!(scalar_string(&format!("SELECT id FROM read_csv_auto('{}')", unmatched_out)), "1");
+}
+
+#[test]
+fn query_source_join_log_message_stays_in_affinity_session() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "shared.duckdb");
+    duckdb_exec(&srcdb, "CREATE TABLE orders AS SELECT * FROM (VALUES (1,'paid'),(2,'pending')) t(id,status)");
+    let out = out_path(tmp.path(), "logged.csv");
+    let runtime = json!([{
+        "id": "ds-orders",
+        "alias": "sales",
+        "kind": "duckdb",
+        "connection": {"database": &srcdb}
+    }]);
+    let d = doc(
+        json!([
+            node(
+                "left",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status FROM sales.orders",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node(
+                "right",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status AS lookup_status FROM sales.orders",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node("join", "xf.join.inner", json!({"leftKey": "id", "rightKey": "id"})),
+            node("log", "ctl.log", json!({"message": "joined {rows} rows"})),
+            node("out", "snk.csv", json!({"path": out, "hasHeader": true}))
+        ]),
+        json!([
+            main_edge("e1", "left", "join"),
+            lookup_edge("e2", "right", "join"),
+            main_edge("e3", "join", "log"),
+            main_edge("e4", "log", "out")
+        ]),
+    );
+    let mut events = Vec::new();
+    let result = engine.execute_pipeline_with_events(&d, None, None, |event| events.push(event));
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(count(&format!("read_csv_auto('{}')", out)), 2);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        PipelineEvent::Log { node_id, level, message }
+            if node_id == "log" && level == "info" && message == "joined 2 rows"
+    )));
+}
+
+#[test]
+fn partial_run_query_sources_returns_the_join_preview_from_the_affinity_worker() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "shared.duckdb");
+    duckdb_exec(&srcdb, "CREATE TABLE orders AS SELECT * FROM (VALUES (1,'paid'),(2,'pending')) t(id,status)");
+    let runtime = json!([{
+        "id": "ds-orders",
+        "alias": "sales",
+        "kind": "duckdb",
+        "connection": {"database": &srcdb}
+    }]);
+    let d = doc(
+        json!([
+            node(
+                "left",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status FROM sales.orders",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node(
+                "right",
+                "src.query",
+                json!({
+                    "dataSourceRefs": ["ds-orders"],
+                    "sql": "SELECT id, status AS lookup_status FROM sales.orders",
+                    "_duckleDataSourceRuntime": runtime.clone()
+                })
+            ),
+            node("join", "xf.join.inner", json!({"leftKey": "id", "rightKey": "id"})),
+            node("out", "snk.csv", json!({"path": out_path(tmp.path(), "unused.csv"), "hasHeader": true}))
+        ]),
+        json!([
+            main_edge("e1", "left", "join"),
+            lookup_edge("e2", "right", "join"),
+            main_edge("e3", "join", "out")
+        ]),
+    );
+    let result = engine.execute_pipeline_with_events(&d, Some("join"), None, |_| {});
+    assert_eq!(result.status, "ok", "partial run failed: {:?}", result.error);
+    let join_preview = result.preview.iter().find(|preview| preview.node_id == "join").expect("Join preview");
+    assert_eq!(join_preview.rows.len(), 2);
 }
 
 #[test]

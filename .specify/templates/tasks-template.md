@@ -28,9 +28,9 @@ Use exact repository paths. Mark `[P]` only for tasks that do not contend for fi
 
 ### Phase 4 — Runtime surfaces
 
-- [ ] T008 [US?] Update scheduler, runner, MCP, or sidecar integration in the exact affected crate.
+- [ ] T008 [US?] For every new or modified Duckle connector, source, sink, or component, implement and test its MCP API in `crates/duckle-mcp/...`; otherwise update affected scheduler, runner, MCP, or sidecar integration in the exact crate.
 - [ ] T009 [US?] Update Tauri command DTO/channel behavior in `apps/desktop/src/...`, when required.
-- [ ] T010 [US?] Update palette, manifest, bridge, and UI in `frontend/src/...`, when required.
+- [ ] T010 [US?] Update palette, manifest, bridge, and UI in `frontend/src/...`, when required — for every affected node, define and test both mandatory output flows, `main` and `reject`, across metadata, palette/manifest, frontend validation, planner, executor, and MCP; reuse existing components, styles/tokens, spacing, states, and interaction patterns; document any intentional deviation.
 
 ### Phase 5 — Security and verification
 
@@ -47,5 +47,8 @@ Use exact repository paths. Mark `[P]` only for tasks that do not contend for fi
 
 - Every task identifies its file/module and verification.
 - No task silently changes an existing serialized or IPC contract.
+- Connector/source/sink/component tasks include MCP API implementation and verification.
+- Node tasks include `main` and `reject` output-flow implementation and verification.
+- UI tasks name the existing visual/interaction patterns they preserve and include an appropriate regression or review check.
 - Security-sensitive tasks identify secret, path, process, or network effects.
 - The final task reports checks run, skipped checks, and known coverage gaps.

@@ -19,13 +19,17 @@
 //! trusted network or localhost.
 
 use duckle_duckdb_engine::{append_run_record, load_run_history, DuckdbEngine, PipelineDoc, RunRecord};
+#[allow(unused_imports)]
+pub use duckle_duckdb_engine::{
+    AffinityEventDto, AffinityEventPayload, DataSourceDto, QuerySourcePreviewDto, SanitizedErrorEnvelope, AFFINITY_CONTRACT_SCHEMA_VERSION,
+};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PANEL_HTML: &str = include_str!("panel.html");
 
@@ -295,6 +299,12 @@ fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
     if req.method == "POST" && req.path == "/api/inspect" {
         return inspect_schema(&mut stream, state, &req.body);
     }
+    if req.method == "POST" && req.path == "/api/query-source-preview" {
+        return query_source_preview(&mut stream, state, &req.body);
+    }
+    if req.method == "POST" && req.path == "/api/data-source-test" {
+        return data_source_test(&mut stream, &req.body);
+    }
     // Static frontend: map the URL path into the dist dir; unknown non-asset
     // paths fall back to index.html (SPA routing).
     serve_static(&mut stream, state, &req.path)
@@ -416,7 +426,7 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
             };
             // Saved Salesforce connection refs resolve server-side against this
             // workspace (#166 stage 2) - the browser never sees the secret.
-            if let Err(e) = duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes) {
+            if let Err(e) = resolve_workspace_refs(&state.workspace, &mut doc) {
                 return respond_err(stream, "400 Bad Request", &e);
             }
             // Same placeholder resolution as /api/run (execute_one) and the
@@ -529,6 +539,11 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
 /// each engine PipelineEvent is a `data:` line; the final RunResult is an
 /// `event: result` line. The frontend turns these back into the same live
 /// per-node animation the desktop gets from the Tauri Channel.
+fn resolve_workspace_refs(workspace: &Path, doc: &mut PipelineDoc) -> Result<(), String> {
+    duckle_secrets::resolve_connection_refs(workspace, &mut doc.nodes)?;
+    duckle_secrets::resolve_data_source_refs(workspace, &mut doc.nodes)
+}
+
 fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
     let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
@@ -537,7 +552,7 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
     };
     // Saved Salesforce connection refs resolve server-side against this
     // workspace (#166 stage 2) - the browser never sees the secret.
-    if let Err(e) = duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes) {
+    if let Err(e) = resolve_workspace_refs(&state.workspace, &mut doc) {
         return respond_err(stream, "400 Bad Request", &e);
     }
     // Same placeholder resolution as /api/run (execute_one) and the desktop:
@@ -606,6 +621,109 @@ fn inspect_schema(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Resu
         ),
         Err(e) => respond_err(stream, "422 Unprocessable Entity", &e.to_string()),
     }
+}
+
+/// Validate the non-secret Data Source kind for web-editor parity with the
+/// desktop `data_source_test` command. Connection reachability and secrets
+/// are intentionally deferred to the run/preview boundary.
+fn data_source_test(stream: &mut TcpStream, body: &[u8]) -> Result<(), String> {
+    let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("").trim().to_ascii_lowercase();
+    if !matches!(kind.as_str(), "duckdb" | "postgres") {
+        return respond_err(
+            stream,
+            "400 Bad Request",
+            &format!("unsupported Data Source kind: {}", if kind.is_empty() { "(missing)" } else { &kind }),
+        );
+    }
+    respond_json(
+        stream,
+        &json!({
+            "supported": true,
+            "kind": kind,
+            "message": "Data Source kind is supported; Connection and extension availability are checked at run time"
+        }),
+    )
+}
+
+fn query_source_preview(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
+    let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let mut doc: PipelineDoc = serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)).map_err(|e| format!("bad pipeline: {}", e))?;
+    resolve_workspace_refs(&state.workspace, &mut doc)?;
+    let env_file = state.workspace.join("secrets.env");
+    crate::apply_env_pass(&mut doc, &state.workspace, &env_file)?;
+    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
+    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+    let node_id = args.get("nodeId").and_then(Value::as_str).unwrap_or("").to_string();
+    let node = doc
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id)
+        .ok_or_else(|| "query_source_preview.node_not_found".to_string())?;
+    if node.data.component_id.as_deref() != Some("src.query") {
+        return Err("query_source_preview.invalid_node".to_string());
+    }
+    let props = node
+        .data
+        .properties
+        .clone()
+        .ok_or_else(|| "query_source_preview.missing_properties".to_string())?;
+    let sql = duckle_duckdb_engine::plan::query_source_sql(&props).map_err(|error| format!("query_source_preview.invalid_sql: {}", error.code()))?;
+    let prelude = duckle_duckdb_engine::plan::query_source_attach_prelude(&props);
+    let limit = props.get("previewLimit").and_then(Value::as_u64).unwrap_or(1000).clamp(1, 1000) as usize;
+    let schema_version = AFFINITY_CONTRACT_SCHEMA_VERSION;
+    let context_id = format!(
+        "preview-{}-{}",
+        node_id,
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+    );
+    let started = Instant::now();
+    let engine = DuckdbEngine::new(state.duckdb.clone()).for_new_run();
+    let worker_engine = engine.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(worker_engine.query_with_prelude(&prelude, &sql, limit));
+    });
+    let query = match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => {
+            return respond_json(
+                stream,
+                &serde_json::to_value(QuerySourcePreviewDto {
+                    schema_version,
+                    context_id,
+                    schema: Vec::new(),
+                    rows: Vec::new(),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    error: Some(SanitizedErrorEnvelope {
+                        code: "query_source_preview.failed".into(),
+                        message: "Query Source preview failed; inspect the Data Source connection and SQL".into(),
+                        retryable: true,
+                        node_id: Some(node_id),
+                        data_source_id: None,
+                        sanitized: true,
+                    }),
+                })
+                .map_err(|e| e.to_string())?,
+            );
+        }
+        Err(_) => {
+            engine.request_cancel();
+            return Err("query_source_preview.timeout".to_string());
+        }
+    };
+    respond_json(
+        stream,
+        &serde_json::to_value(QuerySourcePreviewDto {
+            schema_version,
+            context_id,
+            schema: query.columns,
+            rows: query.rows,
+            duration_ms: started.elapsed().as_millis() as u64,
+            error: None,
+        })
+        .map_err(|e| e.to_string())?,
+    )
 }
 
 fn serve_static(stream: &mut TcpStream, state: &WebState, url_path: &str) -> Result<(), String> {
@@ -1296,7 +1414,7 @@ fn execute_one(
     // connection refs first (#166 stage 2, so a connection field stored as
     // ${ENV:...} still expands), then ${ENV:KEY} secrets, then the dynamic
     // ${date}/${datetime}/... builtins.
-    duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes)?;
+    resolve_workspace_refs(&state.workspace, &mut doc)?;
     let env_file = state.workspace.join("secrets.env");
     crate::apply_env_pass(&mut doc, &state.workspace, &env_file)?;
     duckle_duckdb_engine::context::apply_time_builtins(&mut doc);

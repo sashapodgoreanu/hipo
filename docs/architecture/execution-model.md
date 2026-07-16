@@ -152,3 +152,21 @@ workspace when identifiers are provided.
   standalone materialization type.
 - The Tauri adapter still contains orchestration in `lib.rs`.
 - Frontend/E2E execution coverage is not detected; Rust engine tests dominate.
+
+## Query Source preview and Data Source affinity
+
+La preview di `src.query` costruisce un singolo processo DuckDB con gli
+`ATTACH` temporanei dei Data Source risolti dal workspace, esegue un solo
+statement read-only e restituisce schema, massimo 1000 righe, durata e
+`contextId`. Il limite è 30 secondi; timeout ed errori restituiscono codici
+sanitizzati senza dettagli di connessione.
+
+Una pipeline interamente SQL che contiene `src.query` usa il worker CLI
+persistente descritto in `docs/architecture/adr-affinity-session.md`: ciascun
+alias Data Source viene collegato una sola volta nel worker, ogni Query Source
+materializza una `TABLE` nel run database e Join/Sink downstream leggono tale
+relazione senza dipendere dal catalogo esterno. Count, schema e preview sono
+letti nello stesso processo, perché il worker possiede il lock del run-db.
+Pipeline con runtime/control o altri confini non compatibili mantengono il
+percorso per-stage esistente finché lo scheduler di compatibilità per gruppi
+non viene completato.

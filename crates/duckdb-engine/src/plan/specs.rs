@@ -5,6 +5,25 @@
 //! `pub use specs::*` from the parent module, so existing `plan::XxxSpec`
 //! paths are unchanged.
 
+/// One resolved, run-local Data Source attachment. It is deliberately a
+/// planner/executor-only value: the SQL may contain an in-memory credential
+/// and is never serialized back into a workspace or frontend DTO.
+#[derive(Debug, Clone)]
+pub struct QuerySourceAttachment {
+    pub alias: String,
+    pub sql: String,
+}
+
+/// Execution boundary for `src.query`. The normal stage SQL keeps the
+/// attachment and detach statements for backwards-compatible per-stage runs;
+/// an affinity worker instead attaches each entry once, then executes only the
+/// materialization SQL so downstream stages read a run-db relation.
+#[derive(Debug, Clone)]
+pub struct QuerySourceSpec {
+    pub attachments: Vec<QuerySourceAttachment>,
+    pub materialize_sql: String,
+}
+
 /// ctl.parallelize: run the independent downstream branches concurrently.
 /// Each branch is a self-contained sub-pipeline doc (JSON) whose source is an
 /// injected src.parquet reading the `${__PSNAP__}` snapshot placeholder; the

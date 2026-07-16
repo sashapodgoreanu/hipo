@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use duckle_metadata::{Column, DataType};
-use duckle_plugin_sdk::{Connector, ConnectorKind, Inspection, InspectError, SchemaInspector};
+use duckle_plugin_sdk::{Connector, ConnectorKind, InspectError, Inspection, SchemaInspector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
 use std::collections::HashMap;

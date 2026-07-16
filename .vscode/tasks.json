@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tauri: frontend dev server",
+      "type": "shell",
+      "command": "npm --prefix frontend run dev",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": ".*" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "vite v.*ready in",
+          "endsPattern": "Local:.*http://localhost:5173"
+        }
+      }
+    },
+    {
+      "label": "tauri: build desktop debug",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "-p", "duckle-desktop"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$rustc",
+      "group": "build"
+    }
+  ]
+}

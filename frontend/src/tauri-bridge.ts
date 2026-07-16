@@ -10,6 +10,115 @@ type AutodetectPayload = {
     sampleRows: Record<string, unknown>[];
 };
 
+export type DataSourceTestResult = {
+    supported: boolean;
+    kind: string;
+    message: string;
+};
+
+/** Additive Data Source/affinity IPC contract. Legacy run events remain
+ * unchanged and continue to use PipelineEvent below. */
+export const AFFINITY_CONTRACT_SCHEMA_VERSION = 1 as const;
+
+export type DataSourceDto = {
+    id: string;
+    name: string;
+    sqlAlias: string;
+    kind: 'duckdb' | 'postgres';
+    connectionRef: string;
+};
+
+export type SanitizedErrorEnvelope = {
+    code: string;
+    message: string;
+    retryable: boolean;
+    nodeId?: string;
+    dataSourceId?: string;
+    sanitized: true;
+};
+
+export type QuerySourcePreviewDto = {
+    schemaVersion: number;
+    contextId: string;
+    schema: Column[];
+    rows: Record<string, unknown>[];
+    durationMs: number;
+    error?: SanitizedErrorEnvelope;
+};
+
+type AffinityEventBase = {
+    schemaVersion: number;
+    runId: string;
+    contextId: string;
+    sequence: number;
+    timestamp: string;
+    status: string;
+};
+
+export type AffinityEvent =
+    | (AffinityEventBase & {
+          type: 'affinity_context_started';
+          querySourceIds: string[];
+          dataSourceIds: string[];
+      })
+    | (AffinityEventBase & {
+          type: 'data_source_attached';
+          dataSourceId: string;
+          alias: string;
+          durationMs: number;
+      })
+    | (AffinityEventBase & {
+          type: 'query_source_finished';
+          nodeId: string;
+          materializedRelation?: string;
+          error?: SanitizedErrorEnvelope;
+      })
+    | (AffinityEventBase & {
+          type: 'affinity_context_finished';
+          durationMs: number;
+          error?: SanitizedErrorEnvelope;
+      });
+
+export async function testDataSourceKind(kind: string): Promise<DataSourceTestResult> {
+    if (isTauri()) return invoke<DataSourceTestResult>('data_source_test', { kind });
+    if (isWebBackend()) {
+        const res = await fetch('/api/data-source-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind }),
+        });
+        if (!res.ok) throw new Error((await res.text().catch(() => '')) || `data source test failed: HTTP ${res.status}`);
+        return (await res.json()) as DataSourceTestResult;
+    }
+    throw new Error('Data Source testing requires a desktop or web runner backend');
+}
+
+export async function querySourcePreview(
+    pipeline: { nodes: Node<DuckleNodeData>[]; edges: Edge[] },
+    nodeId: string,
+    workspacePath: string,
+): Promise<QuerySourcePreviewDto> {
+    if (isTauri()) {
+        return await invoke<QuerySourcePreviewDto>('query_source_preview', {
+            pipeline,
+            nodeId,
+            workspacePath,
+        });
+    }
+    if (isWebBackend()) {
+        const res = await fetch('/api/query-source-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pipeline, nodeId, workspacePath }),
+        });
+        if (!res.ok) {
+            throw new Error((await res.text().catch(() => '')) || `query source preview failed: HTTP ${res.status}`);
+        }
+        return (await res.json()) as QuerySourcePreviewDto;
+    }
+    throw new Error('Query Source preview requires a desktop or web runner backend');
+}
+
 /**
  * Autodetect a source's real schema. Under Tauri this calls the desktop
  * `autodetect_schema` command; in the web editor (`duckle serve`) it POSTs to

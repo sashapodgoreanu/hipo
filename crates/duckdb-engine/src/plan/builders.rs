@@ -202,7 +202,7 @@ pub(crate) fn build_view_sql(
         "src.json" | "src.jsonl" => Ok(build_json_source(props)),
         "src.sqlite" => Ok(build_sqlite_source(props)),
         "src.duckdb" => Ok(build_duckdb_source(props)),
-        "src.query" => build_query_source(props),
+        "src.query" => build_query_source(props).map_err(|error| error.to_string()),
         "src.ducklake.diff" => Ok(build_ducklake_diff(props)),
         "src.s3" | "src.gcs" | "src.azureblob" | "src.http"
         | "src.minio" | "src.r2" | "src.b2" => {
@@ -3227,6 +3227,14 @@ pub(crate) fn build_reject_sql(
         "qa.notnull" | "qa.range" | "qa.regex" | "qa.unique" | "qa.schemavalidate" => {
             Ok(Some(build_quality(inputs, props, component_id, true)?))
         }
+        // A join's optional reject output contains the driving rows that have
+        // no matching lookup row. The canvas represents this as the
+        // `unmatched` label on its regular `reject` port, so it follows the
+        // same `<node>__reject` materialization convention as filters and
+        // validators.
+        "xf.join" | "xf.join.inner" | "xf.join.left" | "xf.join.right" | "xf.join.full" | "xf.join.outer" | "xf.lookup" | "xf.lookup.outer" => {
+            Ok(Some(build_join_reject(inputs, props)?))
+        }
         // Orphan rows (main key absent from the reference) go to the reject port.
         "qa.refintegrity" => Ok(Some(build_refintegrity(inputs, props, true)?)),
         // Statistical outliers go to the reject port; inliers pass.
@@ -4138,6 +4146,28 @@ pub(crate) fn build_join(inputs: &NodeInputs, props: &JsonValue, kind: &str) -> 
     }
 }
 
+/// Rows from the driving input that do not match any lookup row. This is the
+/// secondary/reject output of the regular Join and Lookup components; it is
+/// deliberately independent from the selected join type, whose main output
+/// can be INNER, LEFT, RIGHT, or FULL OUTER.
+pub(crate) fn build_join_reject(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let left = inputs.main().ok_or_else(|| "join: missing main input".to_string())?;
+    let right = inputs.first_lookup().ok_or_else(|| "join: missing lookup input".to_string())?;
+    let (left_keys, right_keys) = join_key_pairs(props)?;
+    let on_clause = left_keys
+        .iter()
+        .zip(right_keys.iter())
+        .map(|(left_key, right_key)| format!("m.{} = r.{}", quote_ident(left_key), quote_ident(right_key)))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    Ok(format!(
+        "SELECT m.* FROM {} m WHERE NOT EXISTS (SELECT 1 FROM {} r WHERE {})",
+        quote_ident(left),
+        quote_ident(right),
+        on_clause
+    ))
+}
+
 pub(crate) fn build_semi(inputs: &NodeInputs, props: &JsonValue, anti: bool) -> Result<String, String> {
     let left = inputs.main().ok_or_else(|| "semi: missing main input".to_string())?;
     let right = inputs
@@ -4677,15 +4707,24 @@ pub(crate) fn build_duckdb_source(props: &JsonValue) -> String {
 /// Build a shared Data Source query. The workspace resolver is responsible for
 /// attaching the referenced catalogs; this builder deliberately handles only
 /// the read-only SQL contract and never interpolates credentials.
-pub(crate) fn build_query_source(props: &JsonValue) -> Result<String, String> {
-    let raw = string_prop(props, "sql").ok_or_else(|| "src.query requires SQL".to_string())?;
+pub(crate) fn build_query_source(props: &JsonValue) -> Result<String, PlannerError> {
+    let raw = string_prop(props, "sql").ok_or_else(|| PlannerError::InvalidQuerySql {
+        node_id: None,
+        reason: "sql_required".into(),
+    })?;
     let sql = raw.trim();
     if sql.is_empty() {
-        return Err("src.query requires SQL".to_string());
+        return Err(PlannerError::InvalidQuerySql {
+            node_id: None,
+            reason: "sql_required".into(),
+        });
     }
     let without_trailing = sql.trim_end_matches(';').trim();
     if without_trailing.contains(';') {
-        return Err("src.query accepts one SQL statement only".to_string());
+        return Err(PlannerError::InvalidQuerySql {
+            node_id: None,
+            reason: "multiple_statements".into(),
+        });
     }
     let lower = without_trailing.to_ascii_lowercase();
     if !(lower.starts_with("select ")
@@ -4693,11 +4732,17 @@ pub(crate) fn build_query_source(props: &JsonValue) -> Result<String, String> {
         || lower.starts_with("with ")
         || lower.starts_with("with\n"))
     {
-        return Err("src.query accepts read-only SELECT or WITH SQL only".to_string());
+        return Err(PlannerError::InvalidQuerySql {
+            node_id: None,
+            reason: "read_only_select_or_with_required".into(),
+        });
     }
     let forbidden = ["insert ", "update ", "delete ", "merge ", "create ", "alter ", "drop ", "truncate ", "copy "];
     if forbidden.iter().any(|token| lower.contains(token)) {
-        return Err("src.query rejects DDL and DML statements".to_string());
+        return Err(PlannerError::InvalidQuerySql {
+            node_id: None,
+            reason: "ddl_or_dml_rejected".into(),
+        });
     }
     Ok(format!("({without_trailing})"))
 }
@@ -4761,6 +4806,13 @@ fn references_spatial(sql: &str) -> bool {
 }
 
 pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
+    // Query Sources carry only stable Data Source ids in persisted JSON. The
+    // workspace resolver adds this ephemeral runtime array immediately before
+    // execution; credentials therefore never enter the frontend contract or
+    // saved pipeline. Each catalog receives its user-facing SQL alias.
+    if component_id == "src.query" {
+        return query_source_attach_statements(props).into_iter().map(|(_, statement)| statement).collect();
+    }
     // #84: SQL Template / Custom SQL can use spatial functions (ST_Point etc)
     // over any source (e.g. lon/lat from a CSV). Load the spatial extension when
     // the user opts in (loadSpatial) or the SQL references an ST_ function.
@@ -4880,6 +4932,35 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         "snk.duckdb" => format!("ATTACH '{}' AS duckle_dst; ", sql_escape(&db)),
         _ => String::new(),
     }
+}
+
+/// Build one `ATTACH` statement per resolved Query Source Data Source. Keeping
+/// the statements separate lets an affinity worker deduplicate them by alias
+/// without parsing SQL (connection strings can themselves contain semicolons).
+pub(crate) fn query_source_attach_statements(props: &JsonValue) -> Vec<(String, String)> {
+    let Some(JsonValue::Array(items)) = props.get("_duckleDataSourceRuntime") else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let alias = item.get("alias").and_then(JsonValue::as_str)?.to_string();
+            let kind = item.get("kind").and_then(JsonValue::as_str)?;
+            let connection = item.get("connection").unwrap_or(&JsonValue::Null);
+            let quoted_alias = quote_ident(&alias);
+            let statement = match kind {
+                "duckdb" => connection
+                    .get("database")
+                    .and_then(JsonValue::as_str)
+                    .filter(|path| !path.is_empty())
+                    .map(|path| format!("ATTACH '{}' AS {} (READ_ONLY); ", sql_escape(path), quoted_alias))
+                    .unwrap_or_default(),
+                "postgres" => db_attach(connection, "postgres", 5432, true).replace("AS duckle_src", &format!("AS {}", quoted_alias)),
+                _ => String::new(),
+            };
+            (!statement.is_empty()).then_some((alias, statement))
+        })
+        .collect()
 }
 
 /// ATTACH a network relational database through a DuckDB extension

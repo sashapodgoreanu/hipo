@@ -641,7 +641,7 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
             {
                 label: 'Query',
                 fields: [
-                    { key: 'dataSourceRefs', label: 'Data Source ids', kind: 'expression', required: true, rows: 2, placeholder: 'ds_sales, ds_customers' },
+                    { key: 'dataSourceRefs', label: 'Data Sources', kind: 'data-source-ref', required: true, description: 'Search by data source name. The node stores only stable references; connection credentials stay in the workspace connection.', },
                     { key: 'sql', label: 'Read-only SQL', kind: 'expression', required: true, rows: 8, placeholder: 'SELECT * FROM sales.orders' },
                     { key: 'previewLimit', label: 'Preview rows (max 1000)', kind: 'number', defaultValue: 1000 },
                 ],

@@ -12,7 +12,7 @@
 //! separate CLI invocations); sinks `COPY` from the upstream table.
 //! Cancellation kills the in-flight child process.
 
-use duckle_metadata::{Column, DataType};
+use duckle_metadata::{Column, DataType, Schema};
 use duckle_plugin_sdk::{Inspection, InspectError};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
 
+pub mod affinity_session;
 pub mod context;
 pub mod dive;
 pub mod error_category;
@@ -860,6 +861,30 @@ impl DuckdbEngine {
             Err(e) => return RunResult::failed(total_start, e.to_string()),
         };
 
+        // A Query Source makes the attachment/session lifetime observable. Do
+        // not silently drop to the ordinary per-stage executor if this run
+        // crosses a runtime/control boundary: it would create a new DuckDB
+        // connection and invalidate the attach-once guarantee. Preserving SQL
+        // stages are handled by `execute_affinity_worker`; suspending support
+        // will be enabled only with an explicit pause/resume implementation.
+        let has_query_source = compiled.stages.iter().any(|stage| stage.query_source.is_some());
+        if has_query_source {
+            if let Some(stage) = compiled.stages.iter().find(|stage| {
+                !matches!(stage.affinity_mode, plan::AffinityStageMode::SessionPreserving)
+                    || stage.retry_attempts > 1
+                    || stage.wait_ms.is_some()
+                    || stage.memory_limit_mb.is_some()
+            }) {
+                return RunResult::failed(
+                    total_start,
+                    format!(
+                        "{}: {:?} stages cannot yet cross a Query Source affinity session; remove the runtime/control boundary or materialize it outside this pipeline",
+                        stage.label, stage.affinity_mode
+                    ),
+                );
+            }
+        }
+
         // Component-level run log (Splunk / Dynatrace), gated on
         // DUCKLE_LOG_DIR. We tee every event through it so BOTH the fast
         // batched path and the per-stage path log uniformly, for every run
@@ -964,6 +989,18 @@ impl DuckdbEngine {
                             .map(|p| std::path::Path::new(p).exists())
                             .unwrap_or(false))
             });
+
+        // Query Sources own run-local Data Source attachments. For a pure SQL
+        // pipeline, keep one CLI worker alive instead of relying on the normal
+        // batch script: it attaches each catalog at most once, materializes the
+        // Query Source result into the run DB, and executes every downstream
+        // relation in that same process. This is deliberately narrower than the
+        // generic batch path; runtime/control stages require the compatibility
+        // scheduler work tracked separately by T025.
+        let affinity_worker_eligible = has_query_source;
+        if affinity_worker_eligible {
+            return self.execute_affinity_worker(&db_path, &secret_prefix, &compiled.stages, &redact_secrets, total_start, &mut on_event);
+        }
 
         if batchable {
             let r = self.execute_batched(
@@ -2216,6 +2253,168 @@ impl DuckdbEngine {
         }
     }
 
+    /// Execute an all-SQL pipeline containing one or more Query Sources in a
+    /// persistent DuckDB worker. Query Source attachment SQL is kept separate
+    /// from its materializing query by the planner, so aliases stay available
+    /// throughout the run without leaking into downstream relation names.
+    fn execute_affinity_worker(
+        &self,
+        db_path: &Path,
+        secret_prefix: &str,
+        stages: &[plan::Stage],
+        redact_secrets: &[Secret],
+        total_start: Instant,
+        on_event: &mut dyn FnMut(PipelineEvent),
+    ) -> RunResult {
+        let mut nodes: std::collections::BTreeMap<String, NodeRunStatus> = Default::default();
+        let mut preview = Vec::new();
+        let mut overall_error = None;
+        let mut was_cancelled = false;
+        let mut worker = match affinity_session::AffinitySession::start(&self.bin, db_path, self.cancel.clone()) {
+            Ok(worker) => worker,
+            Err(error) => {
+                return RunResult::failed(total_start, error.to_string());
+            }
+        };
+
+        if !secret_prefix.is_empty() {
+            if let Err(error) = worker.execute(secret_prefix) {
+                worker.close();
+                return RunResult::failed(total_start, error.to_string());
+            }
+        }
+
+        for stage in stages {
+            if self.cancel.load(Ordering::Relaxed) {
+                was_cancelled = true;
+                on_event(PipelineEvent::Cancelled);
+                break;
+            }
+            let kind_label = stage_kind_label(&stage.kind);
+            on_event(PipelineEvent::StageStarted {
+                node_id: stage.node_id.clone(),
+                label: stage.label.clone(),
+                kind: kind_label.into(),
+            });
+            let started = Instant::now();
+            let result = if let Some(query) = stage.query_source.as_ref() {
+                let mut attachment_error = None;
+                for attachment in &query.attachments {
+                    if let Err(error) = worker.attach_once(&attachment.alias, &attachment.sql) {
+                        attachment_error = Some(error);
+                        break;
+                    }
+                }
+                match attachment_error {
+                    Some(error) => Err(error),
+                    None => worker.execute(&query.materialize_sql).map(|_| ()),
+                }
+            } else {
+                worker.execute(&stage.sql).map(|_| ())
+            };
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+
+            match result {
+                Ok(()) => {
+                    // ctl.log / ctl.warn are SQL pass-through nodes. Keep
+                    // their count query in the affinity worker so they do not
+                    // break a Query Source-owned DuckDB session.
+                    if let Some(RuntimeSpec::Log { level, message }) = stage.runtime.as_ref() {
+                        let upstream_rows = stage.from.as_deref().and_then(|name| affinity_count_rows(&mut worker, name).ok()).unwrap_or(0);
+                        on_event(PipelineEvent::Log {
+                            node_id: stage.node_id.clone(),
+                            level: level.clone(),
+                            message: message.replace("{rows}", &upstream_rows.to_string()),
+                        });
+                    }
+                    let (rows, node_preview) = match stage.kind {
+                        StageKind::Sink => (stage.from.as_deref().and_then(|name| affinity_count_rows(&mut worker, name).ok()), None),
+                        StageKind::View if stage.no_output_relation => (None, None),
+                        StageKind::View => affinity_count_and_preview(&mut worker, &stage.node_id),
+                    };
+                    nodes.insert(
+                        stage.node_id.clone(),
+                        NodeRunStatus {
+                            status: "ok".into(),
+                            kind: Some(kind_label.into()),
+                            rows,
+                            duration_ms: Some(elapsed_ms),
+                            error: None,
+                            category: None,
+                            sql: None,
+                        },
+                    );
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: kind_label.into(),
+                        status: "ok".into(),
+                        rows,
+                        duration_ms: elapsed_ms,
+                        error: None,
+                        sql: None,
+                    });
+                    if let Some(node_preview) = node_preview {
+                        preview.push(node_preview);
+                    }
+                }
+                Err(affinity_session::AffinitySessionError::Cancelled) => {
+                    was_cancelled = true;
+                    on_event(PipelineEvent::Cancelled);
+                    break;
+                }
+                Err(error) => {
+                    let message = redact_secret_values(&error.to_string(), redact_secrets);
+                    let category = error_category::categorize_error(&message);
+                    let sql = Some(redact_secret_values(&stage.sql, redact_secrets));
+                    nodes.insert(
+                        stage.node_id.clone(),
+                        NodeRunStatus {
+                            status: "error".into(),
+                            kind: Some(kind_label.into()),
+                            rows: None,
+                            duration_ms: Some(elapsed_ms),
+                            error: Some(message.clone()),
+                            category: Some(category.into()),
+                            sql: sql.clone(),
+                        },
+                    );
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: kind_label.into(),
+                        status: "error".into(),
+                        rows: None,
+                        duration_ms: elapsed_ms,
+                        error: Some(message.clone()),
+                        sql,
+                    });
+                    overall_error = Some(format!("{}: {}", stage.label, message));
+                    break;
+                }
+            }
+        }
+        worker.close();
+
+        let status = if was_cancelled {
+            "cancelled"
+        } else if overall_error.is_some() {
+            "error"
+        } else {
+            "ok"
+        };
+        on_event(PipelineEvent::Finished {
+            status: status.into(),
+            duration_ms: total_start.elapsed().as_millis() as u64,
+        });
+        let category = overall_error.as_deref().map(|error| error_category::categorize_error(error).to_string());
+        RunResult {
+            status: status.into(),
+            duration_ms: total_start.elapsed().as_millis() as u64,
+            nodes,
+            preview,
+            error: overall_error,
+            category,
+        }
+    }
 
     fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
         let sql = format!("SELECT COUNT(*) AS n FROM {};", plan::quote_ident(name));
@@ -2272,8 +2471,15 @@ impl DuckdbEngine {
     /// it is not bound by PREVIEW_ROW_LIMIT. The SQL must be self-contained (read
     /// its source inline, e.g. read_parquet('...')).
     pub fn query(&self, sql: &str, row_limit: usize) -> Result<QueryResult, EngineError> {
+        self.query_with_prelude("", sql, row_limit)
+    }
+
+    /// Run a read-only query after an ephemeral SQL prelude (for example the
+    /// ATTACH statements resolved from workspace Data Sources). The prelude
+    /// and query share one CLI process and the prelude is never persisted.
+    pub fn query_with_prelude(&self, prelude: &str, sql: &str, row_limit: usize) -> Result<QueryResult, EngineError> {
         let s = sql.trim().trim_end_matches(';').trim();
-        let combined = format!("DESCRIBE ({s}); SELECT * FROM ({s}) LIMIT {row_limit};");
+        let combined = format!("{prelude} DESCRIBE ({s}); SELECT * FROM ({s}) LIMIT {row_limit};");
         let out = self.run(None, &combined, true)?;
         let arrays = parse_json_arrays(&out);
         let columns = arrays
@@ -2300,6 +2506,37 @@ impl DuckdbEngine {
         let rows = arrays.get(1).cloned().unwrap_or_default();
         Ok(QueryResult { columns, rows })
     }
+}
+
+fn affinity_count_rows(worker: &mut affinity_session::AffinitySession, name: &str) -> Result<u64, affinity_session::AffinitySessionError> {
+    let query = format!("SELECT COUNT(*) AS n FROM {}", plan::quote_ident(name));
+    Ok(worker
+        .query_json_rows(&query)?
+        .first()
+        .and_then(|row| row.get("n"))
+        .and_then(|value| value.as_u64().or_else(|| value.as_i64().map(|n| n.max(0) as u64)))
+        .unwrap_or(0))
+}
+
+fn affinity_count_and_preview(worker: &mut affinity_session::AffinitySession, name: &str) -> (Option<u64>, Option<NodePreview>) {
+    let count = affinity_count_rows(worker, name).ok();
+    let quoted = plan::quote_ident(name);
+    let columns = match worker.query_json_rows(&format!("SELECT * FROM (DESCRIBE {quoted})")) {
+        Ok(rows) => rows.iter().filter_map(parse_describe_row).collect::<Vec<_>>(),
+        Err(_) => return (count, None),
+    };
+    let rows = match worker.query_json_rows(&format!("SELECT * FROM {quoted} LIMIT {PREVIEW_ROW_LIMIT}")) {
+        Ok(rows) => rows,
+        Err(_) => return (count, None),
+    };
+    (
+        count,
+        Some(NodePreview {
+            node_id: name.to_string(),
+            columns,
+            rows,
+        }),
+    )
 }
 
 /// Removes the temp run database (and its WAL) when dropped, plus any
@@ -4283,6 +4520,91 @@ pub(crate) fn collect_pipeline_secrets(doc: &PipelineDoc) -> Vec<String> {
 }
 
 // ---- Streaming events + run result -------------------------------------
+
+/// Version of the additive Data Source / affinity IPC contracts. The legacy
+/// `PipelineEvent` below intentionally keeps its existing shape.
+pub const AFFINITY_CONTRACT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSourceDto {
+    pub id: String,
+    pub name: String,
+    pub sql_alias: String,
+    pub kind: String,
+    pub connection_ref: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SanitizedErrorEnvelope {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_source_id: Option<String>,
+    pub sanitized: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuerySourcePreviewDto {
+    pub schema_version: u32,
+    pub context_id: String,
+    pub schema: Schema,
+    pub rows: Vec<JsonValue>,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<SanitizedErrorEnvelope>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffinityEventDto {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub context_id: String,
+    pub sequence: u64,
+    pub timestamp: String,
+    pub status: String,
+    #[serde(flatten)]
+    pub payload: AffinityEventPayload,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AffinityEventPayload {
+    AffinityContextStarted {
+        #[serde(rename = "querySourceIds")]
+        query_source_ids: Vec<String>,
+        #[serde(rename = "dataSourceIds")]
+        data_source_ids: Vec<String>,
+    },
+    DataSourceAttached {
+        #[serde(rename = "dataSourceId")]
+        data_source_id: String,
+        alias: String,
+        #[serde(rename = "durationMs")]
+        duration_ms: u64,
+    },
+    QuerySourceFinished {
+        #[serde(rename = "nodeId")]
+        node_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "materializedRelation")]
+        materialized_relation: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<SanitizedErrorEnvelope>,
+    },
+    AffinityContextFinished {
+        #[serde(rename = "durationMs")]
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<SanitizedErrorEnvelope>,
+    },
+}
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

@@ -20,3 +20,28 @@ npm --prefix frontend run build
 ```
 
 Test connector-specifici e DuckDB sono condizionati all’ambiente disponibile; non è stata rilevata una suite E2E frontend.
+
+La validazione frontend non introduce un nuovo test runner in questa fase: gli
+helper puri di dipendenza/rename/invalidation in `frontend/src/workspace.ts`
+sono mantenuti senza side effect e vengono verificati tramite lint/build e la
+verifica manuale dei flussi descritti sopra. La copertura planner/engine resta
+nei test Rust.
+
+Checkpoint implementazione 2026-07-15: `npm --prefix frontend run lint`,
+`npm --prefix frontend run build`, `cargo check -p duckle-runner` e
+`cargo check -p duckle-duckdb-engine --tests` e `cargo check -p duckle-desktop --lib`
+passano. `cargo fmt --all --check`
+segnala differenze preesistenti in altri moduli del workspace; il test Cargo
+filtrato per affinity e il test filtrato di `duckle-secrets` hanno superato il
+limite locale di linking senza produrre un errore di compilazione osservabile.
+
+Il worker CLI di affinità è verificato con
+`cargo test -p duckle-duckdb-engine affinity_session::tests` e un
+`DUCKLE_DUCKDB_BIN` configurato: statement consecutivi mantengono la stessa
+tabella nella sessione e il framing usa marker su file invece di stdout.
+
+Una pipeline SQL con due Query Source che condividono un Data Source e
+convergono in un Join è coperta da
+`query_sources_sharing_a_data_source_join_in_one_affinity_worker`: il catalogo
+viene collegato una sola volta e i due risultati sono materializzati nel
+run-db prima del Join.
