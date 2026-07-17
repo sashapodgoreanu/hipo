@@ -18,9 +18,14 @@
 #   t4  inline ${ENV:} bearer upsert (token minted below; back-compat path)
 #   t6  wrong-kind connectionRef (postgres) -> clear error
 #   t7  missing connection id              -> clear error
+# Part 3 - Bulk API 2.0 sink (snk.salesforce.bulk), records BULK-*:
+#   b1  bulk INSERT   csv -> ingest job; streamed success csv (sf__Id)
+#   b2  bulk UPSERT   by External_ID__c; sf__Created true+false in results
+#   b5  bulk FAILURE  bogus Id, no resultsPath -> sf__Error inlined in run error
+#   b3  bulk DELETE   retrieved Ids -> org clean (b4 = the BULK-* retrieve)
 #
-# Suite records carry External_ID__c = SUITE-* and s6/final cleanup delete
-# them, so repeat runs start clean.
+# Suite records carry External_ID__c = SUITE-* / BULK-* and the delete steps +
+# final cleanup remove them, so repeat runs start clean.
 set -u
 cd "$(dirname "$0")"
 RUNNER=${DUCKLE_RUNNER:-duckle-runner}
@@ -142,10 +147,63 @@ check "t6 wrong-kind connectionRef errors" "expected a Salesforce connection" "$
 out=$(run_pipe t7_missingref.json)
 check "t7 missing connection id errors" "not found" "$out"
 
+# ---- Part 3: Bulk API 2.0 sink (snk.salesforce.bulk) -----------------------
+# Same saved connection; the async job lifecycle (create -> upload CSV ->
+# UploadComplete -> poll -> stream result sets). Records carry BULK-* so the
+# s-steps and b-steps never interfere. Small data = one job per run here; the
+# multi-part split (FILE_SIZE_BYTES) needs a >90MB load and stays a manual test.
+
+rm -rf out/sf-bulk-results
+out=$(run_pipe b1_bulk_insert.json)
+check "b1 bulk insert csv -> ingest job (saved connection)" ok "$out"
+# Result sets stream verbatim from Salesforce: success carries sf__Id/sf__Created.
+b_file=$(ls out/sf-bulk-results/Account_insert_*_success.csv 2>/dev/null | head -1)
+b_rows=$(( $( [ -n "$b_file" ] && wc -l < "$b_file" || echo 0 ) - 1 ))
+if [ "$b_rows" -eq 3 ] && grep -q 'sf__Id' "$b_file" 2>/dev/null; then
+  results+=("PASS  b1b bulk success csv: 3 rows + sf__Id column"); ((pass++))
+else
+  results+=("FAIL  b1b bulk success csv: 3 rows + sf__Id column"); ((fail++))
+fi
+
+out=$(run_pipe b2_bulk_upsert.json)
+check "b2 bulk upsert by External_ID__c" ok "$out"
+# The upsert's success csv distinguishes create vs update per record.
+b2_file=$(ls -t out/sf-bulk-results/Account_upsert_*_success.csv 2>/dev/null | head -1)
+if grep -q '"false"' "$b2_file" 2>/dev/null && grep -q '"true"' "$b2_file" 2>/dev/null; then
+  results+=("PASS  b2b upsert csv shows sf__Created true+false"); ((pass++))
+else
+  results+=("FAIL  b2b upsert csv shows sf__Created true+false"); ((fail++))
+fi
+if retry_read b4_bulk_retrieve.json out/bulk_retrieved.csv 'Bulk Upsert New'; then
+  results+=("PASS  b2c retrieve after bulk upsert (new row present)"); ((pass++))
+else
+  results+=("FAIL  b2c retrieve after bulk upsert (new row present)"); ((fail++))
+fi
+assert_file "b2d bulk upsert overwrote BULK-101" out/bulk_retrieved.csv 'Bulk Upsert Overwrite A'
+
+# b5 BEFORE the delete: failed records must surface IN the run error (sampled
+# sf__Error) even with no resultsPath configured on the node.
+out=$(run_pipe b5_bulk_badid.json)
+check "b5 bulk failed record inlines sf__Error" "INVALID_CROSS_REFERENCE_KEY" "$out"
+
+out=$(run_pipe b3_bulk_delete.json)
+check "b3 bulk delete retrieved ids" ok "$out"
+bclean=""
+for attempt in 1 2 3; do
+  sleep 5; rm -f out/bulk_retrieved.csv
+  out=$(run_pipe b4_bulk_retrieve.json)
+  if [ -f out/bulk_retrieved.csv ]; then blines=$(wc -l < out/bulk_retrieved.csv); else blines=99; fi
+  [ "$blines" -le 1 ] && { bclean=yes; break; }
+done
+if [ -n "$bclean" ]; then results+=("PASS  b3b org clean after bulk delete"); ((pass++));
+else results+=("FAIL  b3b org clean after bulk delete"); ((fail++)); fi
+
 # Final cleanup: t4 upserted SUITE-301 after s6's delete; remove whatever
-# SUITE-* remains so repeat runs start clean.
+# SUITE-* and BULK-* remains so repeat runs start clean.
 out=$(run_pipe s6_delete.json)
 check "final cleanup delete" ok "$out"
+out=$(run_pipe b3_bulk_delete.json)
+check "final bulk cleanup delete" ok "$out"
 
 echo; echo "==== suite results ===="
 printf '%s\n' "${results[@]}"

@@ -14,9 +14,16 @@ stage 2 plus the Tier-1 write paths:
 | s6 | `s6_delete.json` | **delete** by retrieved Ids; org left clean |
 | t4 | `t4_bearer_inline.json` | inline `${ENV:SF_TOKEN}` Bearer back-compat (no connection) |
 | t6/t7 | `t6_wrongkind.json` / `t7_missingref.json` | wrong-kind / missing `connectionRef` fail with clear errors |
+| b1 | `b1_bulk_insert.json` | csv → **`snk.salesforce.bulk` insert**: the async ingest-job lifecycle via the same saved connection; streamed success csv carries `sf__Id`/`sf__Created` |
+| b2 | `b2_bulk_upsert.json` | bulk **upsert** by `External_ID__c` (overwrites one row, creates another; results csv shows `sf__Created` true+false) |
+| b5 | `b5_bulk_badid.json` | a failed record with **no `resultsPath`** — the sampled `sf__Error` must appear in the run error itself |
+| b3 | `b3_bulk_delete.json` | bulk **delete** by retrieved Ids; org left clean (`b4_bulk_retrieve.json` is the BULK-\* re-read) |
 
-All suite records carry `External_ID__c = SUITE-*`; the delete step and a
-final cleanup remove them, so repeat runs start clean.
+All suite records carry `External_ID__c = SUITE-*` (Collections steps) or
+`BULK-*` (Bulk steps); the delete steps and a final cleanup remove them, so
+repeat runs start clean. The Bulk multi-part split (`FILE_SIZE_BYTES`, one
+job per ≤90 MB CSV part) needs a >90 MB load and stays a manual test — see
+IMPLEMENTATION.md.
 
 ## Org prerequisites
 

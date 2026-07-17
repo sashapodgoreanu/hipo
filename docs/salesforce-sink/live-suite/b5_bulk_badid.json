@@ -1,0 +1,60 @@
+{
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "csv",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/bulk_badid.csv",
+          "hasHeader": true
+        },
+        "schema": [
+          {
+            "name": "Id",
+            "type": "string",
+            "nullable": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "n2",
+      "type": "sink",
+      "position": {
+        "x": 320,
+        "y": 0
+      },
+      "data": {
+        "label": "Salesforce Bulk",
+        "componentId": "snk.salesforce.bulk",
+        "properties": {
+          "connectionRef": "sf-live",
+          "apiVersion": "v60.0",
+          "object": "Account",
+          "operation": "delete",
+          "pollIntervalSecs": 2,
+          "timeoutSecs": 600,
+          "failOnError": true
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "n1",
+      "target": "n2",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

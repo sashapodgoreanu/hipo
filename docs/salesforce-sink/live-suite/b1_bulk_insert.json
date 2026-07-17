@@ -1,0 +1,71 @@
+{
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "csv",
+        "componentId": "src.csv",
+        "properties": {
+          "path": "${workspace}/data/bulk_insert.csv",
+          "hasHeader": true
+        },
+        "schema": [
+          {
+            "name": "External_ID__c",
+            "type": "string",
+            "nullable": true
+          },
+          {
+            "name": "Name",
+            "type": "string",
+            "nullable": true
+          },
+          {
+            "name": "BillingCity",
+            "type": "string",
+            "nullable": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "n2",
+      "type": "sink",
+      "position": {
+        "x": 320,
+        "y": 0
+      },
+      "data": {
+        "label": "Salesforce Bulk",
+        "componentId": "snk.salesforce.bulk",
+        "properties": {
+          "connectionRef": "sf-live",
+          "apiVersion": "v60.0",
+          "object": "Account",
+          "operation": "insert",
+          "pollIntervalSecs": 2,
+          "timeoutSecs": 600,
+          "failOnError": true,
+          "resultsPath": "${workspace}/out/sf-bulk-results"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "n1",
+      "target": "n2",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

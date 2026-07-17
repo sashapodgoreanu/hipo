@@ -36,7 +36,7 @@ Salesforce, not just out of it.
 | Tier | Scope | State |
 |------|-------|-------|
 | 1 | sObject Collections API (`/composite/sobjects`), ≤200 records/request: insert / update / upsert (by external Id) / delete, Bearer auth, per-record error aggregation | **complete** (live-org + mock tests) |
-| 2 | Bulk API 2.0 (`/jobs/ingest`): create → upload CSV → close → poll → fetch success/failed result sets. Migration-scale volume. | planner rejects `api:"bulk"` with a clear message; not built |
+| 2 | Bulk API 2.0 (`/jobs/ingest`): create → upload CSV → close → poll → fetch success/failed result sets. Migration-scale volume. | **complete** - shipped as its own node `snk.salesforce.bulk` (see below), not a mode of `snk.salesforce` |
 | 3 | Migration-grade: first-class reject/error output stream, parent→child ID remapping, external-Id relationship resolution, compound-field (Address/Location) handling, API-limit retry/backoff | not started |
 
 ## Architecture / files touched
@@ -127,14 +127,78 @@ idField → upsert → retrieve → delete, plus auth-matrix and failure-mode
 checks, all against a real org via the headless runner) lives in
 [`live-suite/`](live-suite/README.md) - credential-free, `${ENV:}`-driven.
 
+## Bulk API 2.0 sink (`snk.salesforce.bulk`)
+
+Tier 2 shipped as a **separate node**, not an `api:"bulk"` mode of `snk.salesforce`.
+Its config diverges enough (job polling, a 100 MB upload cap, `hardDelete`, no
+`allOrNone`) that one form carrying both would be crowded and misleading. The
+never-implemented `api:"bulk"` flag on `snk.salesforce` is retired - the planner
+now points that value at this node.
+
+**Data path.** Unlike the Collections sink, which reads the whole view into a
+`Vec<JsonValue>`, the Bulk sink lets DuckDB do the CSV I/O:
+`COPY (SELECT * FROM <view>) TO '<tmpdir>' (FORMAT CSV, HEADER, FILE_SIZE_BYTES <90 MB>)`.
+DuckDB writes numbered parts, each with its own header row, so one part = one
+job and a multi-GB load never lands in memory (only one ≤90 MB part is held, at
+upload). DuckDB's CSV writer emits LF on every platform (verified on Windows),
+so the job declares `lineEnding: LF`.
+
+**The 90 MB target.** Bulk 2.0 accepts ≤150 MB of *base64-encoded* CSV per job;
+base64 inflates raw CSV by ~33-50%, so Salesforce advises keeping the raw upload
+under 100 MB. `FILE_SIZE_BYTES` is a soft cap (flushes on row-group boundaries,
+overshoots a few percent), so the target is **90 MB** and each part is
+hard-checked against the 100 MB line before upload. (`BULK_SPLIT_TARGET_BYTES` /
+`BULK_UPLOAD_MAX_BYTES` in `connectors.rs`.)
+
+**Lifecycle** (per part, `connectors.rs`): `POST /jobs/ingest` → `PUT
+/jobs/ingest/{id}/batches` (text/csv) → `PATCH {state: UploadComplete}` → poll
+`GET /jobs/ingest/{id}` until `JobComplete` / `Failed` / `Aborted` → fetch
+`successfulResults` / `failedResults` / `unprocessedRecords` (CSV, streamed
+verbatim to the stamped result files). `bulk_poll_ingest_job` is a method on the
+engine (not a free fn like the Snowflake/Databricks pollers) so it can
+`check_cancelled()` every iteration - a Bulk job can run for hours. On timeout or
+cancel the in-flight job is aborted (`PATCH {state: Aborted}`).
+
+**Config.** `pollIntervalSecs` (default 5) / `timeoutSecs` (default 3600),
+`assignmentRuleId`, and the same auth block as `snk.salesforce`. `resultsPath`
+writes `{object}_{operation}_{utc}_success.csv` / `_error.csv` /
+`_unprocessed.csv`, accumulating across parts (first part writes the header,
+later parts append data rows only). On `failOnError` the run error also inlines
+the first 5 sampled `sf__Error` values (Collections-sink parity), so failures
+are diagnosable even without a `resultsPath`.
+
+Bulk API 2.0 exposes no `concurrencyMode` or batch-size control (both are Bulk
+1.0 concepts): the create-job request accepts only `object` / `operation` /
+`contentType` / `columnDelimiter` / `lineEnding` / `externalIdFieldName` /
+`assignmentRuleId`, and Salesforce manages internal batching itself, in
+parallel. Loads prone to record-lock contention (many children of one parent)
+should sort upstream by the parent Id so related records land in the same
+internal batch.
+
+**Abort is not rollback.** Salesforce processes an ingest job as internal
+batches, each its own transaction - and *in parallel, not in file order*
+(verified live: a stalled job had committed row 206,000 while row 203,492 was
+still queued). Aborting a job (timeout, cancel) only stops unprocessed batches;
+already-committed records stay in the org. So a timed-out run leaves a partial,
+non-contiguous load. Salesforce does still serve the result sets of an aborted
+job (verified live: 203k success rows fetched from an Aborted job), and the
+sink fetches them before surfacing the error, so `resultsPath` captures what
+committed - but for recovery-grade certainty query the org (e.g. on the
+external-id prefix of the load). Same story on a mid-run failure between parts:
+parts that reached JobComplete are committed.
+
+**Result sets stream to disk.** A completed 200k-record job's `successfulResults`
+is ~100 MB of CSV. `ureq`'s `into_string()` silently caps at 10 MB - the original
+implementation lost exactly this (empty success file on a completed 210k-row
+job, found live) - so the result fetch uses `into_reader()` and streams to the
+results file without ever buffering the body.
+
 ## Remaining work
 
-Tier 1 is complete (see Status) and shipped in this PR - sink implemented,
-unit-tested, validated end-to-end against a live org, and docs updated (README
-Sinks table, `docs/roadmap.md`, `CONTRIBUTING.md`). What's left is follow-up:
+Tier 1 and Tier 2 are complete (see Status). What's left is follow-up:
 
-1. **Tier 2 - Bulk API 2.0** - new `RuntimeSpec` path with a poll loop (create → upload CSV → close → poll → fetch success/failed results); the `SalesforceWriteApi::Bulk` variant is already reserved and rejected at plan time.
-2. **Salesforce auth: OAuth Client-Credentials** - *shipped (#166).* Both `src.salesforce` and this sink now offer a client-credentials `authMode`: the engine mints a fresh short-lived token per run from `clientId`/`clientSecret`/`loginUrl` (`{loginUrl}/services/oauth2/token`) instead of a pasted ~2h Bearer token. Follow-ups: (a) a first-class *saved, encrypted* Salesforce Connection kind so the node stores a connection-ref rather than inline `${ENV:}` credentials (Duckle already has `create_connection`/`list_connections`); (b) JWT-bearer + 401-retry/refresh.
+1. **Salesforce auth: OAuth Client-Credentials** - *shipped (#166).* Both `src.salesforce` and both sinks offer a client-credentials `authMode`: the engine mints a fresh short-lived token per run from `clientId`/`clientSecret`/`loginUrl` (`{loginUrl}/services/oauth2/token`) instead of a pasted ~2h Bearer token. A saved encrypted Salesforce connection kind also shipped (#166 stage 2, `duckle-secrets`). Follow-up: JWT-bearer + 401-retry/refresh.
+2. **Bulk query source** - `src.salesforce.bulk` (create query job → poll → walk `Sforce-Locator` result pages → typed relation). A follow-up PR; the `duckle-secrets` gate already recognises the source id.
 3. **Tier 3** - reject/error output stream (*partially shipped as `resultsPath` success/error files - #166; a first-class reject output port remains*), parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
 
 ## Contribution checklist (per CONTRIBUTING.md)

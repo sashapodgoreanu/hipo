@@ -209,6 +209,7 @@ const CONNECTION_KIND_FOR: Record<string, string> = {
     'src.opensearch': 'elastic', 'snk.opensearch': 'elastic',
     'src.kafka': 'kafka', 'snk.kafka': 'kafka',
     'src.salesforce': 'salesforce', 'snk.salesforce': 'salesforce',
+    'snk.salesforce.bulk': 'salesforce', 'src.salesforce.bulk': 'salesforce',
 };
 
 // #166 stage 2: unlike every other kind, a Salesforce saved connection is
@@ -1937,17 +1938,6 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                     { key: 'externalIdField', label: 'External Id field (upsert)', kind: 'text', placeholder: 'External_Id__c', description: 'Required when Operation is Upsert.' },
                     { key: 'idField', label: 'Id column (update/delete)', kind: 'text', defaultValue: 'Id', description: 'Upstream column holding the Salesforce record Id.' },
                     {
-                        key: 'api',
-                        label: 'Write API',
-                        kind: 'select',
-                        defaultValue: 'collections',
-                        options: [
-                            { label: 'sObject Collections (<=200/req)', value: 'collections' },
-                            { label: 'Bulk API 2.0 (not yet implemented)', value: 'bulk' },
-                        ],
-                        description: 'Collections is Tier 1. Bulk API 2.0 is planned - see docs/salesforce-sink.',
-                    },
-                    {
                         key: 'batchSize',
                         label: 'Records per request',
                         kind: 'integer',
@@ -1957,6 +1947,65 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                     { key: 'allOrNone', label: 'All-or-none', kind: 'bool', defaultValue: false, description: 'When on, any failing record rolls back the whole request (Salesforce-side).' },
                     { key: 'failOnError', label: 'Fail the run on record errors', kind: 'bool', defaultValue: true, description: 'When off, per-record errors are logged and the stage continues. Set Results directory to capture per-record outcomes either way.' },
                     { key: 'resultsPath', label: 'Results directory', kind: 'text', placeholder: '${workspace}/out/sf-results', description: 'When set, writes Data-Loader-style per-run result files, stamped {object}_{operation}_{runtime}: ..._success.csv (input columns + sf__Id) and ..._error.csv (+ sf__StatusCode, sf__Message) - written even when the run fails.' },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (comp.id === 'snk.salesforce.bulk') {
+        return base(comp, [
+            {
+                label: 'Salesforce org',
+                fields: [
+                    salesforceConnectionRefField(),
+                    {
+                        key: 'authMode',
+                        label: 'Auth mode',
+                        kind: 'select',
+                        defaultValue: 'bearer',
+                        options: [
+                            { label: 'Bearer token (paste / refresh manually)', value: 'bearer' },
+                            { label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'clientCredentials' },
+                        ],
+                        description: 'Client Credentials mints a fresh short-lived token each run from a connected app, so you stop pasting an expiring token (#166).',
+                        visibleWhen: [whenNoConnection()],
+                    },
+                    { key: 'instanceUrl', label: 'Instance URL', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash).', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'bearer' }] },
+                    { key: 'accessToken', label: 'Access token', kind: 'text', secret: true, placeholder: '${ENV:SF_TOKEN}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'bearer' }] },
+                    { key: 'loginUrl', label: 'Login URL', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                    { key: 'clientId', label: 'Client ID', kind: 'text', placeholder: 'Connected app consumer key', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                    { key: 'clientSecret', label: 'Client secret', kind: 'text', secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                    { key: 'apiVersion', label: 'API version', kind: 'text', defaultValue: 'v60.0' },
+                ],
+            },
+            {
+                label: 'Destination',
+                fields: [
+                    { key: 'object', label: 'sObject', kind: 'text', required: true, placeholder: 'Account', description: 'Salesforce object API name, e.g. Account, Contact, MyObject__c.' },
+                    {
+                        key: 'operation',
+                        label: 'Operation',
+                        kind: 'select',
+                        defaultValue: 'insert',
+                        options: [
+                            { label: 'Insert', value: 'insert' },
+                            { label: 'Update (by Id)', value: 'update' },
+                            { label: 'Upsert (by external Id)', value: 'upsert' },
+                            { label: 'Delete (by Id)', value: 'delete' },
+                            { label: 'Hard delete (skip Recycle Bin)', value: 'hardDelete' },
+                        ],
+                        description: 'Hard delete needs the "Bulk API Hard Delete" user permission.',
+                    },
+                    { key: 'externalIdField', label: 'External Id field (upsert)', kind: 'text', placeholder: 'External_Id__c', description: 'Required when Operation is Upsert.' },
+                    { key: 'assignmentRuleId', label: 'Assignment rule Id (optional)', kind: 'text', placeholder: '01Q...', description: 'Applied to Case / Lead inserts.' },
+                    { key: 'failOnError', label: 'Fail the run on record errors', kind: 'bool', defaultValue: true, description: 'When off, per-record errors are logged and the stage continues. Set Results directory to capture per-record outcomes either way.' },
+                    { key: 'resultsPath', label: 'Results directory', kind: 'text', placeholder: '${workspace}/out/sf-results', description: 'When set, writes the CSV result sets Salesforce returns per job, stamped {object}_{operation}_{runtime}: ..._success.csv, ..._error.csv and ..._unprocessed.csv.' },
+                ],
+            },
+            {
+                label: 'Bulk job',
+                fields: [
+                    { key: 'pollIntervalSecs', label: 'Poll interval (s)', kind: 'integer', defaultValue: 5, description: 'Seconds between job-status checks.' },
+                    { key: 'timeoutSecs', label: 'Job timeout (s)', kind: 'integer', defaultValue: 3600, description: 'Give up and abort the job after this long. Bulk jobs can run for minutes to hours; this bounds a stuck job.' },
                 ],
             },
         ], 'upstream');
@@ -5933,9 +5982,11 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Sinks
     if (groupId === 'snk.files') return synthFileSink(comp);
     if (comp.id === 'snk.execsource') return synthExecSource(comp);
-    // snk.salesforce lives in the new snk.saas palette group; its field synth
-    // sits alongside the other id-specific sink branches in synthWarehouseSink.
-    if (comp.id === 'snk.salesforce') return synthWarehouseSink(comp);
+    // snk.salesforce[.bulk] live in the new snk.saas palette group; their field
+    // synth sits alongside the other id-specific sink branches in
+    // synthWarehouseSink. Route by id so a new group member never falls through
+    // to the generic "Notes" panel.
+    if (comp.id === 'snk.salesforce' || comp.id === 'snk.salesforce.bulk') return synthWarehouseSink(comp);
     if (groupId === 'snk.databases') return synthDbSink(comp);
     if (groupId === 'snk.warehouses') return synthWarehouseSink(comp);
     if (groupId === 'snk.storage') return synthStorageSink(comp);
