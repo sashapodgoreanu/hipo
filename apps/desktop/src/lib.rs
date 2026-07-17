@@ -25,7 +25,6 @@ use tracing_subscriber::EnvFilter;
 
 mod app_settings;
 mod ci_status;
-mod dbt_engine;
 mod engine_manager;
 mod llama_chat;
 mod samples;
@@ -116,22 +115,6 @@ pub fn run() {
                 std::env::set_var("DUCKLE_DUCKDB_BIN", &bin);
                 let _ = DUCKDB_BIN.set(bin);
 
-                // dbt for the xf.dbt node. Publishing an already-provisioned
-                // dbt is cheap (no network), so do it inline. If Fusion (the
-                // preferred fast engine) is not yet present, kick off a one-time,
-                // best-effort background fetch: dbt Fusion from dbt's public CDN,
-                // falling back to free Apache dbt-core via uv when Fusion can't
-                // be fetched. This also upgrades earlier dbt-core-only installs.
-                // ensure() is idempotent: a no-op once Fusion is in place.
-                // Only publish an ALREADY-provisioned dbt (cheap, no spawn). Do
-                // NOT auto-provision at startup: ensure() shells out to `uv`,
-                // whose python grandchildren get their own console on Windows
-                // (CREATE_NO_WINDOW does not propagate to grandchildren), so a
-                // failed-Fusion-fetch retry would flash a console on every
-                // launch and slow startup. dbt is provisioned on demand instead
-                // (the dbt node's Install action -> dbt_install), and the engine
-                // errors clearly if xf.dbt runs before dbt is present.
-                dbt_engine::publish_if_present(&dir);
             }
             // Stage the bundled LanceDB sidecar (if this build carries one) and
             // point the engine at it, so src.lancedb / snk.lancedb work without a
@@ -787,25 +770,18 @@ async fn engine_install(
     result
 }
 
-/// Whether a free dbt engine (Apache dbt-core + dbt-duckdb, provisioned via uv)
-/// is already installed in app-data. The xf.dbt node needs it; first launch
-/// fetches it automatically in the background.
+/// Compatibility command retained while xf.dbt is temporarily disabled.
 #[tauri::command]
-fn dbt_status(app: tauri::AppHandle) -> Result<bool, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(dbt_engine::is_installed(&dir))
+fn dbt_status(_app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(false)
 }
 
-/// Provision (or re-provision) the free dbt engine on demand and return its
-/// path. Idempotent: returns instantly if already installed. Use this to retry
-/// after a failed first-launch background fetch.
+/// Compatibility command retained to return an explicit disabled error rather
+/// than silently provisioning dbt Fusion or the dbt-core fallback.
 #[tauri::command]
-async fn dbt_install(app: tauri::AppHandle) -> Result<String, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tokio::task::spawn_blocking(move || dbt_engine::ensure(&dir))
-        .await
-        .map_err(|e| e.to_string())?
-        .map(|p| p.to_string_lossy().into_owned())
+async fn dbt_install(_app: tauri::AppHandle) -> Result<String, String> {
+    Err("component_disabled: xf.dbt is temporarily disabled during the sidecar runner migration"
+        .into())
 }
 
 /// Seed a brand-new / empty workspace with the bundled sample pipelines and

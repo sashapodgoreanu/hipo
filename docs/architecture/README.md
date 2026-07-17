@@ -11,6 +11,11 @@ Detailed views:
 - [Tauri IPC contracts](ipc-contracts.md)
 - [Component extension guide](component-extension-guide.md)
 
+Proposed architecture decisions under validation:
+
+- [DuckDB per-run sidecar with Quack](adr-quack-sidecar-runner.md)
+- [Quack sidecar Phase 0 report](quack-sidecar-phase-0-report.md)
+
 ## Workspace and runtime
 
 The repository is a Cargo workspace containing the desktop application,

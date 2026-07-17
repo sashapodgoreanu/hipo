@@ -72,10 +72,15 @@ const LLAMACPP: EngineSpec = EngineSpec {
     binary: "llama-server",
 };
 
-const ENGINES: [&EngineSpec; 3] = [&DUCKDB, &SLOTHDB, &LLAMACPP];
+const ENGINES: [&EngineSpec; 2] = [&DUCKDB, &LLAMACPP];
+const DISABLED_ENGINES: [&EngineSpec; 1] = [&SLOTHDB];
 
 fn spec(id: &str) -> Option<&'static EngineSpec> {
     ENGINES.iter().copied().find(|e| e.id == id)
+}
+
+fn disabled_spec(id: &str) -> Option<&'static EngineSpec> {
+    DISABLED_ENGINES.iter().copied().find(|e| e.id == id)
 }
 
 fn binary_file_name(s: &EngineSpec) -> String {
@@ -448,6 +453,12 @@ pub fn install<F: FnMut(InstallProgress)>(
     engine_id: &str,
     on_progress: F,
 ) -> Result<String, String> {
+    if let Some(s) = disabled_spec(engine_id) {
+        return Err(format!(
+            "engine_disabled: {} is temporarily disabled during the sidecar runner migration",
+            s.name
+        ));
+    }
     let s = spec(engine_id).ok_or_else(|| format!("Unknown engine '{}'", engine_id))?;
     install_spec(app_data, s, on_progress)
 }
@@ -854,11 +865,10 @@ mod tests {
     fn status_lists_all_engines_missing_in_empty_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let st = status(tmp.path());
-        assert_eq!(st.len(), 3);
+        assert_eq!(st.len(), 2);
         let duck = st.iter().find(|e| e.id == "duckdb").unwrap();
         assert!(!duck.installed && duck.required && duck.available);
-        let sloth = st.iter().find(|e| e.id == "slothdb").unwrap();
-        assert!(!sloth.installed && !sloth.required);
+        assert!(st.iter().all(|e| e.id != "slothdb"));
         let llama = st.iter().find(|e| e.id == "llamacpp").unwrap();
         assert!(!llama.installed && !llama.required);
     }
@@ -895,18 +905,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "downloads the SlothDB raw binary from GitHub releases (network)"]
-    fn installs_slothdb() {
+    fn install_slothdb_is_explicitly_disabled() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = install(tmp.path(), "slothdb", |_| {}).expect("install");
-        let p = std::path::Path::new(&path);
-        assert!(p.exists(), "binary should exist");
-        assert!(
-            std::fs::metadata(p).unwrap().len() > 0,
-            "binary should be non-empty"
-        );
-        assert!(status(tmp.path())
-            .iter()
-            .any(|e| e.id == "slothdb" && e.installed));
+        let err = install(tmp.path(), "slothdb", |_| {}).unwrap_err();
+        assert!(err.contains("engine_disabled"), "unexpected error: {err}");
+        assert!(!engine_dir(tmp.path(), &SLOTHDB).exists());
     }
 }

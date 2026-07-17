@@ -10,8 +10,9 @@ type EngineMeta = {
     label: string;
     description: string;
     dot: string;
-    /** Not selectable yet - shown greyed with a "coming soon" note. */
-    comingSoon?: boolean;
+    /** Not selectable - shown greyed with an explicit availability note. */
+    disabled?: boolean;
+    disabledLabel?: string;
 };
 
 const ENGINES: EngineMeta[] = [
@@ -24,15 +25,18 @@ const ENGINES: EngineMeta[] = [
     {
         id: 'slothdb',
         label: 'SlothDB',
-        description: 'Optional embedded analytics engine.',
+        description: 'Temporarily unavailable during the sidecar runner migration.',
         dot: '#3d8bff',
+        disabled: true,
+        disabledLabel: 'Temporarily disabled',
     },
     {
         id: 'native',
         label: 'Native',
         description: 'Rust streaming and incremental pipelines.',
         dot: '#2eafff',
-        comingSoon: true,
+        disabled: true,
+        disabledLabel: 'Coming soon',
     },
 ];
 
@@ -130,14 +134,14 @@ export default function EngineSelector({ value, onChange }: Props) {
                                   type="button"
                                   role="option"
                                   aria-selected={e.id === value}
-                                  aria-disabled={e.comingSoon}
-                                  disabled={e.comingSoon}
+                                  aria-disabled={e.disabled}
+                                  disabled={e.disabled}
                                   className={
                                       'engine-option' +
-                                      (e.comingSoon ? ' is-coming-soon' : '')
+                                      (e.disabled ? ' is-coming-soon' : '')
                                   }
                                   onClick={() => {
-                                      if (e.comingSoon) return;
+                                      if (e.disabled) return;
                                       onChange(e.id);
                                       setOpen(false);
                                   }}
@@ -150,15 +154,15 @@ export default function EngineSelector({ value, onChange }: Props) {
                                   <div className="engine-option-text">
                                       <div className="engine-option-label">
                                           {e.label}
-                                          {e.comingSoon ? (
+                                          {e.disabled ? (
                                               <span className="engine-option-soon">
-                                                  {t('engine.comingSoon')}
+                                                  {e.disabledLabel ?? t('engine.comingSoon')}
                                               </span>
                                           ) : null}
                                       </div>
                                       <div className="engine-option-desc">{e.description}</div>
                                   </div>
-                                  {e.id === value && !e.comingSoon ? (
+                                  {e.id === value && !e.disabled ? (
                                       <Check
                                           size={14}
                                           className="engine-option-check"

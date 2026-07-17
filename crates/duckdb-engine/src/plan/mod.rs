@@ -1161,7 +1161,7 @@ fn build_stage(
     let mut rabbit_source: Option<RabbitSourceSpec> = None;
     let mut git_source: Option<GitSourceSpec> = None;
     let mut shell: Option<ShellSpec> = None;
-    let mut dbt: Option<DbtSpec> = None;
+    let dbt: Option<DbtSpec> = None;
     let mut ftp_source: Option<FtpSourceSpec> = None;
     let mut sftp_source: Option<SftpSourceSpec> = None;
     let mut ftp_sink: Option<FtpSinkSpec> = None;
@@ -2897,62 +2897,10 @@ fn build_stage(
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "xf.dbt" {
-        // dbt Core execution node. The engine generates profiles.yml for
-        // the dbt-duckdb adapter against the run database, so models read
-        // upstream node tables directly and downstream nodes read the
-        // built models. Upstream is optional - a project can also run
-        // purely against its own sources.
-        // Two authoring modes: point at an existing project (projectDir), or
-        // write one model inline (model) which the engine scaffolds into an
-        // ephemeral project. One of the two is required.
-        let project_dir = string_prop(&props, "projectDir").filter(|s| !s.trim().is_empty());
-        let inline_model = string_prop(&props, "model").filter(|s| !s.trim().is_empty());
-        if project_dir.is_none() && inline_model.is_none() {
-            return Err(EngineError::Config(format!(
-                "{}: set either projectDir (an existing dbt project) or an inline model",
-                component_id
-            )));
-        }
-        let inline_model_name = string_prop(&props, "modelName")
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| sanitize_dbt_model_name(&s))
-            .unwrap_or_else(|| "duckle_model".into());
-        // In inline mode the node's natural output is the model it just built,
-        // so default outputModel to the model name when not set.
-        let output_model = string_prop(&props, "outputModel")
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                if project_dir.is_none() {
-                    Some(inline_model_name.clone())
-                } else {
-                    None
-                }
-            });
-        let from_views: Vec<String> =
-            inputs.all_main_ports().iter().map(|s| s.to_string()).collect();
-        let from = from_views.first().cloned();
-        dbt = Some(DbtSpec {
-            node_id: node.id.clone(),
-            project_dir,
-            inline_model,
-            inline_model_name,
-            command: string_prop(&props, "command")
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "run".into()),
-            dbt_bin: string_prop(&props, "dbtBin").filter(|s| !s.trim().is_empty()),
-            database: string_prop(&props, "database").filter(|s| !s.trim().is_empty()),
-            schema: string_prop(&props, "schema")
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "main".into()),
-            output_model,
-            from_view: from.clone(),
-            from_views: from_views.clone(),
-            timeout_ms: props
-                .get("timeoutMs")
-                .and_then(|v| v.as_u64())
-                .filter(|n| *n > 0),
-        });
-        (String::new(), StageKind::View, from)
+        return Err(EngineError::Unsupported(
+            "component_disabled: xf.dbt is temporarily disabled during the sidecar runner migration"
+                .into(),
+        ));
     } else if component_id == "src.kinesis" {
         // Single-shard Kinesis read. iteratorType in
         // {TRIM_HORIZON, LATEST, AT_TIMESTAMP, AT/AFTER_SEQUENCE_NUMBER};

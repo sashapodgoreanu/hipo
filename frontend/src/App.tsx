@@ -360,12 +360,19 @@ function seedTemplate(template: PipelineTemplate): PipelineState {
 
 const EMPTY_PIPELINE: PipelineState = { nodes: [], edges: [] };
 
+function normalizeEngineId(value: unknown): EngineId {
+    // Preserve persisted workspace compatibility while preventing a disabled
+    // SlothDB selection from surviving application startup or hydration.
+    if (value === 'slothdb') return 'duckdb';
+    return value === 'native' ? 'native' : 'duckdb';
+}
+
 export default function App() {
     const { t } = useTranslation();
     const { theme, toggle: toggleTheme } = useTheme();
     const [runtime, setRuntime] = useState<RuntimeState>('connecting');
     const [engine, setEngine] = useState<EngineId>(() =>
-        loadPersisted<EngineId>('engine', 'duckdb'),
+        normalizeEngineId(loadPersisted<EngineId>('engine', 'duckdb')),
     );
     const [pipelineData, setPipelineData] = useState<Record<string, PipelineState>>(() =>
         loadPersisted('pipelines', INITIAL_PIPELINE_DATA),
@@ -523,7 +530,7 @@ export default function App() {
                     }
                 }
                 if (state) {
-                    if (state.engine) setEngine(state.engine as EngineId);
+                    if (state.engine) setEngine(normalizeEngineId(state.engine));
                     if (state.pipelineData)
                         setPipelineData(state.pipelineData as Record<string, PipelineState>);
                     if (state.repo) setRepo(normalizeRepoItems(state.repo as RepoItem[]));

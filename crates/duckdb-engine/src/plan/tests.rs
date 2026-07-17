@@ -3957,9 +3957,7 @@ fn kafka_offset_latest_maps_to_the_latest_sentinel() {
     }
 
     #[test]
-    fn dbt_exposes_all_main_inputs() {
-        // xf.dbt is multi-main: both upstream tables should land in from_views
-        // (exposed to dbt as var('duckle_inputs')), not just the first.
+    fn dbt_is_explicitly_disabled() {
         let doc = pipeline_from_json(
             r#"{"name":"t","nodes":[
                 {"id":"a","type":"source","position":{"x":0,"y":0},"data":{"label":"a","componentId":"src.csv","properties":{"path":"a.csv"}}},
@@ -3970,17 +3968,11 @@ fn kafka_offset_latest_maps_to_the_latest_sentinel() {
                 {"id":"e2","source":"b","target":"d","sourceHandle":"main","targetHandle":"main","data":{"connectionType":"main"}}
             ]}"#,
     );
-    let stages = compile(&doc).unwrap().stages;
-    let dbt = stages.iter().find(|s| s.node_id == "d").expect("dbt stage");
-    match &dbt.runtime {
-        Some(RuntimeSpec::Dbt(spec)) => {
-            assert_eq!(spec.from_views.len(), 2, "both inputs expected: {:?}", spec.from_views);
-            assert!(spec.from_views.contains(&"a".to_string()));
-            assert!(spec.from_views.contains(&"b".to_string()));
-        }
-        other => panic!("expected a Dbt runtime spec, got {:?}", other),
+        let err = compile(&doc).unwrap_err();
+        let message = format!("{err:?}");
+        assert!(message.contains("component_disabled"), "unexpected error: {message}");
+        assert!(message.contains("xf.dbt"), "unexpected error: {message}");
     }
-}
 
     #[test]
     fn teradata_conn_string_friendly_dsn_and_raw() {

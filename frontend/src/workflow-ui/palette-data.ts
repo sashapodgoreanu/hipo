@@ -761,7 +761,7 @@ export const PALETTE: Category[] = [
                 id: 'code.dbt',
                 label: 'dbt',
                 components: [
-                    xf('dbt', 'dbt', 'available', "Run dbt against the pipeline's DuckDB database. Either write one inline model right here (reference the upstream node as {{ var('duckle_input') }}), or set `projectDir` to an existing dbt project (folder with dbt_project.yml). The engine generates the dbt-duckdb profiles.yml automatically, so models read upstream node tables and downstream nodes read the models dbt builds. Set `command` (default `run`); optional `outputModel` reads a built model back as the node output. dbt is set up automatically on first launch, so no manual install is needed."),
+                    xf('dbt', 'dbt', 'planned', 'Temporarily disabled while the per-run DuckDB sidecar is introduced. Existing pipeline documents remain readable, but execution is blocked explicitly.'),
                 ],
             },
         ],
