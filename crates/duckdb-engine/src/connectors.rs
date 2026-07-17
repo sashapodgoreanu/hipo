@@ -710,12 +710,27 @@ impl DuckdbEngine {
         let _ = std::fs::remove_dir_all(&parts_dir);
         // Removes the temp dir on every exit path (success, error, cancel).
         let _cleanup = ScopedDir(parts_dir.clone());
+        // Pre-create the staging dir owner-only so the plaintext CSV parts (the
+        // full upstream payload) can't be read by other local users during the
+        // upload window on a shared host. DuckDB then COPYs into this empty dir.
+        create_private_dir(&parts_dir).map_err(|e| {
+            EngineError::Other(format!("salesforce bulk: creating staging dir: {}", e))
+        })?;
         // DuckDB accepts forward slashes on every platform; single quotes are the
         // only char it string-escapes.
         let parts_target = sql_escape(&parts_dir.to_string_lossy().replace('\\', "/"));
+        // Bulk API 2.0 delete / hardDelete require a CSV of exactly one column
+        // named `Id`; extra columns fail the job. Project just the id column
+        // (aliased to Id) for those, and every other column for the rest.
+        let select_list = if spec.operation == "delete" || spec.operation == "hardDelete" {
+            format!("SELECT {} AS \"Id\"", plan::quote_ident(&spec.id_field))
+        } else {
+            "SELECT *".to_string()
+        };
         let copy_sql = format!(
-            "{}COPY (SELECT * FROM {}) TO '{}' (FORMAT CSV, HEADER, FILE_SIZE_BYTES {});",
+            "{}COPY ({} FROM {}) TO '{}' (FORMAT CSV, HEADER, FILE_SIZE_BYTES {});",
             secret_prefix,
+            select_list,
             plan::quote_ident(&spec.from_view),
             parts_target,
             BULK_SPLIT_TARGET_BYTES
@@ -815,7 +830,9 @@ impl DuckdbEngine {
 
             // Result sets come back already CSV-shaped; stream them to the
             // stamped files (best-effort per endpoint - a missing set never masks
-            // the job outcome). idx == 0 writes the header, later parts append.
+            // the job outcome). Each result file keeps the header from its first
+            // written body and strips it from later ones (decided per file, so a
+            // set skipped on an earlier part can't leave a headerless file).
             if let (Some(dir), Some(stem)) = (spec.results_path.as_deref(), results_stem.as_ref()) {
                 self.bulk_write_result_files(
                     &ingest_base,
@@ -823,7 +840,6 @@ impl DuckdbEngine {
                     &auth_header,
                     dir,
                     stem,
-                    idx == 0,
                 )?;
             }
 
@@ -1089,7 +1105,6 @@ impl DuckdbEngine {
         auth_header: &str,
         dir: &str,
         stem: &str,
-        first: bool,
     ) -> Result<(), EngineError> {
         std::fs::create_dir_all(dir)
             .map_err(|e| EngineError::Other(format!("salesforce bulk: creating resultsPath: {}", e)))?;
@@ -1114,7 +1129,7 @@ impl DuckdbEngine {
                 Err(_) => continue,
             };
             let path = std::path::Path::new(dir).join(format!("{}_{}.csv", stem, suffix));
-            append_bulk_result_csv(&path, body, first).map_err(|e| {
+            append_bulk_result_csv(&path, body).map_err(|e| {
                 EngineError::Other(format!(
                     "salesforce bulk: writing {}: {}",
                     path.display(),
@@ -10045,6 +10060,22 @@ impl Drop for ScopedDir {
     }
 }
 
+/// Create a directory only its owner can enter. A Bulk run stages the full
+/// upstream payload as plaintext CSV parts here; on Unix a 0700 dir stops other
+/// local users from traversing in and reading them under a shared temp dir
+/// during the upload window (the CSV files themselves inherit the umask, but the
+/// dir's missing group/other execute bit blocks access to them). On non-Unix
+/// platforms there is no equivalent umask exposure, so this just creates the dir.
+#[cfg(unix)]
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
+}
+#[cfg(not(unix))]
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
 /// Read a Bulk API response body, turning an HTTP status or transport error
 /// into a descriptive EngineError. A 2xx with no body yields an empty string.
 fn bulk_read_body(
@@ -10072,19 +10103,25 @@ fn bulk_read_body(
 }
 
 /// Append one job's CSV result set to a per-run file, streaming - a result set
-/// can be ~100 MB, so it is never buffered whole. The first part writes the
-/// whole body (header + rows); later parts strip the header line and append the
-/// data rows, so the accumulated file has exactly one header.
+/// can be ~100 MB, so it is never buffered whole. The first body written to a
+/// given file keeps its whole content (header + rows); every later body strips
+/// the header line and appends only data rows, so the accumulated file has
+/// exactly one header. The header decision is made per file from its current
+/// length, not from the part index, so a result set skipped on an earlier part
+/// (a transient fetch error left the file uncreated) never leaves a later part
+/// writing a headerless file.
 fn append_bulk_result_csv(
     path: &std::path::Path,
     body: impl std::io::Read,
-    first: bool,
 ) -> std::io::Result<()> {
     use std::io::BufRead;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
+    // Empty file (just created, or created earlier with nothing written) => this
+    // is the first body for it, so keep the header; otherwise strip it.
+    let first = f.metadata()?.len() == 0;
     let mut reader = std::io::BufReader::new(body);
     if !first {
         // Drop the header line; the rest is data (empty when the job had none).
@@ -10782,10 +10819,10 @@ mod salesforce_bulk_tests {
     fn first_part_keeps_header_later_parts_append_data_only() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("acct_insert_success.csv");
-        // First part: whole body (header + rows).
-        append_bulk_result_csv(&path, "sf__Id,Name\n001,Acme\n".as_bytes(), true).unwrap();
-        // Second part: header stripped, only the data row appended.
-        append_bulk_result_csv(&path, "sf__Id,Name\n002,Globex\n".as_bytes(), false).unwrap();
+        // First body to the file: whole body (header + rows).
+        append_bulk_result_csv(&path, "sf__Id,Name\n001,Acme\n".as_bytes()).unwrap();
+        // Second body: header stripped, only the data row appended.
+        append_bulk_result_csv(&path, "sf__Id,Name\n002,Globex\n".as_bytes()).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert_eq!(out, "sf__Id,Name\n001,Acme\n002,Globex\n");
     }
@@ -10794,11 +10831,25 @@ mod salesforce_bulk_tests {
     fn header_only_result_body_appends_nothing_on_later_parts() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("acct_insert_error.csv");
-        append_bulk_result_csv(&path, "sf__Id,sf__Error\n".as_bytes(), true).unwrap();
-        // A later part with only a header (no failures) must add no rows.
-        append_bulk_result_csv(&path, "sf__Id,sf__Error\n".as_bytes(), false).unwrap();
+        append_bulk_result_csv(&path, "sf__Id,sf__Error\n".as_bytes()).unwrap();
+        // A later body with only a header (no failures) must add no rows.
+        append_bulk_result_csv(&path, "sf__Id,sf__Error\n".as_bytes()).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert_eq!(out, "sf__Id,sf__Error\n");
+    }
+
+    #[test]
+    fn later_part_into_a_fresh_file_keeps_its_header() {
+        // Regression: if an earlier part's result fetch was skipped (transient
+        // error), the file does not exist yet. The header decision is per file,
+        // so the first body actually written must keep its header rather than be
+        // stripped as a "later part".
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acct_insert_success.csv");
+        // Part 0 skipped -> nothing written. Part 1 is the first real body.
+        append_bulk_result_csv(&path, "sf__Id,Name\n002,Globex\n".as_bytes()).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(out, "sf__Id,Name\n002,Globex\n");
     }
 
     #[test]
@@ -10815,7 +10866,7 @@ mod salesforce_bulk_tests {
         for _ in 0..rows {
             body.push_str(row);
         }
-        append_bulk_result_csv(&path, body.as_bytes(), true).unwrap();
+        append_bulk_result_csv(&path, body.as_bytes()).unwrap();
         let written = std::fs::metadata(&path).unwrap().len();
         assert_eq!(written, body.len() as u64, "streamed body must be complete");
     }

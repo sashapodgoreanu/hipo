@@ -1996,6 +1996,7 @@ function synthWarehouseSink(comp: ComponentDef): ComponentManifest {
                         description: 'Hard delete needs the "Bulk API Hard Delete" user permission.',
                     },
                     { key: 'externalIdField', label: 'External Id field (upsert)', kind: 'text', placeholder: 'External_Id__c', description: 'Required when Operation is Upsert.' },
+                    { key: 'idField', label: 'Id column (delete / hardDelete)', kind: 'text', defaultValue: 'Id', description: 'Upstream column holding the Salesforce record Id. Delete and hard delete upload only this column (Bulk API 2.0 requires an Id-only CSV).' },
                     { key: 'assignmentRuleId', label: 'Assignment rule Id (optional)', kind: 'text', placeholder: '01Q...', description: 'Applied to Case / Lead inserts.' },
                     { key: 'failOnError', label: 'Fail the run on record errors', kind: 'bool', defaultValue: true, description: 'When off, per-record errors are logged and the stage continues. Set Results directory to capture per-record outcomes either way.' },
                     { key: 'resultsPath', label: 'Results directory', kind: 'text', placeholder: '${workspace}/out/sf-results', description: 'When set, writes the CSV result sets Salesforce returns per job, stamped {object}_{operation}_{runtime}: ..._success.csv, ..._error.csv and ..._unprocessed.csv.' },

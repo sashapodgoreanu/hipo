@@ -1858,6 +1858,9 @@ fn build_stage(
             object,
             operation,
             external_id_field,
+            id_field: string_prop(&props, "idField")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Id".into()),
             assignment_rule_id: string_prop(&props, "assignmentRuleId")
                 .filter(|s| !s.is_empty()),
             poll_interval_secs,

@@ -1533,6 +1533,10 @@ pub struct SalesforceBulkSinkSpec {
     /// Required when operation == "upsert": the external-id field the upsert
     /// keys on (e.g. "External_Id__c"). Sent as `externalIdFieldName`.
     pub external_id_field: Option<String>,
+    /// Upstream column holding the Salesforce record Id (default "Id"). Used only
+    /// for delete / hardDelete, where Bulk API 2.0 requires a CSV of exactly one
+    /// column named `Id`; the sink projects this column aliased to `Id`.
+    pub id_field: String,
     /// Optional assignment rule Id applied to Case / Lead inserts.
     pub assignment_rule_id: Option<String>,
     /// Seconds between job-status polls.
