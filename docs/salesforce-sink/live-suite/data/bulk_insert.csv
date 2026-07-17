@@ -1,0 +1,4 @@
+External_ID__c,Name,BillingCity
+BULK-101,Bulk Insert A,Sydney
+BULK-102,Bulk Insert B,Melbourne
+BULK-103,Bulk Insert C,Brisbane
