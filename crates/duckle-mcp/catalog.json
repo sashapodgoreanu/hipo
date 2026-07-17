@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 368,
+  "componentCount": 369,
   "components": [
     {
       "id": "src.csv",
@@ -786,7 +786,8 @@
                       "*"
                     ]
                   }
-                ]
+                ],
+                "description": "A local file, an http(s):// URL, or an sftp://user@host/path URL. Remote paths are streamed (never fully buffered) and .gz files decompress transparently. For SFTP auth, set the fields below."
               },
               {
                 "key": "encoding",
@@ -825,15 +826,48 @@
             "label": "Format",
             "fields": [
               {
-                "key": "rootPath",
-                "label": "Root element XPath",
+                "key": "rowPath",
+                "label": "Row path",
                 "kind": "text",
-                "placeholder": "/root/record"
+                "placeholder": "catalog/book",
+                "description": "Slash-separated path to the repeating element that becomes one row (e.g. catalog/book). Element names match by local name so XML namespaces are ignored. Attributes become @name columns and text content becomes _text."
               },
               {
                 "key": "namespace",
                 "label": "XML namespace",
                 "kind": "text"
+              }
+            ]
+          },
+          {
+            "label": "Remote / SFTP auth (optional)",
+            "fields": [
+              {
+                "key": "password",
+                "label": "SFTP password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "description": "Only used when the path is an sftp:// URL. Leave blank for local files or http(s):// URLs."
+              },
+              {
+                "key": "privateKey",
+                "label": "SFTP private key (PEM)",
+                "kind": "text",
+                "placeholder": "-----BEGIN OPENSSH PRIVATE KEY-----",
+                "description": "OpenSSH private key for SFTP key-based auth (instead of a password). You can also set privateKeyPath to a key file."
+              },
+              {
+                "key": "keyPassphrase",
+                "label": "SFTP key passphrase",
+                "kind": "text",
+                "placeholder": "••••••••"
+              },
+              {
+                "key": "hostFingerprint",
+                "label": "SFTP host fingerprint",
+                "kind": "text",
+                "placeholder": "SHA256:...",
+                "description": "Optional SFTP host-key pin. If set, the connection is refused unless the server key matches this SHA256 fingerprint."
               }
             ]
           }
@@ -25985,10 +26019,11 @@
             "label": "Format",
             "fields": [
               {
-                "key": "rootPath",
-                "label": "Root element XPath",
+                "key": "rowPath",
+                "label": "Row path",
                 "kind": "text",
-                "placeholder": "/root/record"
+                "placeholder": "catalog/book",
+                "description": "Slash-separated path to the repeating element that becomes one row (e.g. catalog/book). Element names match by local name so XML namespaces are ignored. Attributes become @name columns and text content becomes _text."
               },
               {
                 "key": "namespace",
@@ -30629,7 +30664,7 @@
       "label": "Salesforce",
       "kind": "sink",
       "availability": "available",
-      "summary": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).",
+      "summary": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). For migration-scale loads use Salesforce Bulk.",
       "ports": {
         "inputs": [
           {
@@ -30644,7 +30679,7 @@
         "id": "snk.salesforce",
         "kind": "sink",
         "label": "Salesforce",
-        "description": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).",
+        "description": "Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). For migration-scale loads use Salesforce Bulk.",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -30826,23 +30861,6 @@
                 "description": "Upstream column holding the Salesforce record Id."
               },
               {
-                "key": "api",
-                "label": "Write API",
-                "kind": "select",
-                "defaultValue": "collections",
-                "options": [
-                  {
-                    "label": "sObject Collections (<=200/req)",
-                    "value": "collections"
-                  },
-                  {
-                    "label": "Bulk API 2.0 (not yet implemented)",
-                    "value": "bulk"
-                  }
-                ],
-                "description": "Collections is Tier 1. Bulk API 2.0 is planned - see docs/salesforce-sink."
-              },
-              {
                 "key": "batchSize",
                 "label": "Records per request",
                 "kind": "integer",
@@ -30869,6 +30887,260 @@
                 "kind": "text",
                 "placeholder": "${workspace}/out/sf-results",
                 "description": "When set, writes Data-Loader-style per-run result files, stamped {object}_{operation}_{runtime}: ..._success.csv (input columns + sf__Id) and ..._error.csv (+ sf__StatusCode, sf__Message) - written even when the run fails."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.salesforce.bulk",
+      "label": "Salesforce Bulk",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write rows into a Salesforce object via Bulk API 2.0 - the migration-scale path. DuckDB streams the upstream to CSV on disk and each <=90MB part runs as an async job (insert / update / upsert / delete / hardDelete). Same Bearer / OAuth client-credentials auth as Salesforce. Result sets are written to an optional Results directory.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.salesforce.bulk",
+        "kind": "sink",
+        "label": "Salesforce Bulk",
+        "description": "Write rows into a Salesforce object via Bulk API 2.0 - the migration-scale path. DuckDB streams the upstream to CSV on disk and each <=90MB part runs as an async job (insert / update / upsert / delete / hardDelete). Same Bearer / OAuth client-credentials auth as Salesforce. Result sets are written to an optional Results directory.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Salesforce org",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "salesforce"
+                ],
+                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set."
+              },
+              {
+                "key": "authMode",
+                "label": "Auth mode",
+                "kind": "select",
+                "defaultValue": "bearer",
+                "options": [
+                  {
+                    "label": "Bearer token (paste / refresh manually)",
+                    "value": "bearer"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "clientCredentials"
+                  }
+                ],
+                "description": "Client Credentials mints a fresh short-lived token each run from a connected app, so you stop pasting an expiring token (#166).",
+                "visibleWhen": [
+                  {
+                    "key": "connectionRef",
+                    "empty": true
+                  }
+                ]
+              },
+              {
+                "key": "instanceUrl",
+                "label": "Instance URL",
+                "kind": "text",
+                "placeholder": "https://acme.my.salesforce.com",
+                "description": "Org base URL (no trailing slash).",
+                "visibleWhen": [
+                  {
+                    "key": "connectionRef",
+                    "empty": true
+                  },
+                  {
+                    "key": "authMode",
+                    "equals": "bearer"
+                  }
+                ]
+              },
+              {
+                "key": "accessToken",
+                "label": "Access token",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:SF_TOKEN}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "connectionRef",
+                    "empty": true
+                  },
+                  {
+                    "key": "authMode",
+                    "equals": "bearer"
+                  }
+                ]
+              },
+              {
+                "key": "loginUrl",
+                "label": "Login URL",
+                "kind": "text",
+                "placeholder": "https://acme.my.salesforce.com",
+                "description": "Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token.",
+                "visibleWhen": [
+                  {
+                    "key": "connectionRef",
+                    "empty": true
+                  },
+                  {
+                    "key": "authMode",
+                    "equals": "clientCredentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "placeholder": "Connected app consumer key",
+                "visibleWhen": [
+                  {
+                    "key": "connectionRef",
+                    "empty": true
+                  },
+                  {
+                    "key": "authMode",
+                    "equals": "clientCredentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:SF_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "connectionRef",
+                    "empty": true
+                  },
+                  {
+                    "key": "authMode",
+                    "equals": "clientCredentials"
+                  }
+                ]
+              },
+              {
+                "key": "apiVersion",
+                "label": "API version",
+                "kind": "text",
+                "defaultValue": "v60.0"
+              }
+            ]
+          },
+          {
+            "label": "Destination",
+            "fields": [
+              {
+                "key": "object",
+                "label": "sObject",
+                "kind": "text",
+                "required": true,
+                "placeholder": "Account",
+                "description": "Salesforce object API name, e.g. Account, Contact, MyObject__c."
+              },
+              {
+                "key": "operation",
+                "label": "Operation",
+                "kind": "select",
+                "defaultValue": "insert",
+                "options": [
+                  {
+                    "label": "Insert",
+                    "value": "insert"
+                  },
+                  {
+                    "label": "Update (by Id)",
+                    "value": "update"
+                  },
+                  {
+                    "label": "Upsert (by external Id)",
+                    "value": "upsert"
+                  },
+                  {
+                    "label": "Delete (by Id)",
+                    "value": "delete"
+                  },
+                  {
+                    "label": "Hard delete (skip Recycle Bin)",
+                    "value": "hardDelete"
+                  }
+                ],
+                "description": "Hard delete needs the \"Bulk API Hard Delete\" user permission."
+              },
+              {
+                "key": "externalIdField",
+                "label": "External Id field (upsert)",
+                "kind": "text",
+                "placeholder": "External_Id__c",
+                "description": "Required when Operation is Upsert."
+              },
+              {
+                "key": "assignmentRuleId",
+                "label": "Assignment rule Id (optional)",
+                "kind": "text",
+                "placeholder": "01Q...",
+                "description": "Applied to Case / Lead inserts."
+              },
+              {
+                "key": "failOnError",
+                "label": "Fail the run on record errors",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "When off, per-record errors are logged and the stage continues. Set Results directory to capture per-record outcomes either way."
+              },
+              {
+                "key": "resultsPath",
+                "label": "Results directory",
+                "kind": "text",
+                "placeholder": "${workspace}/out/sf-results",
+                "description": "When set, writes the CSV result sets Salesforce returns per job, stamped {object}_{operation}_{runtime}: ..._success.csv, ..._error.csv and ..._unprocessed.csv."
+              }
+            ]
+          },
+          {
+            "label": "Bulk job",
+            "fields": [
+              {
+                "key": "pollIntervalSecs",
+                "label": "Poll interval (s)",
+                "kind": "integer",
+                "defaultValue": 5,
+                "description": "Seconds between job-status checks."
+              },
+              {
+                "key": "timeoutSecs",
+                "label": "Job timeout (s)",
+                "kind": "integer",
+                "defaultValue": 3600,
+                "description": "Give up and abort the job after this long. Bulk jobs can run for minutes to hours; this bounds a stuck job."
               }
             ]
           }

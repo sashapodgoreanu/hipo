@@ -549,7 +549,8 @@ export const PALETTE: Category[] = [
                 id: 'snk.saas',
                 label: 'SaaS Connectors',
                 components: [
-                    snk('salesforce', 'Salesforce', 'available', 'Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). Bulk API 2.0 for migration-scale loads is planned (see docs/salesforce-sink).'),
+                    snk('salesforce', 'Salesforce', 'available', 'Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). For migration-scale loads use Salesforce Bulk.'),
+                    snk('salesforce.bulk', 'Salesforce Bulk', 'available', 'Write rows into a Salesforce object via Bulk API 2.0 - the migration-scale path. DuckDB streams the upstream to CSV on disk and each <=90MB part runs as an async job (insert / update / upsert / delete / hardDelete). Same Bearer / OAuth client-credentials auth as Salesforce. Result sets are written to an optional Results directory.'),
                 ],
             },
             {
