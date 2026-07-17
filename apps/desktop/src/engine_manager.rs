@@ -452,6 +452,73 @@ pub fn install<F: FnMut(InstallProgress)>(
     install_spec(app_data, s, on_progress)
 }
 
+/// macOS (#89): make a freshly downloaded engine dir launchable. Downloaded
+/// llama.cpp release binaries are signed by ggml's identity but not notarized;
+/// on macOS 15+ the leftover `com.apple.quarantine` / `com.apple.provenance`
+/// xattrs plus the non-notarized signature get the process SIGKILL'd on exec,
+/// which surfaces as the llama-server "didn't become ready" timeout. Clearing
+/// ALL xattrs (not just quarantine - `com.apple.provenance` also gates
+/// Gatekeeper re-evaluation) and ad-hoc re-signing the Mach-O files (dylibs
+/// first, then the executable, with no hardened-runtime flag so library
+/// validation won't reject the ad-hoc dylibs) makes them launchable. Writes a
+/// marker so `ensure_macos_launchable` can skip the work on later launches. Only
+/// the main binary failing to sign is fatal - it would not run at all. No-op off
+/// macOS (guarded at run time so the code still type-checks on every platform).
+pub(crate) fn macos_prepare_engine(dir: &Path, main_binary: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let _ = std::process::Command::new("xattr")
+        .arg("-cr")
+        .arg(dir)
+        .output();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x == "dylib").unwrap_or(false) {
+                let _ = adhoc_sign(&p);
+            }
+        }
+    }
+    adhoc_sign(main_binary)?;
+    let _ = std::fs::write(dir.join(MACOS_PREPARED_MARKER), "1");
+    Ok(())
+}
+
+/// macOS (#89): ad-hoc code-sign one Mach-O file. `--sign -` produces a local
+/// signature with no hardened-runtime flag, so the file runs on this machine
+/// without notarization and won't enforce library validation against a team id.
+fn adhoc_sign(path: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-", "--timestamp=none"])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("run codesign on {}: {}", path.display(), e))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "codesign {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+const MACOS_PREPARED_MARKER: &str = ".duckle-macos-prepared";
+
+/// macOS (#89): ensure an already-installed engine dir was made launchable,
+/// repairing installs done by a Duckle build that predated the signing fix (or
+/// one whose install-time signing was too weak). Marker-gated so it does the
+/// clear + re-sign at most once per install. No-op off macOS. Call this right
+/// before launching a downloaded binary.
+pub(crate) fn ensure_macos_launchable(dir: &Path, main_binary: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") || dir.join(MACOS_PREPARED_MARKER).exists() {
+        return Ok(());
+    }
+    macos_prepare_engine(dir, main_binary)
+}
+
 fn install_spec<F: FnMut(InstallProgress)>(
     app_data: &Path,
     s: &EngineSpec,
@@ -633,36 +700,18 @@ fn install_spec<F: FnMut(InstallProgress)>(
         let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
     }
 
-    // macOS (#89): Apple Silicon refuses to launch a downloaded executable that
-    // isn't validly signed - it gets SIGKILL'd on exec, which surfaces as the
-    // llama-server "didn't become ready" timeout (DuckDB's own binaries are
-    // notarized, so pipelines work, but the llama.cpp release binaries are not).
-    // Drop any quarantine flag and ad-hoc re-sign the binary + its sibling
-    // dylibs so the kernel allows execution. Best-effort: codesign/xattr are
-    // standard on macOS but a failure here shouldn't abort the install.
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("xattr")
-            .args(["-dr", "com.apple.quarantine"])
-            .arg(&dir)
-            .output();
-        // Sign dependent dylibs first, then the executable (it seals its own
-        // load commands once signed).
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.extension().map(|x| x == "dylib").unwrap_or(false) {
-                    let _ = std::process::Command::new("codesign")
-                        .args(["--force", "--sign", "-"])
-                        .arg(&p)
-                        .output();
-                }
-            }
+    // macOS (#89): clear Gatekeeper xattrs + ad-hoc re-sign the freshly
+    // downloaded binaries so the kernel allows execution. A broken signature on
+    // llama-server only surfaces later as an opaque "didn't become ready"
+    // timeout, so it is fatal here; for the self-contained DB engines it stays
+    // best-effort (they run regardless).
+    if let Err(e) = macos_prepare_engine(&dir, &target) {
+        if s.id == "llamacpp" {
+            return Err(format!(
+                "Installed {} but could not sign it for macOS: {}",
+                s.name, e
+            ));
         }
-        let _ = std::process::Command::new("codesign")
-            .args(["--force", "--sign", "-"])
-            .arg(&target)
-            .output();
     }
 
     // Verify the binary landed and is non-empty. Probing --version is

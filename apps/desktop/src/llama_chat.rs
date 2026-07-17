@@ -101,6 +101,13 @@ impl LlamaServer {
                 model.display()
             ));
         }
+        // macOS (#89): make sure the downloaded binaries are Gatekeeper-clean and
+        // ad-hoc signed before we exec, which also repairs installs done by a
+        // Duckle build that predated the signing fix. Marker-gated and a no-op
+        // off macOS, so this is essentially free after the first launch.
+        if let Some(dir) = bin.parent() {
+            crate::engine_manager::ensure_macos_launchable(dir, bin)?;
+        }
         // Pick a free port. There's a small TOCTOU race window between
         // close(listener) and the child binding, but localhost is
         // single-user so collisions are rare in practice.
