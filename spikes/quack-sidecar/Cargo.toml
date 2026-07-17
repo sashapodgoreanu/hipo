@@ -12,5 +12,6 @@ rust-version = "1.85.1"
 
 [dependencies]
 duckdb = { version = "=1.10504.0", features = ["bundled"] }
+getrandom = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

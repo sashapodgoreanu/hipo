@@ -42,8 +42,10 @@ cancellazione remota della singola query.
 5. Il sidecar incorpora DuckDB con `duckdb-rs`; non esegue la CLI.
 6. Il main incorpora un'istanza DuckDB client necessaria a Quack, ma non deve
    eseguire il piano analitico della pipeline.
-7. Le query complete vengono spedite verbatim al server con `quack_query` o
-   `remote.query(...)`, così join e materializzazioni restano remoti.
+7. Le query complete vengono spedite verbatim al server esclusivamente con
+   `quack_query(uri, sql)`, così join e materializzazioni restano remoti.
+   `remote.query(...)` e `quack_query_by_name(...)` richiedono il client
+   `ATTACH TYPE quack` sticky e non fanno parte del contratto ordinario.
 8. Ogni run ha un catalogo condiviso e più connessioni server concorrenti.
 9. La cancellazione del run butta giù il sidecar e classifica le connessioni
    interrotte come `cancelled`, non come errore DuckDB.
@@ -59,14 +61,28 @@ cancellazione remota della singola query.
 14. Il nodo `xf.dbt` e il provisioning di dbt Fusion vengono disabilitati:
     dbt non viene migrato a Quack e non costituisce un gate per la rimozione
     della CLI.
-15. I sidecar vengono acquisiti tramite lease esclusivi da un pool prewarm:
+15. I sidecar vengono acquisiti tramite lease esclusivi da `WorkerPoolControl`:
     una pipeline run usa un solo worker e un worker serve una sola pipeline run.
 16. Il worker viene sempre terminato a fine run o cancellazione. Non torna mai
-    nel pool; un sostituto entra nella coda `ready` soltanto dopo il nuovo
-    handshake DuckDB/Quack.
+    in `WorkerPoolControl`; un sostituto entra nella coda `ready` soltanto dopo il nuovo
+    handshake DuckDB/Quack autenticato e dopo la preparazione della capacità
+    base di worker. Non esiste un pool di connessioni.
 17. Policy elastica, coda di admission e provisioning sono separati. Il backend
     iniziale avvia processi locali, ma il contratto deve consentire in futuro un
     backend Kubernetes senza cambiare scheduler, `RunSession` o `RunDatabase`.
+18. Esiste un solo pool elastico: `WorkerPoolControl`, quello globale dei worker
+    warm. Ogni worker possiede un `QuackPermitGate` di concorrenza configurabile;
+    non esiste un secondo pool di connessioni.
+19. Il percorso caldo di uno stage non esegue mai `ATTACH`: acquisisce un
+    permit, esegue il poco costoso `try_clone()`, invia `quack_query`, quindi
+    rilascia clone e permit. Se tutti i permit sono occupati, la richiesta
+    attende.
+20. `quack_parallelism` è configurabile in `WorkerSpec` per worker e ha default
+    e limite massimo di Fase 1 `8` (range valido `1..=8`). `QuackPermitGate`
+    è FIFO e cancellabile: se saturo, attende senza creare clone; la
+    cancellazione rimuove l'attesa. Il worker non precrea clone né alias
+    `ATTACH`. Il valore non modifica `SET threads`, che governa il parallelismo
+    interno di ogni singola query.
 
 ## Motivazione
 
@@ -203,7 +219,7 @@ Il processo principale deve:
 - risolvere workspace, pipeline, parametri e dipendenze del DAG;
 - accodare la richiesta e acquisire un worker `ready` con lease esclusivo;
 - creare un `RunSession` sul `WorkerEndpoint` assegnato;
-- mantenere un pool di connessioni Quack client per il run;
+- applicare il semaforo `quack_parallelism` e creare clone on demand;
 - inviare SQL completo al server;
 - avviare e coordinare runtime esterni;
 - emettere eventi di stage e aggiornare history/UI;
@@ -247,15 +263,23 @@ Il supervisor mantiene un target elastico di worker già inizializzati. Un
 worker attraversa gli stati `starting`, `ready`, `leased`, `terminating` e
 `terminated`; soltanto `ready` è acquisibile.
 
-1. Il pool avvia in parallelo la capacità base.
-2. Il provider considera completato il provisioning soltanto dopo readiness
-   infrastrutturale e handshake applicativo Quack.
-3. Una richiesta di run entra in una coda FIFO cancellabile e con timeout.
-4. L'acquisizione cambia atomicamente `ready -> leased` e lega worker ID, run ID
+L'unico pool elastico è `WorkerPoolControl`, il pool dei worker. `ready` non significa che il
+listener HTTP è soltanto raggiungibile: il worker pubblicabile contiene
+sidecar, database client/master mantenuta viva, secret scoped e una health query
+stateless autenticata riuscita. `quack_parallelism = 8` (default) è un limite
+runtime a semaforo; readiness non precrea le 8 clone e non crea alias `ATTACH`.
+
+1. `WorkerPoolControl` avvia in parallelo la capacità base.
+2. La readiness infrastrutturale del sidecar non rende il worker acquisibile.
+3. Il control plane crea e conserva la master, configura il secret scoped e
+   completa una health query stateless autenticata.
+4. Solo il bundle completo passa a `ready`; una richiesta di run entra in una
+   coda FIFO cancellabile e con timeout.
+5. L'acquisizione cambia atomicamente `ready -> leased` e lega worker ID, run ID
    e lease ID. Anche due esecuzioni della stessa pipeline ricevono worker
    diversi.
-5. Alla conclusione o cancellazione, il worker viene terminato e non riusato.
-6. La policy ricalcola il target; se manca capacità, prepara un nuovo worker e
+6. Alla conclusione o cancellazione, il worker viene terminato e non riusato.
+7. La policy ricalcola il target; se manca capacità, prepara un nuovo worker e
    lo pubblica soltanto quando è nuovamente `ready`.
 
 La capacità conta `starting + ready + leased`, non soltanto i worker disponibili.
@@ -288,7 +312,7 @@ può introdurre profili di capacità senza cambiare la semantica del lease.
 
 ### Contratto del provider
 
-Il pool usa un'interfaccia asincrona concettualmente equivalente a:
+`WorkerPoolControl` usa un'interfaccia asincrona concettualmente equivalente a:
 
 ```rust
 trait WorkerProvider {
@@ -348,21 +372,25 @@ non una seconda implementazione dell'esecuzione pipeline.
 
 ### Bootstrap
 
-1. Il provider locale crea una directory univoca per il worker; il provider
-   Kubernetes crea storage effimero equivalente.
-2. Genera token Quack casuale, run ID e configurazione.
-3. Scrive un bootstrap file con permessi limitati all'utente corrente.
-4. Il provider avvia `duckle-db-runner` passando configurazione e identità con
-   un meccanismo protetto; stdin non viene usato come protocollo.
-5. Il sidecar legge e cancella il bootstrap file, apre DuckDB e avvia Quack su
-   una porta localhost libera.
-6. Il provider locale osserva `ready.json`; Kubernetes usa una probe locale al
-   container. In entrambi i casi PID/Pod e token non fanno parte del contratto
-   pubblico del pool.
-7. Il main crea il client Quack, autentica e verifica `ducklesys.health()`.
-8. Solo dopo il health check vengono avviati gli stage.
+1. Il provider crea identità e storage univoci per il worker.
+2. Genera una credenziale casuale per-worker e la conserva in un handle opaco.
+3. Il provider locale crea bootstrap e control pipe anonime; il child eredita
+   soltanto gli handle dichiarati esplicitamente.
+4. Il token e la configurazione attraversano la bootstrap pipe, mai command
+   line, environment, stdin generico o filesystem.
+5. Il sidecar apre DuckDB, effettua direttamente il bind su
+   `127.0.0.1:0` e avvia Quack.
+6. Endpoint, identità e versioni ritornano sulla control pipe senza token; il
+   target produttivo non usa `ready.json`.
+7. Il main crea e conserva il database client e la master tramite il
+   `CredentialHandle`; verifica identità, protocol version e query minima
+   autenticata.
+8. Solo dopo il gate autenticato il worker cambia `starting -> ready`; le clone
+   vengono create on demand sotto il semaforo `quack_parallelism`.
 
-Il bootstrap file è un meccanismo di avvio, non una seconda API dati.
+Il canale di bootstrap/control è un meccanismo di lifecycle provider-specific,
+non una seconda API dati. Il contratto normativo è descritto nell'ADR
+[identità, bootstrap e sicurezza dei worker](../architecture/adr-worker-identity-bootstrap-security.md).
 
 ### Esecuzione
 
@@ -375,7 +403,7 @@ RunSession
   ├─ worker_lease
   ├─ worker_endpoint
   ├─ cancellation_state
-  ├─ QuackRunClient pool
+  ├─ QuackRunClient + QuackPermitGate (non è un pool)
   └─ runtime_process_scope
 ```
 
@@ -383,8 +411,8 @@ Ogni operazione DuckDB passa attraverso un'interfaccia tipizzata, per esempio:
 
 ```rust
 trait RunDatabase {
-    async fn execute_remote(&self, request: SqlRequest) -> Result<SqlOutcome>;
-    async fn query_remote(&self, request: QueryRequest) -> Result<QueryResult>;
+    async fn execute_sql(&self, request: SqlRequest) -> Result<SqlOutcome>;
+    async fn query_sql(&self, request: QueryRequest) -> Result<QueryResult>;
     async fn describe_relation(&self, relation: RelationRef) -> Result<Schema>;
     async fn preview(&self, relation: RelationRef, limit: usize) -> Result<Preview>;
     async fn import(&self, input: RelationInput, target: RelationRef) -> Result<ImportResult>;
@@ -396,6 +424,21 @@ trait RunDatabase {
 L'implementazione primaria è `QuackRunDatabase`; durante la migrazione può
 esistere un backend legacy CLI dietro la stessa interfaccia.
 
+`RunDatabase` sostituisce esclusivamente il meccanismo di esecuzione a basso
+livello. Planner e orchestratore restano proprietari dell'ordine, del batching,
+del parallelismo, degli eventi per-stage e dei retry. Se l'orchestratore invia
+una singola query, il backend esegue quella query; se invia un batch SQL già
+formato, il backend esegue quel batch sullo stesso lease. Il backend Quack non
+deve ricevere anticipatamente l'intera pipeline, fondere richieste, dividerle o
+riordinarle. Gli eventuali marker CLI non rappresentabili come SQL vengono
+sostituiti nell'adapter mantenendo invariati gli eventi osservabili per-stage.
+Lo spike conferma inoltre che Quack accetta un batch remoto multi-statement:
+due materializzazioni dipendenti e il `SELECT` finale sono stati eseguiti in
+un'unica invocazione, con risultato finale corretto. Non dimostra però
+atomicità transazionale, rollback dopo errore intermedio, compatibilità dei
+marker, preview o attribuzione dell'errore allo stage; tutti restano test
+obbligatori di Fase 2.
+
 ### Conclusione normale
 
 1. Il main attende tutti gli stage.
@@ -404,7 +447,7 @@ esistere un backend legacy CLI dietro la stessa interfaccia.
 4. Il provider termina sempre quel worker entro un timeout breve.
 5. Se la chiusura cooperativa non riesce, applica la terminazione forzata.
 6. Pulisce storage, spill e snapshot non persistenti.
-7. Il pool prepara un sostituto se il target elastico lo richiede.
+7. `WorkerPoolControl` prepara un sostituto se il target elastico lo richiede.
 
 ### Cancellazione
 
@@ -421,33 +464,80 @@ cancellazione di uno stage attivo cancella l'intero run.
 
 ## Contratto Quack
 
-Il main crea una o più connessioni DuckDB locali dedicate esclusivamente al
-client Quack. Ogni connessione usa `ATTACH` verso il sidecar per ottenere una
-sessione sticky:
+### Due risorse chiamate `ATTACH`
+
+La parola `ATTACH` non identifica una sola operazione e non deve comparire come
+un unico tipo nel nuovo runner:
+
+| Tipo | Esempio | Proprietario | Decisione |
+|---|---|---|---|
+| trasporto Quack client | `ATTACH 'quack:…' AS remote (TYPE quack)` | DuckDB client nel main | scartato dal percorso ordinario: si usa `quack_query` stateless |
+| Data Source server | `ATTACH '<DSN>' AS sales (TYPE postgres)` o `ATTACH 'ducklake:…' AS lake` | DuckDB nel sidecar | deciso da planner/orchestratore e inviato al sidecar prima del nodo dipendente |
+
+Il primo crea una sessione Quack sticky nel processo main e non deve essere
+confuso con il secondo, che collega una risorsa dati reale al catalogo del
+sidecar. Alias, cache, idempotenza, segreti e lifecycle sono distinti.
+
+Il planner/orchestratore continua a risolvere le Data Source e a produrre gli
+attach/prelude già presenti nel piano Query Source. Il nuovo `RunDatabase` non
+deduce attach dal testo SQL e non li esegue localmente: riceve un
+`ServerSetupAction` già risolto, lo invia verbatim con `quack_query` e lo
+serializza/deduplica per `(worker_run, resource_id, alias)` prima dello stage
+che lo richiede. Questa è una barriera di setup, non una nuova decisione di
+scheduling: l'orchestratore conserva ordine, batch, eventi e parallelismo.
+
+S3 non è normalmente un `ATTACH` dati: richiede `CREATE SECRET (TYPE s3)` e
+configurazione `httpfs` nel sidecar, poi funzioni come
+`read_parquet('s3://…')`. DuckLake, Postgres, MySQL e cataloghi/file DuckDB o
+SQLite usano invece il loro `ATTACH` server-side quando previsto dall'extension.
+
+Durante il prewarm il main apre un solo database DuckDB client per il worker e
+mantiene viva una connessione master fino alla terminazione del worker. Crea un
+secret temporaneo scoped all'endpoint e verifica una health query autenticata.
+Non crea `ATTACH` né clone persistenti durante il prewarm:
 
 ```sql
-CREATE SECRET run_quack_secret (
+CREATE TEMPORARY SECRET run_quack_secret (
     TYPE quack,
     TOKEN ?,
     SCOPE 'quack:127.0.0.1:<port>'
 );
 
-ATTACH 'quack:127.0.0.1:<port>' AS run_remote (TYPE quack);
 SET httpfs_connection_caching = true;
 ```
 
-Gli stage vengono inviati come query verbatim:
+Il secret viene creato in-memory con parameter binding. Per ogni richiesta il
+wrapper acquisisce un permit dal semaforo `quack_parallelism`, crea una
+connessione con `Connection::try_clone()`, invia lo SQL verbatim con
+`quack_query`, quindi distrugge la clone e rilascia il permit:
 
 ```sql
-FROM run_remote.query($sql$
+FROM quack_query('quack:127.0.0.1:<port>', $sql$
     CREATE OR REPLACE TABLE run_data.stage_10 AS
     SELECT ...
 $sql$);
 ```
 
+Il token non compare nella chiamata: `quack_query` lo risolve dal secret scoped
+parametrizzato. Con il default `quack_parallelism = 8` possono esistere al
+massimo 8 clone/query contemporanee; la nona richiesta attende un permit.
+
+L'API pubblica di `QuackRunDatabase` espone questo solo primitivo remoto:
+`execute_stateless(sql)` / `query_stateless(sql)`. Non espone
+`remote.query(...)`, `quack_query_by_name(...)` né il catalogo DuckDB client;
+questo rende impossibile reintrodurre per errore un transport `ATTACH` sticky o
+un piano federato locale.
+
+Lo spike ha verificato la persistenza necessaria: esegue un `ATTACH` DuckDB
+server-side tramite una richiesta `quack_query` stateless, poi legge dalla
+tabella attachata con una seconda richiesta stateless e ottiene il valore atteso
+`42`. L'attach dati resta quindi nel catalogo del sidecar per il run anche se la
+connessione Quack che lo ha inviato non è sticky. La gestione di conflitti e
+deduplica resta nella barriera `ServerSetupAction` dell'orchestratore.
+
 Questo vincolo è fondamentale. Eseguire nel client una query che combina
 tabelle remote potrebbe spostare operatori nel processo principale. Il wrapper
-`QuackRunClient` deve quindi rendere pubblico `execute_remote`, non la
+`QuackRunClient` deve quindi rendere pubblico `execute_stateless`, non la
 connessione locale grezza.
 
 Le query ordinarie devono restituire solamente metadati piccoli. Dataset grandi
@@ -497,15 +587,97 @@ Gli output attraversabili devono avere nomi deterministici derivati dal node ID
 e dal nome dell'output, non dal component ID o dalla label visuale. Alias SQL,
 node ID e component ID restano concetti distinti.
 
-Le tabelle condivise fra connessioni devono vivere in `run_data`. Gli oggetti
-`TEMP` sono ammessi solamente all'interno di un lease pinned alla stessa
-connessione e non possono costituire il contratto fra due stage generici.
+Le tabelle condivise fra richieste devono vivere in `run_data`. Gli oggetti
+`TEMP` e le impostazioni `SET` stateless vivono soltanto dentro la singola
+richiesta; quando più statement devono condividerli, l'orchestratore li invia
+nello stesso batch. Non possono costituire il contratto fra due chiamate stage.
 
-## Pool di connessioni e parallelismo
+## `QuackPermitGate` e parallelismo
 
 Il sidecar contiene una sola istanza DuckDB, ma ogni lavoro concorrente usa una
-connessione server distinta. Il main usa una connessione Quack client distinta
-per ogni richiesta concorrente o una connessione acquisita da un pool.
+richiesta server distinta. Il main acquisisce un permit, crea una clone locale,
+esegue con `quack_query` la singola richiesta o il batch deciso
+dall'orchestratore, quindi distrugge la clone e rilascia il permit.
+
+Lo spike del 2026-07-17 ha caratterizzato la semantica che il progetto non deve
+più assumere implicitamente:
+
+| Configurazione client | 2 × 250 ms | 4 × 250 ms | 8 × 250 ms | ID a 8 |
+|---|---:|---:|---:|---:|
+| clone, stesso alias `ATTACH` | 517–527 ms | 1.023–1.046 ms | 2.069–2.070 ms | 1 |
+| clone, alias `ATTACH` distinti | 262–267 ms | 266–268 ms | 270–271 ms | 8 |
+| clone, `quack_query` stateless | 265–266 ms | 266–269 ms | 272–277 ms | 8 |
+| database client indipendenti | 262–275 ms | 264–275 ms | 282–286 ms | 8 |
+
+Pertanto `try_clone()` con un solo `ATTACH` eredita correttamente catalogo e
+stato sticky, ma non costituisce un meccanismo concorrente: tutte le query dirette a
+quell'alias condividono la stessa connessione server e vengono serializzate.
+La soluzione scelta mantiene un solo database/master client e usa
+`quack_query` stateless. Database client separati e alias preattachati
+funzionano, ma non sono necessari. Esiste un solo pool elastico,
+`WorkerPoolControl`; dentro il worker esiste soltanto `QuackPermitGate`.
+
+La capacità `N` è `WorkerSpec.quack_parallelism`, configurabile nel range
+`1..=8`, con default e massimo di Fase 1 `8`; limita quante
+richieste già rese concorrenti dall'orchestratore possono occupare il sidecar,
+senza introdurre nuove decisioni di scheduling. `SET threads = M` governa
+invece il parallelismo interno di DuckDB per una query e non sostituisce le `N`
+sessioni Quack necessarie per eseguire più stage contemporaneamente.
+
+Il worker non precrea connessioni. Con il default sono disponibili 8 permit;
+una nona richiesta attende in FIFO e può essere cancellata. Ogni clone nasce
+dopo l'acquisizione del permit e viene distrutta al termine; non viene eseguito
+alcun `ATTACH`. Non esistono membri del gate da sostituire né crescita eager:
+un errore di clone/query rilascia sempre il permit e torna tipizzato
+all'orchestratore, che decide l'eventuale retry. Un crash sidecar rende il
+worker non sano; la sua sostituzione appartiene a `WorkerPoolControl`.
+
+### Stato `TEMP` e modello threading
+
+Il contratto stateless sceglie esplicitamente che `TEMP` e `SET` non possano
+attraversare due unità di esecuzione. Quando servono a più statement,
+l'orchestratore mantiene quegli statement nello stesso batch remoto
+`RequestLocal`; tra stage il solo contratto è una relazione regolare in
+`run_data`. Non esistono nel primo rilascio lease connection-pinned, affinity
+key o riaquisizione di una stessa connessione.
+
+`duckdb-rs::Connection` è `Send`, ma non `Sync`. Il runner deve quindi:
+
+1. mantenere la master in possesso esclusivo di un solo factory/control thread
+   bloccante, senza `Arc<Connection>`;
+2. al permit acquisito, chiedere a quel thread un `try_clone()` serializzato;
+3. trasferire la clone a un solo query worker bloccante, proprietario esclusivo
+   fino alla fine di `quack_query`;
+4. droppare la clone prima di rilasciare il permit.
+
+L'API async comunica con questi worker tramite messaggi; non può eseguire le
+query bloccanti direttamente sul runtime async né condividere una `Connection`.
+La cancellazione termina il sidecar e abbandona il lavoro client pendente senza
+attendere una chiusura cooperativa su una connessione condivisa.
+
+Il costo di bootstrap è stato misurato separatamente su tre run profilati
+Windows x64. Con sidecar solo infrastrutturalmente pronto, il primo `ATTACH`
+della master richiede 1,11–1,21 s e l'intero bootstrap client negli ultimi tre
+run 1,24–1,27 s. Partendo dalla master già autenticata, 60 sequenze esatte
+`try_clone -> ATTACH sulla clone -> prima query` hanno prodotto:
+
+| Operazione | Intervallo osservato | Mediana per run |
+|---|---:|---:|
+| `try_clone()` | 18–96 µs | 22–28 µs |
+| `ATTACH` sulla clone | 6,37–12,10 ms | 8,28–10,08 ms |
+| prima query | 2,10–4,59 ms | 2,73–2,99 ms |
+| totale fino alla prima query riuscita | 8,99–15,39 ms | 10,75–13,61 ms |
+
+Ogni run ha osservato 20 `quack_connection_id` distinti per 20 nuovi slot e la
+clone ha riusato correttamente il secret temporaneo parametrizzato della
+master. Un precedente campione non profilato del bootstrap completo ha
+raggiunto 3,39 s, quindi questi valori descrivono lo spike locale e non sono
+ancora uno SLO.
+
+Il costo di `try_clone()` è trascurabile rispetto alla query e non giustifica
+prewarm. Gli `ATTACH` misurati appartengono all'alternativa sticky scartata: il
+percorso selezionato crea la clone on demand e usa direttamente `quack_query`.
+Non viene creato un secondo pool di connessioni.
 
 Lo scheduler deve ragionare per modalità di accesso dichiarata:
 
@@ -515,7 +687,7 @@ Lo scheduler deve ragionare per modalità di accesso dichiarata:
 | `Append` | append alla stessa tabella | parallelo con verifica conflitti |
 | `Mutation` | insert/update/delete | parallelo solo se compatibile, altrimenti retry |
 | `SchemaChange` | create/replace/drop/attach | lease esclusivo sulla risorsa interessata |
-| `ConnectionPinned` | uso di stato TEMP/sessione | stessa connessione |
+| `RequestLocal` | TEMP/SET necessari a più statement | stesso batch remoto |
 | `ExternalTransfer` | Python/Rust | lease fino a import/export completato |
 | `UnknownSql` | SQL non classificabile | conservativo: esclusivo |
 
@@ -533,13 +705,13 @@ component ID”. Deve descrivere requisiti di risorsa e sessione:
 - quali Data Source live servono allo stage;
 - quali inizializzazioni devono esistere su una connessione;
 - se lo stage può usare una relazione materializzata condivisa;
-- se richiede una connessione pinned;
+- se richiede più statement nella stessa richiesta stateless;
 - quali lease sono condivisi o esclusivi.
 
-Ogni nuova connessione Quack deve inizializzare le risorse richieste in modo
-idempotente. Il prototipo deve verificare quali attachment DuckDB sono globali
-all'istanza e quali rimangono connection-local; il planner non deve assumere
-una semantica non provata.
+Ogni richiesta stateless deve inizializzare in modo idempotente le risorse
+locali che le servono. Lo stato `TEMP` o `SET` necessario a più statement deve
+restare nello stesso batch remoto; il contratto generico fra richieste usa
+relazioni regolari in `run_data`.
 
 La compatibilità downstream non dipende da whitelist o blacklist di
 `component_id`.
@@ -558,9 +730,12 @@ al sidecar. È il percorso preferito perché non trasferisce la relazione.
 
 ### Quack streaming
 
-Python, Rust o altri client compatibili possono collegarsi direttamente al
-sidecar con un token limitato al run. Possono leggere input e scrivere output
-senza coinvolgere il main nel payload.
+Il connector Duckle può trasferire una relazione tramite Quack senza
+materializzarla nel main. Python, Rust o altro codice utente non ricevono il
+`CredentialHandle` primario del worker. Una connessione diretta da un runtime è
+ammessa soltanto dopo aver introdotto una capability delegata, distinta,
+revocabile e limitata; con l'autenticazione Quack default questo percorso resta
+disabilitato. In alternativa il runtime usa un broker controllato o snapshot.
 
 ### Snapshot Parquet
 
@@ -650,12 +825,18 @@ Comportamenti richiesti:
 
 ## Sicurezza
 
+Il contratto normativo completo è l'ADR
+[identità, bootstrap e sicurezza dei worker](../architecture/adr-worker-identity-bootstrap-security.md).
 Quack espone l'intera superficie SQL visibile al server. La feature deve quindi:
 
 - bindare esclusivamente `127.0.0.1`/localhost;
-- generare un token casuale distinto per run;
-- non stampare token in command line, log, errori o `ready.json`;
-- conservare il bootstrap file con permessi utente e cancellarlo appena letto;
+- generare un token CSPRNG distinto per worker single-use;
+- consegnarlo soltanto attraverso handle anonimi ereditati esplicitamente;
+- non serializzarlo in command line, environment, filesystem, log, errori,
+  history, eventi UI, SQL esportato o readiness metadata;
+- rappresentare endpoint, identità, credenziale e sicurezza del trasporto con
+  un unico `VerifiedWorker` provider-neutral;
+- pubblicare il worker soltanto dopo handshake Quack autenticato;
 - non esporre il server su `0.0.0.0`;
 - mantenere TLS disabilitato per localhost e non supportare connessioni remote in
   questa feature;
@@ -663,15 +844,57 @@ Quack espone l'intera superficie SQL visibile al server. La feature deve quindi:
   contenere secret;
 - evitare che connection string e token vengano inclusi nei SQL restituiti a
   UI, history, preview o MCP;
-- trattare codice Python/Rust utente come trusted all'interno del singolo run,
-  senza concedergli accesso ad altri run;
+- non consegnare il raw `CredentialHandle` a Python/Rust o altro codice utente;
+  l'accesso avviene tramite API controllate, stream o snapshot;
 - impedire alias e identificatori SQL non quotati o non validati.
 
-La risoluzione dei secret richiede una decisione specifica: inviare un ATTACH
-con credenziali tramite il client lascia la stringa anche nel contesto DuckDB
-locale. È preferibile consegnare al sidecar un bootstrap manifest protetto con
-le risorse risolte, così il main invia successivamente solo resource ID e SQL
-privo di credenziali. Questo punto è un gate di sicurezza, non un dettaglio.
+Il profilo corrente è `execution_trusted_full_sql_v1`: autenticazione con
+capability per-worker e autorizzazione full SQL impostata esplicitamente. Il
+full SQL è necessario al supervisor per eseguire DDL, DML, ATTACH e query della
+pipeline, ma è sicuro soltanto perché endpoint e credenziale restano confinati
+al processo trusted. Non è un profilo read-only e non può essere riutilizzato
+per browser, plugin o codice utente.
+
+Il client deve usare `CREATE TEMPORARY SECRET` scoped all'endpoint e
+`quack_query(uri, sql)` senza `TOKEN` inline. La connessione raw resta privata a
+`QuackRunClient`; l'API pubblica invia soltanto SQL completo stateless. Questo
+impedisce che planner o componenti costruiscano accidentalmente query federate
+eseguite nel DuckDB client.
+
+La risoluzione dei secret delle Data Source richiede una decisione specifica:
+inviare un ATTACH con credenziali tramite il client lascia la stringa anche nel
+contesto DuckDB locale. È preferibile consegnare al sidecar le risorse risolte
+nel payload della bootstrap pipe o tramite un successivo canale di controllo
+autenticato, così il main invia solo resource ID e SQL privo di credenziali.
+Questi secret sono distinti dalla capability Quack del worker e seguono lo
+stesso divieto di persistenza e logging. Questo punto è un gate di sicurezza,
+non un dettaglio.
+
+### Vincolo futuro: pubblicazione dei Books
+
+La futura funzionalità Book è soltanto un vincolo architetturale e resta fuori
+dall'ambito di questa feature. Un Book pubblicato potrà essere raggiunto, per
+esempio, sotto `localhost/<book-name>/...` e potrà in futuro usare
+DuckDB-Wasm/Quack per interrogare risultati prodotti dalle pipeline.
+
+Questa possibilità non autorizza il riuso del worker di esecuzione:
+
+- un Book non riceve mai endpoint o capability `execution_trusted_full_sql_v1`;
+- publication plane e execution plane hanno processi, database, lifecycle,
+  budget e profili di sicurezza distinti;
+- vengono pubblicate soltanto relazioni approvate o snapshot dedicati, non il
+  catalogo vivo della pipeline;
+- un accesso browser richiede reverse proxy, TLS fuori dal puro localhost,
+  policy CORS/same-origin e credenziali limitate e revocabili;
+- l'autorizzazione Quack predefinita permissiva non è accettabile;
+- una regex sul prefisso SQL non costituisce enforcement read-only: servirà un
+  gateway di query approvate o una authorization function che analizzi gli
+  statement, più sandbox di filesystem, extension e rete;
+- il token esposto al browser, se previsto, deve essere una capability breve e
+  limitata al Book, mai il token del database runner.
+
+Routing dei Book, manifest UI, eventi, pulsanti che avviano pipeline,
+navigazione e publication lifecycle saranno oggetto di una feature separata.
 
 ## Observability
 
@@ -758,6 +981,8 @@ La rimozione della CLI deve essere incrementale.
 - disabilitare `xf.dbt`, dbt Fusion setup e ogni fallback automatico;
 - costruire sidecar minimo con DuckDB embedded e Quack server;
 - costruire client Rust Quack nel main;
+- caratterizzare clone, alias `ATTACH` e `quack_query` stateless con parallelismo
+  2, 4 e 8;
 - provare prewarm, lease esclusivo, coda bounded, kill-and-replace e crescita
   elastica su processi locali;
 - provare startup, query verbatim, scrittura, letture parallele, append,
@@ -768,6 +993,8 @@ La rimozione della CLI deve essere incrementale.
 
 - introdurre `RunSession`, `WorkerPoolControl`, `WorkerProvider`, provider locale
   e `RunDatabase`;
+- preservare senza modifiche le decisioni correnti dell'orchestratore su query
+  singole, batch, parallelismo ed eventi per-stage;
 - separare policy elastica pura, coda/admission e provisioning;
 - mantenere il backend CLI come compatibility backend;
 - migrare health, inspect, query, count, schema e preview;
@@ -791,7 +1018,8 @@ La rimozione della CLI deve essere incrementale.
 
 ### Fase 4 — Concorrenza
 
-- introdurre resource modes e connection pool;
+- introdurre resource modes e semaforo `quack_parallelism`;
+- creare una clone on demand per permit e inviare con `quack_query` stateless;
 - eseguire letture e append compatibili in parallelo;
 - implementare retry deterministico dei conflitti;
 - verificare fairness e limiti di connessioni/thread.
@@ -886,10 +1114,11 @@ baseline, non inventate prima di misurare l'hardware reale.
 | Query eseguita accidentalmente nel client | Critico | API che espone solo query verbatim remote, connessione grezza privata, test CPU/RSS e plan placement |
 | Mismatch client/server/extension | Alto | coppia build atomica, handshake versione prima del run |
 | Quack non disponibile offline | Alto | bundle dell'extension o build verificata; nessun affidamento silenzioso su autoinstall |
-| Attachment connection-local | Alto | test esplicito, initializer idempotente per connessione, lease pinned quando necessario |
+| Clone multipli sullo stesso alias Quack serializzano | Alto | percorso ordinario stateless con `quack_query`, zero alias client, semaforo `quack_parallelism`; test su `quack_connection_id` |
 | Pipeline esistenti contengono `xf.dbt` | Medio | documenti leggibili, validazione `component_disabled`, nessun fallback silenzioso |
-| Secret presenti nel SQL client | Critico | bootstrap protetto delle risorse e attach server-side, logging disabilitato/redatto |
-| Default authorization Quack permissiva | Medio/alto | localhost, token per-run, processo effimero, auth callback se runtime non trusted |
+| Secret presenti nel SQL client | Critico | `CredentialHandle` opaco, secret scoped in-memory, verifica parameter binding, logging/profiling disabilitato e test di redazione |
+| Default authorization Quack permissiva | Medio/alto | localhost, token CSPRNG per-worker single-use, nessuna esposizione a user code, auth callback ulteriore se richiesto dal threat model |
+| Profilo execution riusato per Books/browser | Critico | profili e processi separati; mai esporre il worker vivo o la sua capability; publication feature con threat model dedicato |
 | Write conflict tra connessioni | Medio | access modes, retry limitato e diagnostica deterministica |
 | Sidecar orfano o runtime figlio orfano | Alto | Job Object/process group, parent PID monitor, startup sweeper |
 | Kill lascia spill o snapshot | Medio | ownership cleanup nel main, directory per-run, TTL sweeper |
@@ -899,7 +1128,9 @@ baseline, non inventate prima di misurare l'hardware reale.
 | Regressioni su connector/runtime numerosi | Alto | compatibility backend, migrazione per famiglia, suite di parità |
 | Aumento build time e artifact size | Medio/alto | profilo sidecar dedicato, compressione, cache CI, misure come release gate |
 | Antivirus/firewall interferisce con sidecar/localhost | Medio | binary firmato, path stabile, localhost only, errori di bootstrap chiari |
-| Porta occupata o race di startup | Medio | bind port 0 nel sidecar, `ready.json` atomico, retry bounded |
+| Porta occupata o race di startup | Medio | bind diretto `127.0.0.1:0` nel sidecar e endpoint restituito sulla control pipe |
+| Token osservabile nel bootstrap | Critico | pipe anonima ereditata tramite handle allowlist; niente argv, environment, file, stdin generico o readiness metadata |
+| Processo sibling legge memoria/handle | Alto | DACL processo, divieto handle generici, Job Object e threat model esplicito; admin/debugger privilegiato resta rischio residuo |
 | Crash C++/extension | Medio | isolamento sidecar; main resta vivo e registra `runner_crashed` |
 | Due pipeline concorrenti competono per RAM/disco | Alto | `max_capacity`, budget globale riservato anche a `starting`, profilo per-worker e admission queue |
 | Crescita elastica senza limite causa OOM o thrashing | Critico | nessun bypass on-demand, hard cap RAM/CPU/disco, hysteresis, cooldown e backpressure |
@@ -908,14 +1139,14 @@ baseline, non inventate prima di misurare l'hardware reale.
 | Worker dichiarato pronto troppo presto | Alto | readiness infrastrutturale più handshake Quack applicativo prima della pubblicazione |
 | Provider locale entra nel dominio | Alto | handle opaco e `WorkerProvider`; nessun PID, porta o path nell'API di scheduler |
 | Kubernetes ripristina un Pod cancellato in modo inatteso | Alto | terminare il Job proprietario, control plane proprietario del desired target, retry/finalizer chiari e test delete-to-cancel |
-| HPA e pool policy si contendono le repliche | Alto | un solo proprietario del target; HPA non governa direttamente i worker leased |
+| HPA e `WorkerPoolControl` si contendono le repliche | Alto | un solo proprietario del target; HPA non governa direttamente i worker leased |
 
 ## Ambito incluso
 
 - nuovo binario sidecar DuckDB embedded;
 - Quack client nel main e Quack server nel sidecar;
 - lifecycle per-run, health, version handshake e cleanup;
-- pool prewarm elastico bounded, coda di admission e lease esclusivo single-use;
+- `WorkerPoolControl` prewarm elastico bounded, coda di admission e lease esclusivo single-use;
 - astrazione `WorkerProvider` e prima implementazione per processi locali;
 - database unico per pipeline;
 - memory budget e spill;
@@ -942,6 +1173,7 @@ baseline, non inventate prima di misurare l'hardware reale.
 - rimozione assoluta di Parquet;
 - migrazione o riattivazione di dbt;
 - implementazione del nodo Query multi-input della Feature 002;
+- implementazione, routing e pubblicazione dei Books;
 - autorizzazione multi-tenant o sandbox completa del codice utente.
 
 ## Impatto sui moduli
@@ -982,6 +1214,19 @@ La 002 dovrà essere riscritta soltanto dopo la Fase 2 per il contratto base e
 dopo gli spike di Fase 3/4 per parallelismo e runtime esterni. Implementarla
 sull'attuale `AffinitySession` produrrebbe lavoro destinato a essere rimosso.
 
+## Disciplina di documentazione
+
+Ogni prova che conferma, smentisce o restringe un'ipotesi di questa feature deve
+aggiornare nello stesso change set:
+
+1. il contratto normativo in questo feature intent;
+2. la decisione e le conseguenze nell'ADR pertinente;
+3. comando, ambiente, metodo, risultati e limiti nel report dello spike;
+4. il README del test quando serve a rendere la prova riproducibile.
+
+Un risultato osservato soltanto in console o riportato in conversazione non è
+considerato una decisione architetturale acquisita.
+
 ## Deliverable prima della specifica implementativa
 
 1. Brownfield impact report aggiornato con tutti i chiamanti CLI.
@@ -989,7 +1234,8 @@ sull'attuale `AffinitySession` produrrebbe lavoro destinato a essere rimosso.
 3. Prototipo client/server multipiattaforma.
 4. Report benchmark Quack vs Parquet e memory vs file-backed.
 5. Strategia per i consumer attivi del db path.
-6. Threat model per token, secret bootstrap e codice utente.
+6. ADR e threat model per identità, token, bootstrap, transport security e
+   codice utente.
 7. Decisione su packaging extension e version pin.
 8. Piano di migrazione per famiglie di RuntimeSpec.
 9. Elenco test di parità e release gate.
@@ -1002,9 +1248,15 @@ feature Spec Kit con requisiti e task eseguibili.
 - [DuckDB Quack overview](https://duckdb.org/docs/current/quack/overview)
 - [DuckDB Quack reference](https://duckdb.org/docs/current/quack/reference)
 - [DuckDB Quack security](https://duckdb.org/docs/current/quack/security)
+- [DuckDB Quack reverse proxy](https://duckdb.org/docs/current/quack/setup/reverse_proxy)
+- [DuckDB Quack deployment](https://duckdb.org/docs/current/quack/setup/deployment)
+- [DuckDB Quack on WebAssembly](https://duckdb.org/docs/current/quack/setup/quack_wasm)
+- [ADR identità, bootstrap e sicurezza worker](../architecture/adr-worker-identity-bootstrap-security.md)
 - [DuckDB Quack extension status](https://duckdb.org/docs/current/core_extensions/quack)
 - [DuckDB concurrency](https://duckdb.org/docs/current/connect/concurrency)
+- [DuckDB connection and thread guidance](https://duckdb.org/docs/current/clients/c/connect)
 - [DuckDB Rust client](https://duckdb.org/docs/current/clients/rust)
+- [`duckdb-rs::Connection::try_clone`](https://docs.rs/duckdb/latest/duckdb/struct.Connection.html#method.try_clone)
 - [DuckDB workload tuning](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads)
 - [DuckDB out-of-memory guidance](https://duckdb.org/docs/current/guides/performance/oom)
 - [Kubernetes Jobs](https://kubernetes.io/docs/concepts/workloads/controllers/job/)

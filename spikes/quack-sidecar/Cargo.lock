@@ -512,6 +512,7 @@ name = "duckle-quack-sidecar-spike"
 version = "0.0.0"
 dependencies = [
  "duckdb",
+ "getrandom 0.3.4",
  "serde",
  "serde_json",
 ]

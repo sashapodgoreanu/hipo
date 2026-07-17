@@ -14,6 +14,7 @@ Detailed views:
 Proposed architecture decisions under validation:
 
 - [DuckDB per-run sidecar with Quack](adr-quack-sidecar-runner.md)
+- [Worker identity, bootstrap, and connection security](adr-worker-identity-bootstrap-security.md)
 - [Quack sidecar Phase 0 report](quack-sidecar-phase-0-report.md)
 
 ## Workspace and runtime
