@@ -127,9 +127,12 @@ pub enum RuntimeSpec {
     Webhook(WebhookSpec),
     SnowflakeSink(SnowflakeSinkSpec),
     DatabricksSink(DatabricksSinkSpec),
-    /// snk.salesforce: write rows into a Salesforce object (Tier 1 = sObject
-    /// Collections). See SalesforceSinkSpec / docs/salesforce-sink.
+    /// snk.salesforce: write rows into a Salesforce object via the sObject
+    /// Collections API. See SalesforceSinkSpec / docs/salesforce-sink.
     SalesforceSink(SalesforceSinkSpec),
+    /// snk.salesforce.bulk: write rows into a Salesforce object via Bulk API
+    /// 2.0's async job lifecycle. See SalesforceBulkSinkSpec.
+    SalesforceBulkSink(SalesforceBulkSinkSpec),
     SnowflakeSource(SnowflakeSourceSpec),
     DatabricksSource(DatabricksSourceSpec),
     RestSource(RestSourceSpec),
@@ -1004,6 +1007,7 @@ fn build_stage(
     let mut snowflake_sink: Option<SnowflakeSinkSpec> = None;
     let mut databricks_sink: Option<DatabricksSinkSpec> = None;
     let mut salesforce_sink: Option<SalesforceSinkSpec> = None;
+    let mut salesforce_bulk_sink: Option<SalesforceBulkSinkSpec> = None;
     let mut snowflake_source: Option<SnowflakeSourceSpec> = None;
     let mut databricks_source: Option<DatabricksSourceSpec> = None;
     let mut rest_source: Option<RestSourceSpec> = None;
@@ -1736,12 +1740,15 @@ fn build_stage(
                 "{}: externalIdField required when operation = upsert", component_id
             )));
         }
-        // Tier 2: Bulk API 2.0 is not wired yet - reject with a clear message
-        // rather than silently falling back to Collections at scale.
+        // Bulk API 2.0 now has its own node rather than being a mode of this
+        // one. Saved pipelines carrying the never-implemented api='bulk' get
+        // pointed at it instead of silently falling back to Collections.
         let api = match string_prop(&props, "api").unwrap_or_else(|| "collections".into()).as_str() {
             "bulk" => return Err(EngineError::Config(format!(
-                "{}: api='bulk' (Bulk API 2.0) is not yet implemented; use 'collections' \
-                 (<=200 records/request). See docs/salesforce-sink/IMPLEMENTATION.md.",
+                "{}: api='bulk' is no longer a mode of this node - use the \
+                 Salesforce Bulk sink (snk.salesforce.bulk) for Bulk API 2.0, or \
+                 'collections' (<=200 records/request) here. \
+                 See docs/salesforce-sink/IMPLEMENTATION.md.",
                 component_id
             ))),
             _ => SalesforceWriteApi::Collections,
@@ -1769,6 +1776,93 @@ fn build_stage(
             all_or_none: props.get("allOrNone").and_then(|v| v.as_bool()).unwrap_or(false),
             fail_on_error: props.get("failOnError").and_then(|v| v.as_bool()).unwrap_or(true),
             api,
+            oauth,
+            results_path: string_prop(&props, "resultsPath").filter(|s| !s.is_empty()),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.salesforce.bulk" {
+        // Salesforce Bulk API 2.0 write sink: async job lifecycle for
+        // migration-scale loads. Same auth shape as snk.salesforce.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let oauth = salesforce_oauth_from_props(&props)?;
+        let instance_url = string_prop(&props, "instanceUrl")
+            .map(|s| s.trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty());
+        let access_token = string_prop(&props, "accessToken").filter(|s| !s.is_empty());
+        if oauth.is_none() {
+            if instance_url.is_none() {
+                return Err(EngineError::Config(format!(
+                    "{}: instanceUrl required (e.g. https://acme.my.salesforce.com)",
+                    component_id
+                )));
+            }
+            if access_token.is_none() {
+                return Err(EngineError::Config(format!(
+                    "{}: accessToken required (Bearer OAuth token; use ${{ENV:SF_TOKEN}}), \
+                     or set Auth mode to OAuth Client Credentials",
+                    component_id
+                )));
+            }
+        }
+        let instance_url = instance_url.unwrap_or_default();
+        let access_token = access_token.unwrap_or_default();
+        let object = string_prop(&props, "object")
+            .or_else(|| string_prop(&props, "sobject"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!(
+                "{}: object required (e.g. Account)", component_id
+            )))?;
+        // Bulk's operation names are case-sensitive on the wire ("hardDelete"),
+        // so match case-insensitively but keep Salesforce's spelling.
+        let operation = match string_prop(&props, "operation")
+            .unwrap_or_else(|| "insert".into())
+            .to_lowercase()
+            .as_str()
+        {
+            "insert" => "insert".to_string(),
+            "update" => "update".to_string(),
+            "upsert" => "upsert".to_string(),
+            "delete" => "delete".to_string(),
+            "harddelete" => "hardDelete".to_string(),
+            other => {
+                return Err(EngineError::Config(format!(
+                    "{}: operation must be insert|update|upsert|delete|hardDelete (got '{}')",
+                    component_id, other
+                )))
+            }
+        };
+        let external_id_field = string_prop(&props, "externalIdField")
+            .filter(|s| !s.is_empty());
+        if operation == "upsert" && external_id_field.is_none() {
+            return Err(EngineError::Config(format!(
+                "{}: externalIdField required when operation = upsert", component_id
+            )));
+        }
+        let poll_interval_secs = props
+            .get("pollIntervalSecs")
+            .and_then(|v| v.as_u64())
+            .filter(|n| *n > 0)
+            .unwrap_or(5);
+        let timeout_secs = props
+            .get("timeoutSecs")
+            .and_then(|v| v.as_u64())
+            .filter(|n| *n > 0)
+            .unwrap_or(3600);
+        salesforce_bulk_sink = Some(SalesforceBulkSinkSpec {
+            from_view: from_view.to_string(),
+            instance_url,
+            api_version: string_prop(&props, "apiVersion")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "v60.0".into()),
+            access_token,
+            object,
+            operation,
+            external_id_field,
+            assignment_rule_id: string_prop(&props, "assignmentRuleId")
+                .filter(|s| !s.is_empty()),
+            poll_interval_secs,
+            timeout_secs,
+            fail_on_error: props.get("failOnError").and_then(|v| v.as_bool()).unwrap_or(true),
             oauth,
             results_path: string_prop(&props, "resultsPath").filter(|s| !s.is_empty()),
         });
@@ -4380,6 +4474,7 @@ fn build_stage(
         .or_else(|| snowflake_sink.map(RuntimeSpec::SnowflakeSink))
         .or_else(|| databricks_sink.map(RuntimeSpec::DatabricksSink))
         .or_else(|| salesforce_sink.map(RuntimeSpec::SalesforceSink))
+        .or_else(|| salesforce_bulk_sink.map(RuntimeSpec::SalesforceBulkSink))
         .or_else(|| snowflake_source.map(RuntimeSpec::SnowflakeSource))
         .or_else(|| databricks_source.map(RuntimeSpec::DatabricksSource))
         .or_else(|| rest_source.map(RuntimeSpec::RestSource))

@@ -11977,3 +11977,365 @@ fn src_salesforce_oauth_client_credentials_mints_token() {
         "query request must carry the minted Bearer token"
     );
 }
+
+// --- snk.salesforce.bulk (Bulk API 2.0) --------------------------------------
+//
+// A stateful mock stands in for the org across the whole job lifecycle
+// (create -> upload -> UploadComplete -> poll -> result sets). It routes by
+// method + path and records every request on a channel so tests can assert the
+// create-job body and the uploaded CSV. Live-org behaviour is validated
+// manually; see docs/salesforce-sink/IMPLEMENTATION.md.
+
+struct BulkMock {
+    job_state: &'static str,
+    processed: u64,
+    failed: u64,
+}
+
+fn sf_bulk_mock_server(cfg: BulkMock) -> (u16, std::sync::mpsc::Receiver<Vec<u8>>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf bulk mock");
+    let port = listener.local_addr().unwrap().port();
+    // Detached: serves up to 64 requests and dies with the test process, so a
+    // test never has to know the exact request count to avoid a join hang.
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(64) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let head = String::from_utf8_lossy(&buf);
+            let line = head.lines().next().unwrap_or("").to_string();
+            let method = line.split(' ').next().unwrap_or("");
+            let path = line.split(' ').nth(1).unwrap_or("");
+            let _ = tx.send(buf.clone());
+
+            let (status, ctype, body): (&str, &str, String) = if path.contains("oauth2/token") {
+                (
+                    "200 OK",
+                    "application/json",
+                    format!(
+                        r#"{{"access_token":"minted-abc","instance_url":"http://127.0.0.1:{}"}}"#,
+                        port
+                    ),
+                )
+            } else if method == "POST" && path.ends_with("/jobs/ingest") {
+                ("200 OK", "application/json", r#"{"id":"JOB1","state":"Open"}"#.to_string())
+            } else if method == "PUT" && path.ends_with("/batches") {
+                ("201 Created", "application/json", String::new())
+            } else if method == "PATCH" {
+                ("200 OK", "application/json", r#"{"id":"JOB1","state":"UploadComplete"}"#.to_string())
+            } else if method == "GET" && path.ends_with("/successfulResults") {
+                ("200 OK", "text/csv", "sf__Id,Name\n001000000000001,Acme\n".to_string())
+            } else if method == "GET" && path.ends_with("/failedResults") {
+                // Mirror the real shape: header-only when nothing failed, one
+                // canned error row per failed record otherwise.
+                let mut body = String::from("\"sf__Id\",\"sf__Error\",Name\n");
+                for _ in 0..cfg.failed {
+                    body.push_str(
+                        "\"\",\"DUPLICATE_VALUE:duplicate value found on Name\",\"Acme\"\n",
+                    );
+                }
+                ("200 OK", "text/csv", body)
+            } else if method == "GET" && path.ends_with("/unprocessedRecords") {
+                ("200 OK", "text/csv", "Name\n".to_string())
+            } else if method == "GET" {
+                (
+                    "200 OK",
+                    "application/json",
+                    format!(
+                        r#"{{"id":"JOB1","state":"{}","numberRecordsProcessed":{},"numberRecordsFailed":{}}}"#,
+                        cfg.job_state, cfg.processed, cfg.failed
+                    ),
+                )
+            } else {
+                ("404 Not Found", "application/json", String::new())
+            };
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                ctype,
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    (port, rx)
+}
+
+#[test]
+fn snk_salesforce_bulk_insert_runs_job_lifecycle() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx) = sf_bulk_mock_server(BulkMock {
+        job_state: "JobComplete",
+        processed: 2,
+        failed: 0,
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "apiVersion": "v60.0",
+                    "object": "Account",
+                    "operation": "insert",
+                    "pollIntervalSecs": 1
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "bulk insert failed: {:?}", r.error);
+
+    // Request 1: POST create-job with the Bulk envelope.
+    let create = rx.recv_timeout(Duration::from_secs(5)).expect("create job request");
+    let create_raw = String::from_utf8_lossy(&create);
+    let line0 = create_raw.lines().next().unwrap_or("");
+    assert!(line0.starts_with("POST "), "expected POST, got: {}", line0);
+    assert!(
+        line0.contains("/services/data/v60.0/jobs/ingest"),
+        "ingest endpoint missing: {}",
+        line0
+    );
+    assert!(
+        create_raw.contains("Authorization: Bearer tok-123"),
+        "bearer auth header missing"
+    );
+    let body = create_raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    let v: Value = serde_json::from_str(body).expect("create-job body should be JSON");
+    assert_eq!(v["object"], json!("Account"));
+    assert_eq!(v["operation"], json!("insert"));
+    assert_eq!(v["contentType"], json!("CSV"));
+    assert_eq!(v["lineEnding"], json!("LF"));
+
+    // Request 2: PUT the CSV that DuckDB wrote.
+    let upload = rx.recv_timeout(Duration::from_secs(5)).expect("upload request");
+    let upload_raw = String::from_utf8_lossy(&upload);
+    assert!(
+        upload_raw.lines().next().unwrap_or("").starts_with("PUT "),
+        "expected PUT upload, got: {}",
+        upload_raw.lines().next().unwrap_or("")
+    );
+    assert!(upload_raw.contains("Content-Type: text/csv"), "upload must be text/csv");
+    let csv_body = upload_raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert!(csv_body.contains("Name"), "CSV header missing: {}", csv_body);
+    assert!(
+        csv_body.contains("Acme") && csv_body.contains("Globex"),
+        "CSV rows missing: {}",
+        csv_body
+    );
+}
+
+#[test]
+fn snk_salesforce_bulk_upsert_sets_external_id_field() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx) = sf_bulk_mock_server(BulkMock {
+        job_state: "JobComplete",
+        processed: 1,
+        failed: 0,
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "External_ID__c,Name\nDKL-1,Acme\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "upsert",
+                    "externalIdField": "External_ID__c",
+                    "pollIntervalSecs": 1
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "bulk upsert failed: {:?}", r.error);
+
+    let create = rx.recv_timeout(Duration::from_secs(5)).expect("create job request");
+    let create_raw = String::from_utf8_lossy(&create);
+    let body = create_raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    let v: Value = serde_json::from_str(body).expect("create-job body should be JSON");
+    assert_eq!(v["operation"], json!("upsert"));
+    // Upsert's whole point: the external-id field goes in the job header.
+    assert_eq!(v["externalIdFieldName"], json!("External_ID__c"));
+}
+
+#[test]
+fn snk_salesforce_bulk_failed_job_fails_run() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = sf_bulk_mock_server(BulkMock {
+        job_state: "Failed",
+        processed: 0,
+        failed: 0,
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert",
+                    "pollIntervalSecs": 1
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "error", "a Failed job must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("Failed") && err.contains("JOB1"),
+        "error should name the job and its Failed state, got: {}",
+        err
+    );
+}
+
+#[test]
+fn snk_salesforce_bulk_poll_timeout_aborts_job() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    // The mock never leaves InProgress, so a 1s timeout must fire: the run
+    // errors naming the job, and the sink PATCHes the job to Aborted.
+    let (port, rx) = sf_bulk_mock_server(BulkMock {
+        job_state: "InProgress",
+        processed: 0,
+        failed: 0,
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert",
+                    "pollIntervalSecs": 1,
+                    "timeoutSecs": 1
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "error", "a timed-out poll must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("did not finish within 1s") && err.contains("JOB1"),
+        "error should name the job and the timeout, got: {}",
+        err
+    );
+
+    // Drain recorded requests; the last PATCH must be the Aborted transition
+    // (earlier PATCH is UploadComplete).
+    let mut last_patch_body = String::new();
+    while let Ok(req) = rx.recv_timeout(Duration::from_millis(500)) {
+        let raw = String::from_utf8_lossy(&req).to_string();
+        if raw.starts_with("PATCH ") {
+            last_patch_body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        }
+    }
+    assert!(
+        last_patch_body.contains("Aborted"),
+        "expected a final PATCH {{state: Aborted}}, got body: {}",
+        last_patch_body
+    );
+}
+
+#[test]
+fn snk_salesforce_bulk_failed_records_inline_first_errors() {
+    let engine = engine_or_skip!();
+    // Job completes but 1 record failed: with failOnError (default) the run
+    // must error AND inline the sampled failedResults error - the user may not
+    // have set resultsPath, so the message is the only place they see WHY.
+    let (port, _rx) = sf_bulk_mock_server(BulkMock {
+        job_state: "JobComplete",
+        processed: 2,
+        failed: 1,
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "Name\nAcme\nGlobex\n");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node(
+                "f",
+                "snk.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "object": "Account",
+                    "operation": "insert",
+                    "pollIntervalSecs": 1
+                }),
+            ),
+        ]),
+        json!([main_edge("e", "s", "f")]),
+    ));
+    assert_eq!(r.status, "error", "failed records must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("1 failed"),
+        "error should carry the aggregate count, got: {}",
+        err
+    );
+    assert!(
+        err.contains("DUPLICATE_VALUE:duplicate value found on Name"),
+        "error should inline the sampled sf__Error, got: {}",
+        err
+    );
+}

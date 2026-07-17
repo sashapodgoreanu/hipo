@@ -1422,19 +1422,17 @@ pub struct WebhookSpec {
     pub text_template: Option<String>,
 }
 
-/// Which Salesforce write API a SalesforceSinkSpec uses.
+/// Which Salesforce write API a SalesforceSinkSpec uses. Bulk API 2.0 is not a
+/// variant here: its config diverges far enough (job polling, a 100MB upload
+/// cap, hardDelete, no allOrNone) that it is its own node, snk.salesforce.bulk
+/// / SalesforceBulkSinkSpec, rather than a mode of this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SalesforceWriteApi {
     /// sObject Collections / Composite: up to 200 records per request via a
-    /// single synchronous round-trip. Tier 1 - fits the existing ureq
-    /// per-stage model. `/composite/sobjects` (insert/update/delete) and
+    /// single synchronous round-trip. Fits the existing ureq per-stage model.
+    /// `/composite/sobjects` (insert/update/delete) and
     /// `/composite/sobjects/{sobject}/{extIdField}` (upsert).
     Collections,
-    /// Bulk API 2.0: async job lifecycle (create job -> upload CSV -> close ->
-    /// poll -> fetch success/failed result sets). Tier 2 - NOT yet wired; the
-    /// planner rejects it with a clear "not yet implemented" error so the
-    /// config is at least diagnosable. See docs/salesforce-sink/IMPLEMENTATION.md.
-    Bulk,
 }
 
 /// OAuth 2.0 client-credentials config for the Salesforce connectors (#166).
@@ -1503,6 +1501,59 @@ pub struct SalesforceSinkSpec {
     /// HTTP failure), so the reject stream survives an aborted run. Records in
     /// chunks that were never attempted (a preceding chunk aborted the run)
     /// appear in neither file.
+    pub results_path: Option<String>,
+}
+
+/// snk.salesforce.bulk: write upstream rows into a Salesforce object via Bulk
+/// API 2.0 - the migration-scale path, where snk.salesforce (sObject
+/// Collections, <=200 records per round-trip) would mean one HTTP call per 200
+/// rows. Bulk trades latency for throughput: DuckDB COPYs the upstream view
+/// straight to CSV on disk, and each part is uploaded as an async job
+/// (create -> upload -> UploadComplete -> poll -> fetch result sets), so a
+/// multi-GB load never lands in memory.
+///
+/// Auth is identical to snk.salesforce (Bearer token or `oauth` client
+/// credentials minted per run), which is what keeps org-A-read ->
+/// org-B-write working across both node families.
+#[derive(Debug, Clone)]
+pub struct SalesforceBulkSinkSpec {
+    pub from_view: String,
+    /// Org base URL, e.g. https://acme.my.salesforce.com. No trailing slash.
+    pub instance_url: String,
+    /// REST API version segment, e.g. "v60.0".
+    pub api_version: String,
+    /// Bearer OAuth access token.
+    pub access_token: String,
+    /// sObject API name, e.g. "Account", "Contact", "MyObject__c".
+    pub object: String,
+    /// "insert" | "update" | "upsert" | "delete" | "hardDelete". hardDelete is
+    /// Bulk-only (it bypasses the Recycle Bin) and needs the "Bulk API Hard
+    /// Delete" user permission.
+    pub operation: String,
+    /// Required when operation == "upsert": the external-id field the upsert
+    /// keys on (e.g. "External_Id__c"). Sent as `externalIdFieldName`.
+    pub external_id_field: Option<String>,
+    /// Optional assignment rule Id applied to Case / Lead inserts.
+    pub assignment_rule_id: Option<String>,
+    /// Seconds between job-status polls.
+    pub poll_interval_secs: u64,
+    /// Give up after this many seconds waiting for a job to reach a terminal
+    /// state; the in-flight job is aborted and the run fails naming the job Id.
+    /// Bulk jobs legitimately run for minutes to hours, so this is the only
+    /// thing standing between a stuck job and a pipeline that hangs forever.
+    pub timeout_secs: u64,
+    /// When true, the stage errors if any record failed.
+    pub fail_on_error: bool,
+    /// When set, mint a fresh access token per run via OAuth client-credentials
+    /// (#166) instead of using the static Bearer `access_token`.
+    pub oauth: Option<SalesforceOAuth>,
+    /// When set, a directory receiving the result sets Salesforce returns for
+    /// each job, stamped like snk.salesforce's (#166):
+    /// `{object}_{operation}_{utc}_success.csv`, `..._error.csv` and - Bulk
+    /// only - `..._unprocessed.csv` for records a failed job never reached.
+    /// Salesforce returns these already CSV-shaped (input columns plus `sf__Id`
+    /// / `sf__Error`), so they are streamed to disk verbatim rather than
+    /// re-serialised.
     pub results_path: Option<String>,
 }
 

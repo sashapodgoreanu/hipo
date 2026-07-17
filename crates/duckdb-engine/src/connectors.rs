@@ -637,6 +637,494 @@ impl DuckdbEngine {
         ))
     }
 
+    /// snk.salesforce.bulk: write the upstream view into Salesforce via Bulk API
+    /// 2.0. DuckDB COPYs the view straight to size-capped CSV parts on disk, and
+    /// each part runs the async job lifecycle (create -> upload -> UploadComplete
+    /// -> poll -> fetch result sets). Only one <=90 MB part is ever held in
+    /// memory, so a multi-GB load never blows the heap the way the Collections
+    /// sink's in-memory Vec<JsonValue> would.
+    pub(crate) fn run_salesforce_bulk_sink(
+        &self,
+        db: &Path,
+        secret_prefix: &str,
+        spec: &SalesforceBulkSinkSpec,
+    ) -> Result<String, EngineError> {
+        // Empty input: nothing to load. Match snk.salesforce's message shape.
+        let count_sql = format!(
+            "{}SELECT count(*) AS c FROM {}",
+            secret_prefix,
+            plan::quote_ident(&spec.from_view)
+        );
+        let n_rows = self
+            .run_rows(Some(db), &count_sql)?
+            .first()
+            .and_then(|r| r.get("c"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if n_rows == 0 {
+            return Ok(format!(
+                "salesforce bulk: 0 rows to {} {}",
+                spec.operation, spec.object
+            ));
+        }
+
+        // Same auth resolution as snk.salesforce: mint a fresh token per run in
+        // OAuth mode (preferring the token response's instance_url); otherwise
+        // the static Bearer token + configured instanceUrl.
+        let (access_token, instance_url) = match &spec.oauth {
+            Some(o) => {
+                let (tok, minted_instance) =
+                    mint_salesforce_token(&o.login_url, &o.client_id, &o.client_secret)?;
+                let instance = if !minted_instance.is_empty() {
+                    minted_instance
+                } else if !spec.instance_url.is_empty() {
+                    spec.instance_url.clone()
+                } else {
+                    return Err(EngineError::Config(
+                        "salesforce bulk: OAuth token response carried no instance_url and no \
+                         instanceUrl was configured"
+                            .into(),
+                    ));
+                };
+                (tok, instance)
+            }
+            None => (spec.access_token.clone(), spec.instance_url.clone()),
+        };
+        let auth_header = format!("Bearer {}", access_token);
+        let ingest_base = format!(
+            "{}/services/data/{}/jobs/ingest",
+            instance_url.trim_end_matches('/'),
+            spec.api_version
+        );
+
+        // DuckDB streams the view to size-capped CSV parts on disk - it does the
+        // RFC-4180 quoting and the splitting, and FILE_SIZE_BYTES writes numbered
+        // files each with their own header row, which is exactly one-part-per-job.
+        // pid + a process-local counter, so concurrent Bulk stages (or parallel
+        // tests) in one process never target the same directory - DuckDB refuses
+        // to COPY into a non-empty one.
+        static BULK_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = BULK_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let parts_dir = std::env::temp_dir()
+            .join(format!("duckle-sfbulk-{}-{}", std::process::id(), seq));
+        let _ = std::fs::remove_dir_all(&parts_dir);
+        // Removes the temp dir on every exit path (success, error, cancel).
+        let _cleanup = ScopedDir(parts_dir.clone());
+        // DuckDB accepts forward slashes on every platform; single quotes are the
+        // only char it string-escapes.
+        let parts_target = sql_escape(&parts_dir.to_string_lossy().replace('\\', "/"));
+        let copy_sql = format!(
+            "{}COPY (SELECT * FROM {}) TO '{}' (FORMAT CSV, HEADER, FILE_SIZE_BYTES {});",
+            secret_prefix,
+            plan::quote_ident(&spec.from_view),
+            parts_target,
+            BULK_SPLIT_TARGET_BYTES
+        );
+        self.run(Some(db), &copy_sql, false)?;
+
+        let mut parts: Vec<std::path::PathBuf> = std::fs::read_dir(&parts_dir)
+            .map_err(|e| EngineError::Other(format!("salesforce bulk: reading CSV parts: {}", e)))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().map(|x| x == "csv").unwrap_or(false))
+            .collect();
+        // DuckDB names parts data_0.csv .. data_N.csv without zero-padding, so a
+        // plain lexicographic sort would run 0,1,10,11,..,2 once a load splits
+        // into 10+ parts. Nothing breaks (parts are independent jobs and data_0
+        // still sorts first for the results-file header), but jobs and result
+        // rows should follow input order. Same-length names compare lexically,
+        // so (len, name) yields numeric order for this fixed name shape.
+        parts.sort_by_key(|p| {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+            (name.as_ref().map(String::len).unwrap_or(0), name)
+        });
+        if parts.is_empty() {
+            return Err(EngineError::Other(
+                "salesforce bulk: DuckDB wrote no CSV parts for a non-empty view".into(),
+            ));
+        }
+
+        // One stem per run; parts accumulate into the same result files.
+        let results_stem = spec.results_path.as_ref().map(|_| {
+            format!(
+                "{}_{}_{}",
+                spec.object,
+                spec.operation,
+                chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+            )
+        });
+
+        const ERROR_SAMPLE_MAX: usize = 5;
+        let mut total_processed: u64 = 0;
+        let mut total_failed: u64 = 0;
+        let mut job_ids: Vec<String> = Vec::new();
+        let mut error_samples: Vec<String> = Vec::new();
+
+        for (idx, part) in parts.iter().enumerate() {
+            self.check_cancelled()?;
+            let size = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+            // A single part DuckDB couldn't split under the ceiling (pathological
+            // very-wide row). Fail clearly rather than let Salesforce 400 on it.
+            if size > BULK_UPLOAD_MAX_BYTES {
+                return Err(EngineError::Query(format!(
+                    "salesforce bulk: CSV part {} is {} bytes, over the {} MB Bulk upload limit; \
+                     the row width may be too large to split - reduce columns or use snk.salesforce",
+                    idx,
+                    size,
+                    BULK_UPLOAD_MAX_BYTES / (1024 * 1024)
+                )));
+            }
+
+            let job_id = self.bulk_create_ingest_job(&ingest_base, &auth_header, spec)?;
+            job_ids.push(job_id.clone());
+
+            // One part is <=90 MB, so holding it for the PUT is bounded.
+            let bytes = std::fs::read(part).map_err(|e| {
+                EngineError::Other(format!("salesforce bulk: reading CSV part: {}", e))
+            })?;
+            if let Err(e) = self.bulk_upload_and_close(&ingest_base, &job_id, &auth_header, &bytes) {
+                let _ = self.bulk_abort_job(&ingest_base, &job_id, &auth_header);
+                return Err(e);
+            }
+
+            let status = match self.bulk_poll_ingest_job(&ingest_base, &job_id, &auth_header, spec)
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = self.bulk_abort_job(&ingest_base, &job_id, &auth_header);
+                    return Err(e);
+                }
+            };
+            total_processed += status.records_processed;
+            total_failed += status.records_failed;
+            // Sample the first few failedResults rows so the run error can show
+            // WHAT failed even when no resultsPath is configured (parity with
+            // the Collections sink's first-5-errors message). Only fetched when
+            // failOnError will actually surface them - with it off, the user
+            // opted into counts-only and resultsPath is the error record.
+            if spec.fail_on_error
+                && status.records_failed > 0
+                && error_samples.len() < ERROR_SAMPLE_MAX
+            {
+                error_samples.extend(self.bulk_first_failed_errors(
+                    &ingest_base,
+                    &job_id,
+                    &auth_header,
+                    ERROR_SAMPLE_MAX - error_samples.len(),
+                ));
+            }
+
+            // Result sets come back already CSV-shaped; stream them to the
+            // stamped files (best-effort per endpoint - a missing set never masks
+            // the job outcome). idx == 0 writes the header, later parts append.
+            if let (Some(dir), Some(stem)) = (spec.results_path.as_deref(), results_stem.as_ref()) {
+                self.bulk_write_result_files(
+                    &ingest_base,
+                    &job_id,
+                    &auth_header,
+                    dir,
+                    stem,
+                    idx == 0,
+                )?;
+            }
+
+            if status.state != "JobComplete" {
+                return Err(EngineError::Query(format!(
+                    "salesforce bulk {} {}: job {} ended {}{}",
+                    spec.operation,
+                    spec.object,
+                    job_id,
+                    status.state,
+                    if status.error_message.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" - {}", status.error_message)
+                    }
+                )));
+            }
+        }
+
+        let succeeded = total_processed.saturating_sub(total_failed);
+        if total_failed > 0 && spec.fail_on_error {
+            let samples = if error_samples.is_empty() {
+                String::new()
+            } else {
+                format!(" First errors: {}.", error_samples.join("; "))
+            };
+            return Err(EngineError::Query(format!(
+                "salesforce bulk {} {}: {} succeeded, {} failed across {} job(s) [{}].{} \
+                 Set resultsPath to capture every failed record, or failOnError off to continue.",
+                spec.operation,
+                spec.object,
+                succeeded,
+                total_failed,
+                job_ids.len(),
+                job_ids.join(","),
+                samples
+            )));
+        }
+        Ok(format!(
+            "salesforce bulk {} {}: {} succeeded, {} failed across {} job(s)",
+            spec.operation,
+            spec.object,
+            succeeded,
+            total_failed,
+            job_ids.len()
+        ))
+    }
+
+    /// POST a Bulk API 2.0 ingest job and return its Id.
+    fn bulk_create_ingest_job(
+        &self,
+        ingest_base: &str,
+        auth_header: &str,
+        spec: &SalesforceBulkSinkSpec,
+    ) -> Result<String, EngineError> {
+        let mut body = serde_json::Map::new();
+        body.insert("object".into(), JsonValue::String(spec.object.clone()));
+        body.insert("operation".into(), JsonValue::String(spec.operation.clone()));
+        body.insert("contentType".into(), JsonValue::String("CSV".into()));
+        // DuckDB's CSV writer emits LF on every platform (verified on Windows).
+        body.insert("lineEnding".into(), JsonValue::String("LF".into()));
+        if spec.operation == "upsert" {
+            if let Some(ext) = &spec.external_id_field {
+                body.insert("externalIdFieldName".into(), JsonValue::String(ext.clone()));
+            }
+        }
+        if let Some(rule) = &spec.assignment_rule_id {
+            body.insert("assignmentRuleId".into(), JsonValue::String(rule.clone()));
+        }
+        let body_str =
+            serde_json::to_string(&JsonValue::Object(body)).unwrap_or_else(|_| "{}".into());
+        let resp = crate::tls::http_agent()
+            .post(ingest_base)
+            .set("Authorization", auth_header)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json")
+            .send_string(&body_str);
+        let txt = bulk_read_body(resp, ingest_base, "create job")?;
+        let v: JsonValue = serde_json::from_str(&txt).map_err(|e| {
+            EngineError::Query(format!(
+                "salesforce bulk create job: non-JSON response ({}): {}",
+                e,
+                tail_chars(&txt, 200)
+            ))
+        })?;
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if id.is_empty() {
+            return Err(EngineError::Query(format!(
+                "salesforce bulk create job: response missing job id: {}",
+                tail_chars(&txt, 200)
+            )));
+        }
+        Ok(id)
+    }
+
+    /// PUT one part's CSV to a job, then PATCH it to UploadComplete so Salesforce
+    /// starts processing.
+    fn bulk_upload_and_close(
+        &self,
+        ingest_base: &str,
+        job_id: &str,
+        auth_header: &str,
+        csv: &[u8],
+    ) -> Result<(), EngineError> {
+        let upload_url = format!("{}/{}/batches", ingest_base, job_id);
+        let resp = crate::tls::http_agent()
+            .put(&upload_url)
+            .set("Authorization", auth_header)
+            .set("Content-Type", "text/csv")
+            .set("Accept", "application/json")
+            .send_bytes(csv);
+        // A successful upload returns 201 with no body.
+        bulk_read_body(resp, &upload_url, "upload CSV")?;
+
+        let close_url = format!("{}/{}", ingest_base, job_id);
+        let resp = crate::tls::http_agent()
+            .request("PATCH", &close_url)
+            .set("Authorization", auth_header)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json")
+            .send_string(r#"{"state":"UploadComplete"}"#);
+        bulk_read_body(resp, &close_url, "close job")?;
+        Ok(())
+    }
+
+    /// Poll a job until it reaches a terminal state, or the configured timeout
+    /// elapses. Checks cancellation every iteration (unlike the Snowflake /
+    /// Databricks pollers) because a Bulk job can legitimately run for hours.
+    fn bulk_poll_ingest_job(
+        &self,
+        ingest_base: &str,
+        job_id: &str,
+        auth_header: &str,
+        spec: &SalesforceBulkSinkSpec,
+    ) -> Result<BulkJobStatus, EngineError> {
+        let url = format!("{}/{}", ingest_base, job_id);
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(spec.timeout_secs);
+        let interval = std::time::Duration::from_secs(spec.poll_interval_secs);
+        loop {
+            self.check_cancelled()?;
+            let resp = crate::tls::http_agent()
+                .get(&url)
+                .set("Authorization", auth_header)
+                .set("Accept", "application/json")
+                .call();
+            let txt = bulk_read_body(resp, &url, "poll job")?;
+            let v: JsonValue = serde_json::from_str(&txt).map_err(|e| {
+                EngineError::Query(format!(
+                    "salesforce bulk poll job: non-JSON response ({}): {}",
+                    e,
+                    tail_chars(&txt, 200)
+                ))
+            })?;
+            let state = v
+                .get("state")
+                .and_then(|s| s.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if matches!(state.as_str(), "JobComplete" | "Failed" | "Aborted") {
+                return Ok(BulkJobStatus {
+                    state,
+                    records_processed: v
+                        .get("numberRecordsProcessed")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0),
+                    records_failed: v
+                        .get("numberRecordsFailed")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0),
+                    error_message: v
+                        .get("errorMessage")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+            }
+            if start.elapsed() >= timeout {
+                return Err(EngineError::Query(format!(
+                    "salesforce bulk: job {} did not finish within {}s (last state '{}')",
+                    job_id, spec.timeout_secs, state
+                )));
+            }
+            std::thread::sleep(interval);
+        }
+    }
+
+    /// PATCH a job to Aborted. Best-effort cleanup on timeout / upload failure /
+    /// cancel, so the caller ignores the result.
+    fn bulk_abort_job(
+        &self,
+        ingest_base: &str,
+        job_id: &str,
+        auth_header: &str,
+    ) -> Result<(), EngineError> {
+        let url = format!("{}/{}", ingest_base, job_id);
+        let resp = crate::tls::http_agent()
+            .request("PATCH", &url)
+            .set("Authorization", auth_header)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json")
+            .send_string(r#"{"state":"Aborted"}"#);
+        bulk_read_body(resp, &url, "abort job").map(|_| ())
+    }
+
+    /// Sample up to `max` error messages from a job's failedResults CSV, for the
+    /// run error message. Streams and stops after `max` data lines - the full
+    /// set can be ~100 MB and belongs in resultsPath, not an error string.
+    /// Best-effort: any fetch/read problem just yields fewer (or no) samples.
+    fn bulk_first_failed_errors(
+        &self,
+        ingest_base: &str,
+        job_id: &str,
+        auth_header: &str,
+        max: usize,
+    ) -> Vec<String> {
+        use std::io::BufRead;
+        let url = format!("{}/{}/failedResults", ingest_base, job_id);
+        let resp = crate::tls::http_agent()
+            .get(&url)
+            .set("Authorization", auth_header)
+            .set("Accept", "text/csv")
+            .call();
+        let Ok(r) = resp else { return Vec::new() };
+        let mut out = Vec::new();
+        // Row shape: "sf__Id","sf__Error",<input columns...>. Pull the second
+        // field for a Collections-style "CODE:message" line, falling back to
+        // the raw (truncated) line if the quoting isn't as expected.
+        for line in std::io::BufReader::new(r.into_reader())
+            .lines()
+            .skip(1)
+            .take(max)
+        {
+            let Ok(line) = line else { break };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let err_field = line
+                .splitn(3, "\",\"")
+                .nth(1)
+                .map(|s| s.trim_end_matches('"'))
+                .filter(|s| !s.is_empty());
+            out.push(match err_field {
+                Some(e) => e.chars().take(200).collect(),
+                None => line.chars().take(200).collect(),
+            });
+        }
+        out
+    }
+
+    /// Fetch a job's three result sets and append them to the stamped files.
+    /// Salesforce returns each already CSV-shaped (input columns plus `sf__Id` or
+    /// `sf__Error`), so they stream to disk verbatim. `first` writes the header;
+    /// later parts append data rows only.
+    fn bulk_write_result_files(
+        &self,
+        ingest_base: &str,
+        job_id: &str,
+        auth_header: &str,
+        dir: &str,
+        stem: &str,
+        first: bool,
+    ) -> Result<(), EngineError> {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| EngineError::Other(format!("salesforce bulk: creating resultsPath: {}", e)))?;
+        for (endpoint, suffix) in [
+            ("successfulResults", "success"),
+            ("failedResults", "error"),
+            ("unprocessedRecords", "unprocessed"),
+        ] {
+            let url = format!("{}/{}/{}", ingest_base, job_id, endpoint);
+            let resp = crate::tls::http_agent()
+                .get(&url)
+                .set("Authorization", auth_header)
+                .set("Accept", "text/csv")
+                .call();
+            // Best-effort: a Failed job may 400 on successfulResults, etc. Skip a
+            // set we can't fetch rather than masking the job outcome. The body
+            // MUST stream via into_reader(): a result set for a ~200k-record job
+            // is ~100 MB, and ureq's into_string() silently caps at 10 MB (found
+            // live - the success file came back empty for a completed 210k job).
+            let body = match resp {
+                Ok(r) => r.into_reader(),
+                Err(_) => continue,
+            };
+            let path = std::path::Path::new(dir).join(format!("{}_{}.csv", stem, suffix));
+            append_bulk_result_csv(&path, body, first).map_err(|e| {
+                EngineError::Other(format!(
+                    "salesforce bulk: writing {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Snowflake SQL API sink. Reads the upstream view as JSON,
     /// chunks rows into spec.batch_size groups, builds one multi-row
     /// INSERT per chunk, and POSTs to /api/v2/statements with Bearer
@@ -9527,6 +10015,87 @@ fn salesforce_record_envelope(row: &JsonValue, object: &str) -> JsonValue {
     JsonValue::Object(rec)
 }
 
+/// Bulk API 2.0 accepts up to 150 MB of *base64-encoded* CSV per job. The
+/// upload is base64-encoded server-side, which inflates raw CSV by ~33-50%, so
+/// Salesforce's own guidance is to keep the raw upload under 100 MB. DuckDB's
+/// FILE_SIZE_BYTES is a soft cap (it only flushes on row-group boundaries and
+/// overshoots by a few percent), so we target 90 MB per part and still hard-
+/// check each part against the 100 MB line before uploading. Do NOT "simplify"
+/// these to 150 - the 150 is a post-base64 number, not a raw-CSV one.
+const BULK_SPLIT_TARGET_BYTES: u64 = 90 * 1024 * 1024;
+const BULK_UPLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Terminal snapshot of a Bulk API 2.0 ingest job.
+struct BulkJobStatus {
+    /// "JobComplete" | "Failed" | "Aborted".
+    state: String,
+    records_processed: u64,
+    records_failed: u64,
+    /// Job-level failure reason (empty unless the job Failed early).
+    error_message: String,
+}
+
+/// Removes a directory tree when dropped, so a Bulk run's temp CSV parts never
+/// leak on any exit path (success, error, or cancel).
+struct ScopedDir(std::path::PathBuf);
+
+impl Drop for ScopedDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Read a Bulk API response body, turning an HTTP status or transport error
+/// into a descriptive EngineError. A 2xx with no body yields an empty string.
+fn bulk_read_body(
+    resp: Result<ureq::Response, ureq::Error>,
+    url: &str,
+    what: &str,
+) -> Result<String, EngineError> {
+    match resp {
+        Ok(r) => Ok(r.into_string().unwrap_or_default()),
+        Err(ureq::Error::Status(code, r)) => {
+            let b = r.into_string().unwrap_or_default();
+            Err(EngineError::Query(format!(
+                "salesforce bulk {}: HTTP {} from {}: {}",
+                what,
+                code,
+                url,
+                tail_chars(&b, 300)
+            )))
+        }
+        Err(e) => Err(EngineError::Query(format!(
+            "salesforce bulk {}: transport to {}: {}",
+            what, url, e
+        ))),
+    }
+}
+
+/// Append one job's CSV result set to a per-run file, streaming - a result set
+/// can be ~100 MB, so it is never buffered whole. The first part writes the
+/// whole body (header + rows); later parts strip the header line and append the
+/// data rows, so the accumulated file has exactly one header.
+fn append_bulk_result_csv(
+    path: &std::path::Path,
+    body: impl std::io::Read,
+    first: bool,
+) -> std::io::Result<()> {
+    use std::io::BufRead;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let mut reader = std::io::BufReader::new(body);
+    if !first {
+        // Drop the header line; the rest is data (empty when the job had none).
+        // read_until (not read_line) so a non-UTF-8 byte can't error the copy.
+        let mut header = Vec::new();
+        reader.read_until(b'\n', &mut header)?;
+    }
+    std::io::copy(&mut reader, &mut f)?;
+    Ok(())
+}
+
 /// Per-record outcome of one Salesforce Collections request (#166
 /// resultsPath). `status_code` / `message` stay empty on success; `id` is the
 /// created/updated record Id when Salesforce returned one.
@@ -10186,6 +10755,69 @@ mod context_var_tests {
         let vars = context_vars_for_workspace(dir.path());
         assert!(vars.contains_key("workspace"));
         assert!(!vars.contains_key("MOTHERDUCK_TOKEN"));
+    }
+}
+
+#[cfg(test)]
+mod salesforce_bulk_tests {
+    use super::{
+        append_bulk_result_csv, BULK_SPLIT_TARGET_BYTES, BULK_UPLOAD_MAX_BYTES,
+    };
+
+    #[test]
+    fn split_target_leaves_headroom_under_the_upload_ceiling() {
+        // The split target must sit below the hard upload cap so DuckDB's
+        // few-percent FILE_SIZE_BYTES overshoot still lands under the limit.
+        assert!(
+            BULK_SPLIT_TARGET_BYTES < BULK_UPLOAD_MAX_BYTES,
+            "split target {} must be below the {} upload cap",
+            BULK_SPLIT_TARGET_BYTES,
+            BULK_UPLOAD_MAX_BYTES
+        );
+        // At least a 10% margin for the overshoot observed in testing (~3.6%).
+        assert!(BULK_SPLIT_TARGET_BYTES <= BULK_UPLOAD_MAX_BYTES * 9 / 10);
+    }
+
+    #[test]
+    fn first_part_keeps_header_later_parts_append_data_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acct_insert_success.csv");
+        // First part: whole body (header + rows).
+        append_bulk_result_csv(&path, "sf__Id,Name\n001,Acme\n".as_bytes(), true).unwrap();
+        // Second part: header stripped, only the data row appended.
+        append_bulk_result_csv(&path, "sf__Id,Name\n002,Globex\n".as_bytes(), false).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(out, "sf__Id,Name\n001,Acme\n002,Globex\n");
+    }
+
+    #[test]
+    fn header_only_result_body_appends_nothing_on_later_parts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acct_insert_error.csv");
+        append_bulk_result_csv(&path, "sf__Id,sf__Error\n".as_bytes(), true).unwrap();
+        // A later part with only a header (no failures) must add no rows.
+        append_bulk_result_csv(&path, "sf__Id,sf__Error\n".as_bytes(), false).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(out, "sf__Id,sf__Error\n");
+    }
+
+    #[test]
+    fn result_bodies_over_ureq_string_cap_stream_intact() {
+        // The live bug: ureq's into_string() caps at 10 MB, so a ~100 MB result
+        // set silently became an empty file. The writer takes a reader and
+        // streams, so a body well past that cap must land byte-complete.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acct_insert_success.csv");
+        let row = "001xx000003DGb2AAG,true,Acme Corp 12345678901234567890\n";
+        let rows = 12 * 1024 * 1024 / row.len(); // ~12 MB of data rows
+        let mut body = String::with_capacity(rows * row.len() + 32);
+        body.push_str("sf__Id,sf__Created,Name\n");
+        for _ in 0..rows {
+            body.push_str(row);
+        }
+        append_bulk_result_csv(&path, body.as_bytes(), true).unwrap();
+        let written = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(written, body.len() as u64, "streamed body must be complete");
     }
 }
 
