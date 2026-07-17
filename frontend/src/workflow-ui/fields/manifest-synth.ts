@@ -5768,6 +5768,60 @@ function synthGeoTransform(comp: ComponentDef): ComponentManifest {
             },
         ], 'upstream');
     }
+    if (comp.id === 'xf.geo.setcrs') {
+        return base(comp, [
+            {
+                label: 'Define projection',
+                fields: [
+                    { key: 'geomColumn', label: 'Geometry column', kind: 'column', required: true },
+                    {
+                        key: 'crs',
+                        label: 'Coordinate reference system',
+                        kind: 'text',
+                        required: true,
+                        defaultValue: 'EPSG:4326',
+                        placeholder: 'EPSG:4326',
+                        description: 'Assigns this CRS to the geometry without moving the coordinates (ST_SetCRS) - use it when the data has correct coordinates but missing or unknown CRS metadata. Any authority code the DuckDB Spatial extension knows works, e.g. EPSG:4326 (WGS 84) or EPSG:3857 (Web Mercator). The geometry column is replaced in place; all other columns pass through.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (comp.id === 'xf.geo.reproject') {
+        return base(comp, [
+            {
+                label: 'Reproject geometry',
+                fields: [
+                    { key: 'geomColumn', label: 'Geometry column', kind: 'column', required: true },
+                    {
+                        key: 'sourceCrs',
+                        label: 'Current CRS',
+                        kind: 'text',
+                        required: true,
+                        defaultValue: 'EPSG:4326',
+                        placeholder: 'EPSG:4326',
+                        description: 'The CRS the geometry is currently in. It is pinned with ST_SetCRS before the transform, so reprojection works even when the input carries no CRS metadata.',
+                    },
+                    {
+                        key: 'targetCrs',
+                        label: 'New CRS',
+                        kind: 'text',
+                        required: true,
+                        defaultValue: 'EPSG:3857',
+                        placeholder: 'EPSG:3857',
+                        description: 'The CRS to reproject into (ST_Transform). Must differ from the current CRS.',
+                    },
+                    {
+                        key: 'alwaysXy',
+                        label: 'Always XY (lon/lat axis order)',
+                        kind: 'bool',
+                        defaultValue: true,
+                        description: 'Force lon/lat (X/Y) axis order, matching the GeoParquet / de-facto standard. Leave on unless you specifically need authority-defined axis order.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.geo.intersects') {
         return base(comp, [
             {

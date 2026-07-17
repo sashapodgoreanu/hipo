@@ -306,6 +306,8 @@ pub(crate) fn build_view_sql(
         "xf.geo.buffer" => build_geo_buffer(inputs, props),
         "xf.geo.flip" => build_geo_flip(inputs, props),
         "xf.geo.intersects" => build_geo_intersects(inputs, props),
+        "xf.geo.setcrs" => build_geo_setcrs(inputs, props),
+        "xf.geo.reproject" => build_geo_reproject(inputs, props),
         "xf.num.round" | "xf.num.abs" | "xf.num.mod" | "xf.num.power" | "xf.num.sqrt"
         | "xf.num.log" => build_numeric(inputs, props, component_id),
         "xf.num.bucketize" => build_bucketize(inputs, props),
@@ -4828,6 +4830,8 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         | "xf.geo.buffer"
         | "xf.geo.flip"
         | "xf.geo.intersects"
+        | "xf.geo.setcrs"
+        | "xf.geo.reproject"
         | "xf.join.spatial"
         // Geometry DQ tools (issue #158) call ST_IsValid / ST_MakeValid / ST_IsEmpty.
         | "qa.geomvalidate"
@@ -5982,6 +5986,69 @@ pub(crate) fn build_geo_flip(inputs: &NodeInputs, props: &JsonValue) -> Result<S
     Ok(format!(
         "SELECT * REPLACE (ST_FlipCoordinates(CAST({col} AS GEOMETRY)) AS {col}) FROM {up}",
         col = col,
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Define Projection (issue #188): assign a CRS to a geometry that has missing
+/// or unknown CRS metadata, WITHOUT touching the coordinates, via `ST_SetCRS`.
+/// Replaces the geometry in place with `SELECT * REPLACE` so every other column
+/// passes through. CAST accepts a native GEOMETRY (no-op) or a VARCHAR WKT
+/// column (parsed).
+pub(crate) fn build_geo_setcrs(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.setcrs"))?;
+    let column = string_prop(props, "geomColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Define Projection needs a geometry column".to_string())?;
+    let crs = string_prop(props, "crs")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Define Projection needs a coordinate reference system".to_string())?;
+    let col = quote_ident(&column);
+    Ok(format!(
+        "SELECT * REPLACE (ST_SetCRS(CAST({col} AS GEOMETRY), '{crs}') AS {col}) FROM {up}",
+        col = col,
+        crs = sql_escape(&crs),
+        up = quote_ident(upstream)
+    ))
+}
+
+/// Reproject Geometry (issue #189): reproject a geometry column from a source
+/// CRS to a target CRS via `ST_Transform`, replacing it in place. The source CRS
+/// is pinned with `ST_SetCRS` first so the transform is well-defined even when
+/// the input carries no CRS metadata. `always_xy` (default true) forces
+/// lon/lat axis order, matching the GeoParquet / de-facto standard. Rejects a
+/// no-op reprojection where source and target are identical.
+pub(crate) fn build_geo_reproject(
+    inputs: &NodeInputs,
+    props: &JsonValue,
+) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.reproject"))?;
+    let column = string_prop(props, "geomColumn")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Reproject Geometry needs a geometry column".to_string())?;
+    let source_crs = string_prop(props, "sourceCrs")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Reproject Geometry needs a current (source) CRS".to_string())?;
+    let target_crs = string_prop(props, "targetCrs")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Reproject Geometry needs a new (target) CRS".to_string())?;
+    if source_crs == target_crs {
+        return Err(format!(
+            "Reproject Geometry: the current and new CRS are both '{}' - nothing to reproject",
+            source_crs
+        ));
+    }
+    let always_xy = props
+        .get("alwaysXy")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let col = quote_ident(&column);
+    Ok(format!(
+        "SELECT * REPLACE (ST_Transform(ST_SetCRS(CAST({col} AS GEOMETRY), '{src}'), '{tgt}', always_xy := {xy}) AS {col}) FROM {up}",
+        col = col,
+        src = sql_escape(&source_crs),
+        tgt = sql_escape(&target_crs),
+        xy = always_xy,
         up = quote_ident(upstream)
     ))
 }
@@ -8605,6 +8672,79 @@ mod geom_dq_tests {
             let p = attach_prelude(id, &json!({}));
             assert!(p.contains("LOAD spatial"), "{id} missing spatial prelude");
             assert!(p.contains("geometry_always_xy"), "{id} missing axis-order pin");
+        }
+    }
+}
+
+#[cfg(test)]
+mod geo_projection_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn one_input() -> NodeInputs {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        ni
+    }
+
+    #[test]
+    fn setcrs_replaces_geometry_in_place() {
+        // #188 Define Projection: assign the CRS, coordinates untouched.
+        let sql = build_geo_setcrs(
+            &one_input(),
+            &json!({"geomColumn": "geom", "crs": "EPSG:4326"}),
+        )
+        .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT * REPLACE (ST_SetCRS(CAST(\"geom\" AS GEOMETRY), 'EPSG:4326') AS \"geom\") FROM \"up\""
+        );
+    }
+
+    #[test]
+    fn setcrs_needs_column_and_crs() {
+        assert!(build_geo_setcrs(&one_input(), &json!({"crs": "EPSG:4326"})).is_err());
+        assert!(build_geo_setcrs(&one_input(), &json!({"geomColumn": "geom"})).is_err());
+    }
+
+    #[test]
+    fn reproject_wraps_setcrs_in_transform_with_always_xy() {
+        // #189 Reproject: ST_Transform(ST_SetCRS(...), target, always_xy).
+        let sql = build_geo_reproject(
+            &one_input(),
+            &json!({"geomColumn": "geom", "sourceCrs": "EPSG:4326", "targetCrs": "EPSG:3857"}),
+        )
+        .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT * REPLACE (ST_Transform(ST_SetCRS(CAST(\"geom\" AS GEOMETRY), 'EPSG:4326'), 'EPSG:3857', always_xy := true) AS \"geom\") FROM \"up\""
+        );
+        // always_xy is overridable.
+        let off = build_geo_reproject(
+            &one_input(),
+            &json!({"geomColumn": "geom", "sourceCrs": "EPSG:4326", "targetCrs": "EPSG:3857", "alwaysXy": false}),
+        )
+        .unwrap();
+        assert!(off.contains("always_xy := false"));
+    }
+
+    #[test]
+    fn reproject_rejects_identical_source_and_target() {
+        let err = build_geo_reproject(
+            &one_input(),
+            &json!({"geomColumn": "geom", "sourceCrs": "EPSG:4326", "targetCrs": "EPSG:4326"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("nothing to reproject"), "{err}");
+    }
+
+    #[test]
+    fn projection_tools_force_load_spatial() {
+        for id in ["xf.geo.setcrs", "xf.geo.reproject"] {
+            assert!(
+                attach_prelude(id, &json!({})).contains("LOAD spatial"),
+                "{id} missing spatial prelude"
+            );
         }
     }
 }
