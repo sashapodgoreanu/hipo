@@ -36,16 +36,16 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 
 ## Phase 4 — User Story 2: Creare una Query Source (P1)
 
-**Goal**: provide `src.query` with reference-only Data Source selection, read-only SQL, schema and preview.
+**Goal**: provide `src.query` with reference-only Data Source selection, one unrestricted SQL statement, schema and preview.
 
-**Independent test**: a Query Source with one or more Data Source refs previews a relation; missing refs and write SQL are rejected with sanitized diagnostics.
+**Independent test**: a Query Source with one or more Data Source refs previews a row-producing relation; missing refs and multi-statement SQL are rejected with sanitized diagnostics.
 
 - [x] T016 [US2] Add the `src.query` component manifest, palette entry and node editor in `frontend/src/workflow-ui/palette-data.ts` and `frontend/src/workflow-ui/fields/component-manifests.ts` — editor persists refs/SQL only.
 - [x] T017 [US2] Add multi-Data-Source selection without copying ConnectionPayload in `frontend/src/DataSourceRefField.tsx` — selected values are stable ids and aliases are shown read-only.
-- [x] T018 [US2] Implement read-only SQL validation (single `SELECT`/`WITH`/table-function statement) in `crates/duckdb-engine/src/plan/builders.rs` — DDL, DML and multi-statement input return typed errors.
+- [x] T018 [US2] Implement single-statement SQL validation in `crates/duckdb-engine/src/plan/builders.rs` — statement type is unrestricted; only multi-statement input returns a typed error.
 - [x] T019 [US2] Resolve Data Source refs to ephemeral Connection material in `apps/desktop/src/lib.rs`, `apps/desktop/src/secrets.rs` and `crates/duckle-runner/src/serve.rs` — the frontend transmits only ids/non-sensitive metadata; runtime secrets stay in memory and are never persisted or logged.
 - [x] T020 [US2] Implement `query_source_preview` in `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts` and `crates/duckle-runner/src/serve.rs` — response includes schema, at most 1000 rows, duration and context id; preview timeout is 30 seconds and diagnostics are masked.
-- [x] T021 [P] [US2] Add planner unit tests for SQL grammar, ref resolution and preview error taxonomy in `crates/duckdb-engine/src/plan/tests.rs` — read-only, DDL and multi-statement rejection assertions are present; execution is subject to the environment-gated Cargo test run.
+- [x] T021 [P] [US2] Add planner unit tests for SQL grammar, ref resolution and preview error taxonomy in `crates/duckdb-engine/src/plan/tests.rs` — SELECT, DDL, DML and multi-statement rejection assertions are present; execution is subject to the environment-gated Cargo test run.
 
 ## Phase 5 — User Story 3: Eseguire Query Source con affinità (P1)
 
@@ -91,4 +91,4 @@ Setup → Foundational → US1 (workspace Data Source) → US2 (Query Source) �
 
 ## Implementation strategy
 
-MVP scope is US1 plus the read-only validation portion of US2: persist Data Sources, enforce alias/dependency rules and reject unsafe Query Source SQL. The next increment adds preview, then US3 session affinity, then US4 failure/security hardening. Existing Source execution remains the compatibility fallback throughout; no automatic migration is introduced.
+MVP scope is US1 plus the single-statement validation portion of US2: persist Data Sources, enforce alias/dependency rules and reject multi-statement Query Source SQL. The next increment adds preview, then US3 session affinity, then US4 failure/security hardening. Existing Source execution remains the compatibility fallback throughout; no automatic migration is introduced.

@@ -2309,6 +2309,21 @@ impl DuckdbEngine {
                     Some(error) => Err(error),
                     None => worker.execute(&query.materialize_sql).map(|_| ()),
                 }
+            } else if let Some(RuntimeSpec::Python(spec)) = stage.runtime.as_ref() {
+                match worker.query_json_rows(&format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view))) {
+                    Err(error) => Err(error),
+                    Ok(rows) if rows.is_empty() => worker
+                        .execute(&format!(
+                            "CREATE OR REPLACE TABLE {} AS SELECT * FROM {} LIMIT 0",
+                            plan::quote_ident(&spec.node_id),
+                            plan::quote_ident(&spec.from_view)
+                        ))
+                        .map(|_| ()),
+                    Ok(rows) => self
+                        .run_python_rows(db_path, spec, &rows)
+                        .map_err(|error| affinity_session::AffinitySessionError::Runtime(error.to_string()))
+                        .and_then(|rows| worker.materialize_json_rows(&spec.node_id, &rows)),
+                }
             } else {
                 worker.execute(&stage.sql).map(|_| ())
             };

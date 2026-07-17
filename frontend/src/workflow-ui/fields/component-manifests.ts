@@ -635,14 +635,14 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
         id: 'src.query',
         kind: 'source',
         label: 'Query Source',
-        description: 'Execute read-only SQL against shared Data Sources.',
+        description: 'Execute exactly one DuckDB SQL statement against shared Data Sources. SELECT-like statements produce rows; DDL/DML execute once and expose an empty output relation.',
         schemaSource: 'autodetect',
         sections: [
             {
                 label: 'Query',
                 fields: [
                     { key: 'dataSourceRefs', label: 'Data Sources', kind: 'data-source-ref', required: true, description: 'Search by data source name. The node stores only stable references; connection credentials stay in the workspace connection.', },
-                    { key: 'sql', label: 'Read-only SQL', kind: 'expression', required: true, rows: 8, placeholder: 'SELECT * FROM sales.orders' },
+                    { key: 'sql', label: 'SQL statement', kind: 'expression', required: true, rows: 8, placeholder: 'SELECT * FROM sales.orders', description: 'Any single DuckDB statement. Multiple statements are rejected.' },
                     { key: 'previewLimit', label: 'Preview rows (max 1000)', kind: 'number', defaultValue: 1000 },
                 ],
             },

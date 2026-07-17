@@ -5728,6 +5728,21 @@ impl DuckdbEngine {
             materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("code.python: 0 upstream rows -> {}", spec.node_id));
         }
+        let result = self.run_python_rows(db, spec, &rows)?;
+        let count = result.len();
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &result)?;
+        Ok(format!("code.python: transformed {} row(s) into {}", count, spec.node_id))
+    }
+
+    /// Run the Python harness after the caller has read rows from its chosen
+    /// DuckDB session. This lets affinity execution retain the worker session.
+    pub(crate) fn run_python_rows(
+        &self,
+        db: &Path,
+        spec: &PythonSpec,
+        rows: &[JsonValue],
+    ) -> Result<Vec<JsonValue>, EngineError> {
+        self.check_cancelled()?;
         let safe: String = spec
             .node_id
             .chars()
@@ -5743,7 +5758,7 @@ impl DuckdbEngine {
         };
         if let Err(e) = std::fs::write(
             &in_path,
-            serde_json::to_vec(&rows)
+            serde_json::to_vec(rows)
                 .map_err(|e| EngineError::Query(format!("code.python: encode input: {}", e)))?,
         ) {
             return Err(EngineError::Query(format!("code.python: write input: {}", e)));
@@ -5799,11 +5814,8 @@ impl DuckdbEngine {
             }
         };
         cleanup(&in_path, &out_path, &script_path);
-        let result: Vec<JsonValue> = serde_json::from_str(&text)
-            .map_err(|e| EngineError::Query(format!("code.python: parse output: {}", e)))?;
-        let count = result.len();
-        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &result)?;
-        Ok(format!("code.python: transformed {} row(s) into {}", count, spec.node_id))
+        serde_json::from_str(&text)
+            .map_err(|e| EngineError::Query(format!("code.python: parse output: {}", e)))
     }
 
     /// xf.ai.dedupe: drop rows whose embedding is within `threshold`

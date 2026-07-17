@@ -142,6 +142,7 @@ fn affinity_groups_merge_direct_and_transitive_refs_but_keep_independent_groups(
     assert_eq!(plan.node_to_group["q1"], plan.node_to_group["q3"]);
     assert_ne!(plan.node_to_group["q1"], plan.node_to_group["q4"]);
     assert!(matches!(classify_affinity_stage("src.query", false), AffinityStageMode::SessionPreserving));
+    assert!(matches!(classify_affinity_stage("code.python", true), AffinityStageMode::SessionPreserving));
     assert!(matches!(classify_affinity_stage("xf.ai.embed", true), AffinityStageMode::SessionSuspending));
     assert!(matches!(classify_affinity_stage("src.rest", true), AffinityStageMode::Unsupported));
     let _ = json!(null);

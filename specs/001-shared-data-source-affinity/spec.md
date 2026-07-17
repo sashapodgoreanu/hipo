@@ -40,8 +40,8 @@ continuare a funzionare senza configurare Data Source.
 - Q: Cosa deve accadere se una Query Source fallisce? → A: Fallire la Query
   Source e i downstream dipendenti, consentendo ai rami indipendenti dello stesso
   contesto di proseguire.
-- Q: Quale SQL può eseguire una Query Source? → A: Solo SQL di lettura (`SELECT`,
-  `WITH` e funzioni/tabella DuckDB), senza DDL, DML o statement multipli.
+- Q: Quale SQL può eseguire una Query Source? → A: Qualsiasi singolo statement
+  DuckDB; statement multipli restano vietati.
 - Q: Quali Data Source sono supportati nella prima release? → A: Solo `duckdb` e
   `postgres`; gli altri connector restano esclusi dal nuovo tipo Data Source e
   continuano a usare gli Source esistenti.
@@ -193,8 +193,9 @@ report indica Data Source e Query Source di ciascun contesto.
 - **FR-021**: Un errore di Query Source marca la Query Source e i downstream
   dipendenti come falliti, ma consente ai rami indipendenti dello stesso contesto
   di proseguire secondo il DAG.
-- **FR-022**: Query Source accetta solo SQL di lettura (`SELECT`, `WITH` e
-  funzioni/tabella DuckDB); DDL, DML e statement multipli vengono rifiutati.
+- **FR-022**: Query Source accetta qualsiasi singolo statement DuckDB; gli
+  statement multipli vengono rifiutati. Gli statement che non producono righe
+  espongono una relazione di output vuota.
 
 ## Execution and Security Impact
 
@@ -208,8 +209,10 @@ report indica Data Source e Query Source di ciascun contesto.
   sottografo downstream senza bloccare rami indipendenti.
 - **Connections/secrets**: Data Source contiene solo il riferimento; statement
   `ATTACH`/`CREATE SECRET`, log, history ed errori devono essere mascherati.
-- **Query SQL**: la Query Source è read-only a livello di linguaggio; non può
-  modificare Data Source remoti né introdurre side effect DDL/DML.
+- **Query SQL**: la Query Source accetta un solo statement DuckDB senza
+  limitazioni di tipo; DDL e DML possono quindi avere side effect sui Data
+  Source collegati. La preview rimane utile soltanto per statement che producono
+  righe.
 - **IPC**: servono DTO per Data Source, preview, contesto e diagnostica, oltre a
   eventi di inizializzazione, esecuzione e cancellazione.
 - **Security**: read-only predefinito, validazione Connection, estensioni,
@@ -243,7 +246,8 @@ automaticamente i Source esistenti.
 - [ ] Errori di Connection, estensione, `ATTACH` e SQL non espongono credenziali.
 - [ ] Un errore di Query Source non blocca rami indipendenti, ma marca falliti la
   Query Source e i relativi downstream.
-- [ ] DDL, DML e statement multipli vengono rifiutati da una Query Source.
+- [ ] DDL e DML in un singolo statement vengono eseguiti; statement multipli
+  vengono rifiutati e i comandi senza righe producono un output vuoto.
 - [ ] Cancellazione e cleanup non lasciano processi o file della run.
 - [ ] Pipeline e Source esistenti continuano a funzionare.
 

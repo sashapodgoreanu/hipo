@@ -1352,6 +1352,46 @@ fn query_sources_sharing_a_data_source_join_in_one_affinity_worker() {
 }
 
 #[test]
+fn query_source_can_cross_python_transform_in_same_affinity_worker() {
+    let Some(python) = std::env::var_os("DUCKLE_PYTHON_BIN") else {
+        eprintln!("skipping: set DUCKLE_PYTHON_BIN to a Python 3 executable to run");
+        return;
+    };
+    if !std::path::Path::new(&python).exists() {
+        eprintln!("skipping: DUCKLE_PYTHON_BIN does not point to an executable");
+        return;
+    }
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let srcdb = out_path(tmp.path(), "source.duckdb");
+    duckdb_exec(&srcdb, "CREATE TABLE extensions AS SELECT * FROM (VALUES (1, 'core')) t(id, kind)");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("query", "src.query", json!({
+                "dataSourceRefs": ["ds-extensions"],
+                "sql": "SELECT * FROM catalog.extensions",
+                "_duckleDataSourceRuntime": [{
+                    "id": "ds-extensions", "alias": "catalog", "kind": "duckdb",
+                    "connection": {"database": &srcdb}
+                }]
+            })),
+            node("translate", "code.python", json!({
+                "code": "def process(row):\n    row['kind'] = row['kind'].upper()\n    return row"
+            })),
+            node("out", "snk.csv", json!({ "path": out, "hasHeader": true }))
+        ]),
+        json!([
+            main_edge("query-to-python", "query", "translate"),
+            main_edge("python-to-out", "translate", "out")
+        ]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "run failed: {:?}", result.error);
+    assert_eq!(scalar_string(&format!("SELECT kind FROM read_csv_auto('{}')", out)), "CORE");
+}
+
+#[test]
 fn query_source_join_writes_unmatched_reject_output_to_csv() {
     // The Join manifest calls the secondary output "unmatched", but persists
     // it as the standard `reject` handle. This is the exact graph shape used

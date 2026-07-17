@@ -37,7 +37,7 @@ the environment at run time. run_pipeline and build_pipeline need a DuckDB binar
 pub fn list_tools() -> Value {
     json!([
         tool("list_components",
-            "List Duckle components (sources, transforms, sinks, control, quality, custom code). Optionally filter by kind or a search query.",
+            "List all Duckle components, including every source/Data Source component and Query Source (src.query). Query Source runs exactly one DuckDB SQL statement over shared workspace Data Sources; SELECT-like statements emit rows, while DDL/DML execute once and emit an empty relation. Optionally filter by kind or a search query.",
             json!({ "type": "object", "properties": {
                 "kind": { "type": "string", "enum": ["source","transform","sink","control","quality","custom"], "description": "Filter to one kind." },
                 "query": { "type": "string", "description": "Case-insensitive substring over id/label/summary." }

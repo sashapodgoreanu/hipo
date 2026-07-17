@@ -3422,7 +3422,7 @@
       "label": "Query Source",
       "kind": "source",
       "availability": "available",
-      "summary": "Read-only SQL over shared Data Sources",
+      "summary": "Run one SQL statement over shared Data Sources",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -3437,7 +3437,7 @@
         "id": "src.query",
         "kind": "source",
         "label": "Query Source",
-        "description": "Execute read-only SQL against shared Data Sources.",
+        "description": "Execute exactly one DuckDB SQL statement against shared Data Sources. SELECT-like statements produce rows; DDL/DML execute once and expose an empty output relation.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -3452,11 +3452,12 @@
               },
               {
                 "key": "sql",
-                "label": "Read-only SQL",
+                "label": "SQL statement",
                 "kind": "expression",
                 "required": true,
                 "rows": 8,
-                "placeholder": "SELECT * FROM sales.orders"
+                "placeholder": "SELECT * FROM sales.orders",
+                "description": "Any single DuckDB statement. Multiple statements are rejected."
               },
               {
                 "key": "previewLimit",

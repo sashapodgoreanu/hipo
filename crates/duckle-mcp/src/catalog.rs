@@ -76,3 +76,23 @@ pub fn schema(id: &str) -> Option<Value> {
 pub fn full() -> &'static Value {
     catalog()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::list;
+
+    #[test]
+    fn source_listing_includes_query_source_and_data_source_components() {
+        let listed = list(Some("source"), None);
+        let ids: Vec<&str> = listed["components"]
+            .as_array()
+            .expect("component list")
+            .iter()
+            .filter_map(|component| component["id"].as_str())
+            .collect();
+
+        assert!(ids.contains(&"src.query"), "Query Source missing from source listing");
+        assert!(ids.contains(&"src.duckdb"), "DuckDB Data Source missing from source listing");
+        assert!(ids.contains(&"src.postgres"), "PostgreSQL Data Source missing from source listing");
+    }
+}

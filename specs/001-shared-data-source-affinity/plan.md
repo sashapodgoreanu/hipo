@@ -31,7 +31,7 @@ Il repository oggi persiste Connection come payload cifrato, compila `PipelineDo
 |---|---|---|
 | Frontend | `frontend/src/repo-types.ts`, `workspace.ts`, `App.tsx`, `ProjectTree.tsx`, `pipeline-types.ts`, manifests | `data_source`, editor/azioni, `src.query`, persistenza e rename/delete |
 | Tauri/web IPC | `apps/desktop/src/lib.rs`, `frontend/src/tauri-bridge.ts`, `crates/duckle-runner/src/serve.rs` | DTO per resolve, test e preview; eventi di contesto; masking |
-| Planner | `crates/duckdb-engine/src/plan/mod.rs`, nuovo `plan/affinity.rs`, builders | validazione SQL read-only, risoluzione riferimenti, gruppi, metadati Stage |
+| Planner | `crates/duckdb-engine/src/plan/mod.rs`, nuovo `plan/affinity.rs`, builders | validazione di un solo statement SQL, risoluzione riferimenti, gruppi, metadati Stage |
 | Executor | `crates/duckdb-engine/src/lib.rs`, nuovo `affinity_session.rs` | worker CLI persistente, scheduling DAG, error propagation e cancellation |
 | Metadata | `crates/metadata/src/lib.rs` | proprietà serializzate compatibili del nodo Query Source |
 | Persistence/secrets | `frontend/src/workspace.ts`, `apps/desktop/src/secrets.rs` | directory payload e risoluzione Connection senza copiare segreti |
@@ -43,7 +43,7 @@ Il repository oggi persiste Connection come payload cifrato, compila `PipelineDo
 
 `RepoItemType` aggiunge `data_source`; `RepoPayload` aggiunge `DataSourcePayload` con `sqlAlias`, `kind` (`duckdb` o `postgres` nella prima release), `connectionRef`, `readOnly`, catalog/schema e opzioni. L’identità autorevole resta `RepoItem.id`; il payload non contiene credenziali. `PAYLOAD_DIR_BY_TYPE` usa `data-sources/`.
 
-`src.query` salva soltanto `dataSourceRefs`, SQL read-only, limite preview e metadati di schema. Il rename confermato aggiorna SQL dipendente; la delete confermata marca i riferimenti non validi. La validazione è case-insensitive sugli alias e rifiuta multi-statement, DDL e DML.
+`src.query` salva soltanto `dataSourceRefs`, un singolo statement SQL, limite preview e metadati di schema. Il rename confermato aggiorna SQL dipendente; la delete confermata marca i riferimenti non validi. La validazione è case-insensitive sugli alias e rifiuta solo statement multipli; DDL e DML sono consentiti. Gli statement senza righe espongono un output Source vuoto.
 
 ### Planning and execution
 
@@ -73,7 +73,7 @@ Nessuna migrazione automatica dei Source. Vecchie pipeline ignorano gli item Dat
 
 ## Test Plan
 
-- Unit: alias/SQL read-only, componenti connesse transitive, deduplicazione attach, stati di errore e sanitizzazione.
+- Unit: alias/unico statement SQL, componenti connesse transitive, deduplicazione attach, stati di errore e sanitizzazione.
 - Integration: worker DuckDB, attach una volta, interleaving DAG, partial run, cancellation/cleanup e regressione `two_duckdb_sources_same_database`.
 - Performance: preview entro 30 secondi, cleanup entro 10 secondi e massimo 1000 righe; la latenza remota resta diagnostica e non SLA.
 - Frontend: `npm --prefix frontend run lint` e `npm --prefix frontend run build`; nessun framework test esistente da assumere.

@@ -32,6 +32,8 @@ pub enum AffinitySessionError {
     WorkerTerminated,
     #[error("DuckDB affinity worker was cancelled")]
     Cancelled,
+    #[error("{0}")]
+    Runtime(String),
 }
 
 /// Completion data for one worker statement. The sequence is monotonically
@@ -197,6 +199,30 @@ impl AffinitySession {
             .filter(|line| !line.trim().is_empty())
             .map(|line| serde_json::from_str(line).map_err(|_| AffinitySessionError::Communication))
             .collect()
+    }
+
+    /// Materialize runtime output with the same worker that owns the Query
+    /// Source attachments, avoiding a second DuckDB connection.
+    pub fn materialize_json_rows(
+        &mut self,
+        table: &str,
+        rows: &[serde_json::Value],
+    ) -> Result<(), AffinitySessionError> {
+        let input = self.marker_dir.join(format!("runtime-{}.json", self.next_sequence));
+        let mut contents = Vec::new();
+        for row in rows {
+            serde_json::to_writer(&mut contents, row).map_err(|_| AffinitySessionError::Communication)?;
+            contents.push(b'\n');
+        }
+        std::fs::write(&input, contents).map_err(|_| AffinitySessionError::Communication)?;
+        let path = input.display().to_string().replace('\\', "/").replace('\'', "''");
+        let result = self.execute(&format!(
+            "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_json_auto('{}')",
+            crate::plan::quote_ident(table),
+            path
+        ));
+        let _ = std::fs::remove_file(input);
+        result.map(|_| ())
     }
 
     /// Detach known aliases in reverse lexical order. This is best-effort at

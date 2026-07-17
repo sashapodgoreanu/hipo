@@ -36,13 +36,14 @@ operations must become dependency-aware for `data_source` items.
 ## Decision 3: Query Source contract
 
 **Decision**: introduce component ID `src.query` with properties containing
-`dataSourceRefs: string[]`, read-only SQL text, optional preview limit/schema,
-and execution metadata only where needed. Query Source accepts `SELECT`, `WITH`
-and DuckDB table/function reads; DDL, DML and multi-statement input are rejected.
+`dataSourceRefs: string[]`, one SQL statement, optional preview limit/schema,
+and execution metadata only where needed. Query Source accepts every DuckDB
+statement type; only multi-statement input is rejected.
 
-**Rationale**: the feature is a Source, not a general SQL task. Read-only SQL
-keeps remote Data Source side effects outside scope and makes validation and
-secret handling testable.
+**Rationale**: the feature remains a Source because it exposes a downstream
+relation. Row-producing statements materialize their rows; statements without
+rows execute once and expose an empty relation. Requiring one statement keeps
+session framing and failure attribution deterministic.
 
 **Current architecture constraint**: component contracts are distributed among
 `palette-data.ts`, manifests, planner branches and executor dispatch; there is

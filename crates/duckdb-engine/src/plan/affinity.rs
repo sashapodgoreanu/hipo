@@ -138,7 +138,11 @@ pub fn build_affinity_plan_for_nodes(
 /// The executor must never silently fall back to per-stage execution for an
 /// unsupported stage: doing so would invalidate the session ownership contract.
 pub fn classify_affinity_stage(component_id: &str, has_runtime: bool) -> AffinityStageMode {
-    if component_id == "src.query" || matches!(component_id, "ctl.log" | "ctl.warn") || !has_runtime {
+    if component_id == "src.query"
+        || component_id == "code.python"
+        || matches!(component_id, "ctl.log" | "ctl.warn")
+        || !has_runtime
+    {
         AffinityStageMode::SessionPreserving
     } else if component_id.starts_with("ctl.") || component_id.starts_with("xf.") {
         AffinityStageMode::SessionSuspending
