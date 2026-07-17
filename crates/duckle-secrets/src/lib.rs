@@ -248,11 +248,12 @@ fn conn_str<'a>(conn: &'a JsonValue, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Expand a `connectionRef` on a Salesforce node's properties into the auth
-/// fields the engine reads (#166 stage 2). No-op for every other component or
-/// when no ref is set. The connection WINS over node-level auth props - "ref
-/// set => the saved connection defines auth" keeps rotation in one place and
-/// avoids half-states mixing stale node fields with connection credentials.
+/// Expand a `connectionRef` on a node's properties into the fields the engine
+/// reads. Salesforce nodes (#166 stage 2) get their auth fields; every other
+/// kind merges its credential/config fields (#185). No-op when no ref is set.
+/// The connection WINS over node-level auth props - "ref set => the saved
+/// connection defines auth" keeps rotation in one place and avoids half-states
+/// mixing stale node fields with connection credentials.
 pub fn resolve_connection_ref_props(
     workspace: &Path,
     component_id: &str,
@@ -266,18 +267,27 @@ pub fn resolve_connection_ref_props(
     else {
         return Ok(());
     };
-    let is_sink = component_id == "snk.salesforce";
-    let is_source = component_id == "src.salesforce";
+    // src.salesforce rides the generic REST source: its form keys the mode as
+    // `authType`, the token as `authToken`, and its `url` is user-authored so no
+    // instanceUrl is injected. Every other Salesforce node - the Collections sink
+    // and both Bulk API 2.0 nodes - owns its own endpoint and uses the sink's
+    // `authMode` / `instanceUrl` / `accessToken` keys.
+    let is_rest_source = component_id == "src.salesforce";
+    let is_salesforce = is_rest_source
+        || matches!(
+            component_id,
+            "snk.salesforce" | "snk.salesforce.bulk" | "src.salesforce.bulk"
+        );
     // Salesforce demands its connection (auth is the whole node); every other
     // kind falls back to the node's inline props if the connection can no longer
     // be loaded, so a since-removed connection never hard-fails a pipeline that
     // still carries usable credentials.
     let conn = match load_connection(workspace, &ref_id) {
         Ok(c) => c,
-        Err(e) => return if is_sink || is_source { Err(e) } else { Ok(()) },
+        Err(e) => return if is_salesforce { Err(e) } else { Ok(()) },
     };
     let kind = conn.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    if !is_sink && !is_source {
+    if !is_salesforce {
         // Generic connection (S3 / Postgres / GCS / Azure / ...): merge its
         // credential and config fields onto the node, exactly as the desktop
         // connection picker does, so headless / scheduled / web runs and
@@ -300,9 +310,9 @@ pub fn resolve_connection_ref_props(
     let map = props
         .as_object_mut()
         .ok_or_else(|| format!("{}: node properties are not an object", component_id))?;
-    // The sink form keys the mode as `authMode`; the REST-shaped source form
-    // keys it as `authType` (stage 1, 11af9fb).
-    if is_sink {
+    // The sink and Bulk forms key the mode as `authMode`; the REST-shaped source
+    // form keys it as `authType` (stage 1, 11af9fb).
+    if !is_rest_source {
         map.insert(
             "authMode".into(),
             JsonValue::String(
@@ -336,18 +346,19 @@ pub fn resolve_connection_ref_props(
             map.insert(prop_key.into(), JsonValue::String(v.into()));
         }
     }
-    // instanceUrl feeds the sink endpoint; the source `url` is user-authored
-    // (full query URL), so it is never injected there.
-    if is_sink {
+    // instanceUrl feeds the sink and Bulk endpoints, which build their own URLs;
+    // the REST source's `url` is user-authored (full query URL), so it is never
+    // injected there.
+    if !is_rest_source {
         if let Some(v) = conn_str(&conn, "instanceUrl") {
             map.insert("instanceUrl".into(), JsonValue::String(v.into()));
         }
     }
-    // Bearer-mode saved connection: the sink reads `accessToken`, the
-    // REST-shaped source reads `authToken` (push_rest_auth).
+    // Bearer-mode saved connection: the sink and Bulk nodes read `accessToken`,
+    // the REST-shaped source reads `authToken` (push_rest_auth).
     if let Some(v) = conn_str(&conn, "accessToken") {
         map.insert(
-            if is_sink { "accessToken" } else { "authToken" }.into(),
+            if is_rest_source { "authToken" } else { "accessToken" }.into(),
             JsonValue::String(v.into()),
         );
     }
@@ -614,6 +625,52 @@ mod tests {
             props.get("instanceUrl").is_none(),
             "source url is user-authored"
         );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn resolve_bulk_nodes_use_the_sink_key_shape() {
+        let ws = temp_ws("bulk");
+        let enc = encrypt_payload_json(
+            &ws,
+            r#"{"kind":"salesforce","authMode":"clientCredentials","instanceUrl":"https://acme.my.salesforce.com","loginUrl":"https://acme.my.salesforce.com","clientId":"cid","clientSecret":"csecret"}"#,
+        )
+        .unwrap();
+        write_connection(&ws, "sf-bulk", &enc);
+
+        // Both Bulk nodes own their endpoint, so both take the sink's key shape
+        // - unlike src.salesforce, which rides the REST form. Without the
+        // component-id gate these would fall through to merge_generic_connection
+        // and silently resolve with no authMode at all.
+        for id in ["snk.salesforce.bulk", "src.salesforce.bulk"] {
+            let mut node = sf_node(id, serde_json::json!({"connectionRef": "sf-bulk"}));
+            resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+            let props = node.data.properties.unwrap();
+            assert_eq!(props["authMode"], "clientCredentials", "{}", id);
+            assert_eq!(props["clientId"], "cid", "{}", id);
+            assert_eq!(props["clientSecret"], "csecret", "{}", id);
+            assert_eq!(props["instanceUrl"], "https://acme.my.salesforce.com", "{}", id);
+            assert!(
+                props.get("authType").is_none(),
+                "{}: authType is the REST source's key",
+                id
+            );
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn bulk_node_rejects_a_non_salesforce_connection() {
+        let ws = temp_ws("bulk_kind");
+        let enc =
+            encrypt_payload_json(&ws, r#"{"kind":"s3","accessKey":"ak","secretKey":"sk"}"#).unwrap();
+        write_connection(&ws, "s3-conn", &enc);
+        let mut node = sf_node(
+            "snk.salesforce.bulk",
+            serde_json::json!({"connectionRef": "s3-conn"}),
+        );
+        let err = resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap_err();
+        assert!(err.contains("expected a Salesforce connection"), "{}", err);
         let _ = std::fs::remove_dir_all(&ws);
     }
 
