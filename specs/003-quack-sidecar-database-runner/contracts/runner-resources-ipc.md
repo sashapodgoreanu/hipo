@@ -13,5 +13,9 @@ Il frontend invia il profilo completo con una sola operazione.
 4. Save concorrenti coalescono.
 5. Apply failure conserva il profilo effettivo e restituisce configuration_apply_failed alle nuove query fino a correzione.
 
-PipelineEvent resta compatibile; pool/profile events sono DTO additivi e non includono endpoint, credential, SQL, PID o path.
+Se il resolver non produce un profilo effettivo, il comando restituisce
+`invalid_profile` e reason code sanitizzato; non avvia o modifica worker. I
+campi di diagnostica ammessi sono versione richiesta/effettiva, clamp reason e
+metriche aggregate; endpoint, PID, path, token, SQL e secret sono esclusi.
 
+PipelineEvent resta compatibile; pool/profile events sono DTO additivi e non includono endpoint, credential, SQL, PID o path.

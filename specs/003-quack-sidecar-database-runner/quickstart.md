@@ -10,6 +10,12 @@
 6. Cambiare RunnerResourcesProfile durante 1/2/4/8 query: vecchie query completano, nuove usano ultima generazione atomica.
 7. Token/versione errati, crash, cancel e parent death: errore sanitizzato, nessun secret, cleanup entro 10 s.
 8. Query Source attachment, batch, runtime, spill e Parquet fallback: nessun routing affinity.
+9. Gate di cutover: con gate non approvato, ogni entry point produttivo resta
+   sul backend di compatibilità; test/compatibility possono selezionare Quack.
+10. Profilo o bundle non valido: ricevere `invalid_profile` o
+    `runner_unavailable` sanitizzati e, dopo cutover, zero fallback CLI.
+11. Benchmark: congelare manifest con owner, approver, hardware, build,
+    dataset/seed, warm-up, ripetizioni e soglie prima di raccogliere baseline.
 
 ## Commands
 
@@ -23,4 +29,3 @@ npm --prefix frontend run build
 ```
 
 Eseguire smoke offline Windows/macOS/Linux senza DuckDB CLI. Dopo cutover, cercare riferimenti produttivi a DUCKLE_DUCKDB_BIN, --duckdb, AffinitySession, affinity_session e spike Phase 0.
-

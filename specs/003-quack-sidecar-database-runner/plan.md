@@ -70,6 +70,24 @@ Prima del codice, allineare ADR e feature intent alla spec: controller obbligato
 
 Introdurre un adapter di compatibilità e un gate di selezione non predefinito: il runner ufficiale può essere esercitato da test e compatibilità, ma nessun entry point produttivo lo usa finché bootstrap sicuro, package offline, versione, containment, redazione, benchmark e parità non sono approvati. Prima del gate, ogni finding rilevante della checklist di qualità deve essere risolto oppure accettato esplicitamente con motivazione. Inventariare e migrare anche inspect, drift, branch/diff e CI. Il percorso affinity-free può essere sviluppato e provato dietro compatibilità, ma affinity resta disponibile fino al cutover. Dopo i gate, un solo cutover rimuove CLI, DUCKLE_DUCKDB_BIN, argomenti --duckdb, affinity, download/setup CLI e spike. Desktop, headless, scheduler, MCP e artifact usano la stessa coppia runner/estensione offline. SlothDB e xf.dbt restano leggibili ma disabilitati.
 
+### Operational contract and evidence gate
+
+Il selector riceve un entry-point class (`production`, `test`, `compatibility`
+o `release-ci`) e la decisione di gate firmata dal release approver. Prima del
+cutover soltanto test e compatibility possono scegliere Quack; production e
+release-ci restano sul backend CLI/Affinity. Dopo il cutover non esiste fallback
+silenzioso alla CLI: profilo non risolvibile e bundle non verificato restituiscono
+rispettivamente `invalid_profile` e `runner_unavailable` sanitizzati.
+
+Il manifest di cutover è l'unica evidenza approvabile: identifica technical
+owner/release approver, risultati SC applicabili, finding risolti o accettati,
+versioni/checksum/licenze DuckDB-Quack, benchmark congelato e deroghe motivate.
+Il worker espone metriche sanitizzate per run/history (memoria/spill in byte,
+CPU ms, righe/byte/durata/trasporto) a inizio/fine richiesta e ogni 5 secondi;
+non conserva un archivio runner separato. `shutdown/cancel` prevale su crash,
+release, apply profile e scale; il controller serializza tali transizioni per
+worker e non pubblica un worker starting con profilo superato.
+
 ## Constitution Check — Post-Design
 
 - [x] Il design non modifica il grafo persistito e rende compatibile la sola nuova impostazione workspace.
@@ -80,12 +98,12 @@ Introdurre un adapter di compatibilità e un gate di selezione non predefinito: 
 
 ## Test Plan
 
-- Unit: transizioni worker, lease atomica, 100 richieste senza ready, tick 5 s, finestra 5 min, formula, restart, scale-in solo ready, profilo drain-safe e decision table di trasferimento.
-- Integration: bootstrap/token/version mismatch, applicazione del profilo prima della readiness, metriche memory/spill current+peak, spill bounded/disk-full, SQL/setup server-side, 2/4/8 query, preview, partial run, runtime/materializzazione, cancel/crash/orphan cleanup entro 10 s e isolamento run.
+- Unit: transizioni worker, lease atomica, 100 richieste senza ready, tick 5 s, finestra 5 min, formula, restart, scale-in solo ready, precedenze shutdown/apply/scale, profilo drain-safe e decision table di trasferimento.
+- Integration: bootstrap/token/version mismatch, applicazione del profilo prima della readiness, metriche memory/spill current+peak, spill bounded/disk-full, SQL/setup server-side, 2/4/8 query, preview, partial run, runtime/materializzazione, cancel/crash/orphan cleanup entro 10 s, isolamento run e assenza di fallback CLI post-cutover.
 - Entry point: desktop manual/partial, runner CLI/web, scheduler, MCP, inspect, drift e branch/diff passano tutti dal controller; sostituire run_lock web e verificare il profilo effettivo identico per ogni entry point.
 - Frontend/IPC: persistence temp-workspace, save atomico, coalescing/apply failure e controllo visuale Settings.
 - Security/package: secret canary assente da argv/env/file/log/event/history; smoke offline Windows/macOS/Linux; capability invariata.
-- Benchmark/cutover: benchmark riproducibili con baseline CLI sullo stesso hardware per SQL remoto/Quack/Parquet e consumer 1/2/4/8; scansione zero riferimenti produttivi a CLI, affinity e spike.
+- Benchmark/cutover: manifest congelato prima della misura con hardware/build/dataset/seed/warm-up/ripetizioni/soglia per workload, baseline CLI sullo stesso hardware per SQL remoto/Quack/Parquet e consumer 1/2/4/8; scansione zero riferimenti produttivi a CLI, affinity e spike.
 
 Comandi: cargo fmt --all --check; cargo clippy --workspace --all-targets --exclude duckle-lance; cargo test --workspace --exclude duckle-lance; npm --prefix frontend ci; npm --prefix frontend run lint; npm --prefix frontend run build. Per gate feature completo: clippy all-features e cargo test --workspace quando disponibili.
 

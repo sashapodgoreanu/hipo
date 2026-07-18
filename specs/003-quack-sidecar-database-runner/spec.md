@@ -779,6 +779,122 @@ riattivazione implicita.
   ricevono immediatamente worker on-demand se necessario e ricostruiscono il
   picco per le successive valutazioni.
 
+## Operational Definitions and Cutover Governance
+
+Questa sezione rende misurabili i termini operativi usati da requisiti e criteri
+di successo; prevale su descrizioni meno specifiche nei documenti di feature.
+
+### Entry point e percorso di compatibilità
+
+| Termine | Definizione vincolante |
+|---|---|
+| Entry point produttivo | Desktop (run, partial, preview), runner headless CLI/web, scheduler, MCP, inspect, drift, branch/diff e artifact distribuito avviati per un utente o un job reale. |
+| CI | Unit/integration CI può selezionare il runner ufficiale per le prove; build/release CI non può pubblicare o abilitare il runner ufficiale finché il gate non è approvato. |
+| Percorso di compatibilità | Il backend CLI/Affinity esistente, selezionato esplicitamente per entry point, che conserva il comportamento brownfield fino al cutover. Non è un fallback silenzioso dopo il cutover. |
+| Percorso ufficiale pre-gate | Il runner Quack selezionabile solo da test e compatibilità esplicita; non riceve traffico produttivo. |
+| Rifiuto del gate | Il release resta sul percorso di compatibilità, il cutover è bloccato e viene pubblicata una diagnostica sanitizzata con gli ID delle evidenze mancanti o fallite. Una nuova valutazione usa un nuovo manifest di evidenza e non altera run attive. |
+
+Il **technical owner** prepara l'evidenza; il **release approver** accetta il
+manifest e le eventuali deroghe motivate. I ruoli devono essere nominati nel
+manifest di cutover prima della raccolta dati. Un gate è approvabile soltanto
+quando tutti gli item SC-001--SC-011 applicabili hanno esito `pass`, ogni
+finding rilevante di `runner-quality.md` è `resolved` o `accepted` con
+motivazione, e non esistono deroghe di sicurezza, redazione, containment o
+compatibilità offline. Le deroghe prestazionali devono indicare workload,
+impatto, scadenza e approvatore; non consentono di aggirare gli altri gate.
+
+### Profilo, failure e telemetria
+
+Il resolver applica nell'ordine: valore richiesto valido, limite hard dell'host,
+capacità fisica del workspace/pool e quindi limite di licenza quando presente.
+Il primo vincolo più restrittivo produce il valore effettivo e una ragione
+sanitizzata (`host_limit`, `workspace_capacity`, `license_limit` oppure
+`invalid_profile`). Percentuali sono risolte contro la memoria o lo spazio
+temporaneo effettivamente disponibile al momento della risoluzione.
+
+Un worker non può completare readiness finché memoria, CPU thread, quota spill e
+spazio temporaneo effettivi non sono applicati integralmente. Se la risoluzione
+o l'applicazione fallisce, il worker non viene pubblicato; per un worker leased
+il precedente profilo effettivo rimane attivo, il profilo desiderato resta
+pendente e le nuove query ricevono `configuration_apply_failed` finché una
+versione valida si applica. La cancellazione o lo shutdown prevalgono su una
+riconfigurazione pendente e avviano cleanup senza tentare un apply successivo.
+
+| Metrica sanitizzata per worker/run | Unità e frequenza | Destinazione/retention |
+|---|---|---|
+| memoria corrente e picco | byte, a inizio/fine richiesta e campione ogni 5 s | evento run/history con la retention già configurata per la run; nessun archivio runner separato |
+| spill corrente e picco | byte, a inizio/fine richiesta e campione ogni 5 s | evento run/history con la retention già configurata per la run |
+| CPU worker | millisecondi CPU cumulativi, a fine richiesta e campione ogni 5 s | evento run/history con la retention già configurata per la run |
+| righe, byte trasferiti, durata e trasporto | contatori/durata per stage e attempt | evento stage/run e diagnostica UI non sensibile |
+
+Sono ammessi soltanto ID opachi run/stage/attempt/worker/lease, conteggi,
+durate, byte, stato, reason code e valori delle metriche sopra. Endpoint, porta,
+PID, path, capability, token, secret, SQL e testo grezzo di errori Quack sono
+redatti o sostituiti da fingerprint/diagnostica Duckle sanitizzata.
+
+“Immediato” significa: un save rende atomico il nuovo profilo **desiderato**
+quando la persistenza risponde con una nuova versione; un acquire senza ready
+registra atomicamente domanda e decisione on-demand prima del provisioning. In
+entrambi i casi l'unica attesa consentita è rispettivamente il drain della query
+attiva o l'handshake autenticato del worker deciso; nessuna coda di admission o
+resize separato viene introdotto.
+
+### Decision table e benchmark
+
+La decision table versionata per SQL remoto, trasferimento Quack e snapshot
+Parquet riceve: volume stimato, numero di consumer, necessità di retry,
+capacità del runtime, mutabilità, disponibilità del sidecar e costo di
+materializzazione. Produce: meccanismo scelto, ragione, limiti di memoria/spill
+e strategia di retry/cleanup. Eccezioni obbligatorie sono sidecar indisponibile,
+runtime incapace di ricevere il formato scelto, errore di trasferimento,
+consumer multipli e snapshot non riutilizzabile; ogni eccezione ha diagnostica
+sanitizzata e delega retry/failure alla policy dell'orchestratore.
+
+Il manifest benchmark, congelato **prima** di qualunque misura di cutover,
+identifica: commit/build, versione DuckDB/Quack, OS, modello e core CPU, RAM,
+disco e spazio libero, configurazione energetica, dataset/seed, generatori,
+workload 1M/10M/100M, warm-up, numero di ripetizioni, raccolta di mediana e
+percentili, e consumer 1/2/4/8. Ogni workload dichiara nel manifest una soglia
+approvata prima dell'esecuzione; una soglia non può essere cambiata dopo aver
+visto il risultato. Differenze di hardware richiedono un manifest separato e
+non sono confrontabili con lo stesso gate. Il failure di una soglia mantiene il
+percorso di compatibilità, registra la causa e richiede nuova baseline o
+deroga prestazionale approvata prima di una nuova valutazione.
+
+### Stati concorrenti, compatibilità e dipendenze
+
+Il controller serializza acquire, release, scale e profilo per worker ID. Le
+precedenze sono: `shutdown/cancel` > `crash/failure` > `release` >
+`profile_apply` > `scale`. Un on-demand cancellato durante bootstrap viene
+terminato e pulito; la domanda della run resta nel picco fino al suo evento
+terminale. Un worker starting con profilo superato non viene pubblicato; se
+non è più necessario per il target viene terminato senza lease. Con riduzione
+della base, worker `ready` in eccesso terminano, worker `leased` terminano alla
+fine della run senza replacement e worker `starting` vengono mantenuti soltanto
+se necessari al target ricalcolato.
+
+Workspace con campi di profilo assenti usano automatico/base 3; il legacy
+`memory_limit_mb` è memoria assoluta. Un campo legacy sconosciuto o un profilo
+non valido non modifica l'ultimo profilo effettivo e restituisce
+`invalid_profile` con reason code non sensibile. Un entry point che non risolve
+un profilo valido restituisce tale errore senza avviare un worker; un entry
+point che non trova un bundle ufficiale verificato restituisce
+`runner_unavailable`. Dopo il cutover nessuno dei due casi ripiega
+silenziosamente sulla CLI.
+
+La coppia DuckDB/Quack è posseduta dal maintainer del release package, viene
+pinata con versione, checksum, licenza e provenienza nel manifest del bundle,
+e segue il ciclo di aggiornamento del release. Windows, macOS e Linux sono
+supportati soltanto dopo smoke offline per target; incompatibilità client,
+server o estensione blocca readiness con `runner_version_mismatch` e richiede
+un bundle compatibile, non download runtime.
+
+L'istanza rifiuta l'apertura concorrente di un secondo workspace con
+`workspace_already_open`; dopo close completo può aprire un nuovo workspace con
+un nuovo controller, profilo e picco. La presente spec è l'autorità durante la
+migrazione: ADR e feature intent devono essere riallineati prima del codice e
+non possono mantenere hard maximum, queue o backpressure concorrenti.
+
 ## Assumptions, Gaps, and Decisions
 
 ### Elastic Policy Summary

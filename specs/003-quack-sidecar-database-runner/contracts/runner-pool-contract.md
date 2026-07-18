@@ -4,6 +4,11 @@
 
 WorkerPoolControl è l'unico owner di provisioning e assegnazione. Ogni entry point chiama semanticamente acquire(run_id, profile_version, cancellation); non riceve PID, porta, path, token, capability o provider handle.
 
+Il selector del runner riceve inoltre `entry_point_class` e `cutover_gate`.
+`production` e `release-ci` non ricevono una RunSession Quack prima del gate
+approvato; `test` e `compatibility` possono esercitare il percorso ufficiale.
+Dopo cutover, il selector non può ripiegare silenziosamente su CLI/Affinity.
+
 ## Outcomes
 
 | Condition | Outcome |
@@ -20,3 +25,7 @@ RunSession possiede un solo worker. Espone SQL/batch, setup server-side, trasfer
 
 Eventi additivi correlati a run/attempt/lease/worker opachi: richiesta, decisione warm/on-demand, provisioning, readiness, lease, release, failure, scale, profile apply e cleanup. Nessun secret, SQL, endpoint, port, PID o path.
 
+Per ogni request/stage gli eventi possono includere soltanto metriche e reason
+code sanitizzati definiti nel data model. Il controller emette inoltre
+`cutover_gate_rejected` con identificativo opaco dell'evidenza mancante, mai il
+contenuto di benchmark, secret o diagnostica Quack grezza.
