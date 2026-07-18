@@ -308,6 +308,7 @@ pub(crate) fn build_view_sql(
         "xf.geo.intersects" => build_geo_intersects(inputs, props),
         "xf.geo.setcrs" => build_geo_setcrs(inputs, props),
         "xf.geo.reproject" => build_geo_reproject(inputs, props),
+        "xf.geo.create" => build_geo_create(inputs, props),
         "xf.num.round" | "xf.num.abs" | "xf.num.mod" | "xf.num.power" | "xf.num.sqrt"
         | "xf.num.log" => build_numeric(inputs, props, component_id),
         "xf.num.bucketize" => build_bucketize(inputs, props),
@@ -4822,7 +4823,10 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         "xf.geo.distance"
         | "xf.geo.length"
         | "xf.geo.perimeter"
-        | "xf.geo.area" => {
+        | "xf.geo.area"
+        // Create Geometry (#190) builds points/geoms and pins lon/lat order so
+        // ST_Point(x, y) reads x as longitude, matching the GeoParquet default.
+        | "xf.geo.create" => {
             return "INSTALL spatial; LOAD spatial; SET geometry_always_xy = true; ".into();
         }
         "src.spatial"
@@ -6051,6 +6055,87 @@ pub(crate) fn build_geo_reproject(
         xy = always_xy,
         up = quote_ident(upstream)
     ))
+}
+
+/// Create Geometry (issue #190): build a native GEOMETRY column from X/Y
+/// coordinate columns, a WKT text column, or a WKB binary column, so downstream
+/// geospatial transforms can use it. `ST_Point` / `ST_GeomFromText` /
+/// `ST_GeomFromWKB` produce the geometry; an optional CRS is stamped with
+/// `ST_SetCRS`. When `removeSource` is on (default) the input column(s) are
+/// dropped with `* EXCLUDE`, otherwise they are kept alongside the new column.
+pub(crate) fn build_geo_create(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.geo.create"))?;
+    let source = string_prop(props, "source")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "xy".into());
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "geom".into());
+    let crs = string_prop(props, "crs").filter(|s| !s.is_empty());
+    let remove = props
+        .get("removeSource")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    // Geometry expression + the source column(s) it consumes (for EXCLUDE).
+    let (geom_expr, source_cols): (String, Vec<String>) = match source.as_str() {
+        "xy" => {
+            let x = string_prop(props, "xColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Create Geometry (X/Y) needs an X column".to_string())?;
+            let y = string_prop(props, "yColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Create Geometry (X/Y) needs a Y column".to_string())?;
+            (
+                format!(
+                    "ST_Point(CAST({} AS DOUBLE), CAST({} AS DOUBLE))",
+                    quote_ident(&x),
+                    quote_ident(&y)
+                ),
+                vec![x, y],
+            )
+        }
+        "wkt" => {
+            let w = string_prop(props, "wktColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Create Geometry (WKT) needs a WKT column".to_string())?;
+            (
+                format!("ST_GeomFromText(CAST({} AS VARCHAR))", quote_ident(&w)),
+                vec![w],
+            )
+        }
+        "wkb" => {
+            let w = string_prop(props, "wkbColumn")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Create Geometry (WKB) needs a WKB column".to_string())?;
+            (format!("ST_GeomFromWKB({})", quote_ident(&w)), vec![w])
+        }
+        other => {
+            return Err(format!(
+                "Create Geometry: source must be xy, wkt, or wkb (got '{}')",
+                other
+            ))
+        }
+    };
+    // Stamp the CRS when the user set one.
+    let geom_expr = match &crs {
+        Some(c) => format!("ST_SetCRS({}, '{}')", geom_expr, sql_escape(c)),
+        None => geom_expr,
+    };
+    let out = quote_ident(&output);
+    let up = quote_ident(upstream);
+    if remove {
+        let exclude = source_cols
+            .iter()
+            .map(|c| quote_ident(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "SELECT * EXCLUDE ({exclude}), {geom_expr} AS {out} FROM {up}"
+        ))
+    } else {
+        Ok(format!("SELECT *, {geom_expr} AS {out} FROM {up}"))
+    }
 }
 
 /// Base64: encode a column to base64 text, or decode a base64 text
@@ -8740,11 +8825,52 @@ mod geo_projection_tests {
 
     #[test]
     fn projection_tools_force_load_spatial() {
-        for id in ["xf.geo.setcrs", "xf.geo.reproject"] {
+        for id in ["xf.geo.setcrs", "xf.geo.reproject", "xf.geo.create"] {
             assert!(
                 attach_prelude(id, &json!({})).contains("LOAD spatial"),
                 "{id} missing spatial prelude"
             );
         }
+    }
+
+    #[test]
+    fn create_geometry_from_xy_wkt_wkb() {
+        // #190. X/Y: ST_Point with a CRS, source columns dropped by default.
+        let xy = build_geo_create(
+            &one_input(),
+            &json!({"source": "xy", "xColumn": "lon", "yColumn": "lat", "crs": "EPSG:4326"}),
+        )
+        .unwrap();
+        assert_eq!(
+            xy,
+            "SELECT * EXCLUDE (\"lon\", \"lat\"), ST_SetCRS(ST_Point(CAST(\"lon\" AS DOUBLE), CAST(\"lat\" AS DOUBLE)), 'EPSG:4326') AS \"geom\" FROM \"up\""
+        );
+        // WKT, keep source column, custom output name.
+        let wkt = build_geo_create(
+            &one_input(),
+            &json!({"source": "wkt", "wktColumn": "shape", "crs": "EPSG:4326", "outputColumn": "g", "removeSource": false}),
+        )
+        .unwrap();
+        assert_eq!(
+            wkt,
+            "SELECT *, ST_SetCRS(ST_GeomFromText(CAST(\"shape\" AS VARCHAR)), 'EPSG:4326') AS \"g\" FROM \"up\""
+        );
+        // WKB, no CRS -> no ST_SetCRS wrapper.
+        let wkb = build_geo_create(
+            &one_input(),
+            &json!({"source": "wkb", "wkbColumn": "raw"}),
+        )
+        .unwrap();
+        assert_eq!(
+            wkb,
+            "SELECT * EXCLUDE (\"raw\"), ST_GeomFromWKB(\"raw\") AS \"geom\" FROM \"up\""
+        );
+    }
+
+    #[test]
+    fn create_geometry_validates_source_and_columns() {
+        assert!(build_geo_create(&one_input(), &json!({"source": "xy", "yColumn": "lat"})).is_err());
+        assert!(build_geo_create(&one_input(), &json!({"source": "wkt"})).is_err());
+        assert!(build_geo_create(&one_input(), &json!({"source": "nope"})).is_err());
     }
 }

@@ -5822,6 +5822,47 @@ function synthGeoTransform(comp: ComponentDef): ComponentManifest {
             },
         ], 'upstream');
     }
+    if (comp.id === 'xf.geo.create') {
+        return base(comp, [
+            {
+                label: 'Create geometry',
+                fields: [
+                    {
+                        key: 'source',
+                        label: 'Build from',
+                        kind: 'select',
+                        defaultValue: 'xy',
+                        options: [
+                            { label: 'X / Y coordinate columns (Point)', value: 'xy' },
+                            { label: 'WKT text column', value: 'wkt' },
+                            { label: 'WKB binary column', value: 'wkb' },
+                        ],
+                        description: 'How the geometry is stored in the input. X/Y builds a point; WKT and WKB parse whatever geometry they contain.',
+                    },
+                    { key: 'xColumn', label: 'X (longitude) column', kind: 'column', visibleWhen: [{ key: 'source', equals: 'xy' }] },
+                    { key: 'yColumn', label: 'Y (latitude) column', kind: 'column', visibleWhen: [{ key: 'source', equals: 'xy' }] },
+                    { key: 'wktColumn', label: 'WKT column', kind: 'column', visibleWhen: [{ key: 'source', equals: 'wkt' }] },
+                    { key: 'wkbColumn', label: 'WKB column', kind: 'column', visibleWhen: [{ key: 'source', equals: 'wkb' }] },
+                    {
+                        key: 'crs',
+                        label: 'Coordinate reference system',
+                        kind: 'text',
+                        defaultValue: 'EPSG:4326',
+                        placeholder: 'EPSG:4326',
+                        description: 'Stamped onto the new geometry with ST_SetCRS. Leave blank to build the geometry without a CRS.',
+                    },
+                    { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'geom' },
+                    {
+                        key: 'removeSource',
+                        label: 'Remove source field(s)',
+                        kind: 'bool',
+                        defaultValue: true,
+                        description: 'Drop the X/Y, WKT, or WKB column(s) once the geometry column is built.',
+                    },
+                ],
+            },
+        ], 'upstream');
+    }
     if (comp.id === 'xf.geo.intersects') {
         return base(comp, [
             {

@@ -100,6 +100,87 @@ pub(crate) fn insert_time_builtins(vars: &mut HashMap<String, String>) {
     vars.insert("now".to_string(), now.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 }
 
+/// Format one time builtin (`date` / `time` / `datetime` / `timestamp` / `now`)
+/// from a resolved instant. Returns None for any other base name.
+fn format_time_builtin(base: &str, t: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    Some(match base {
+        "date" => t.format("%Y-%m-%d").to_string(),
+        "time" => t.format("%H%M%S").to_string(),
+        "datetime" => t.format("%Y-%m-%d_%H%M%S").to_string(),
+        "timestamp" => t.timestamp().to_string(),
+        "now" => t.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        _ => return None,
+    })
+}
+
+/// Parse a relative offset like `+1d`, `-2h`, `+30m`, `-45s`, or a combination
+/// (`+1d6h30m`) into a signed Duration (issue #191). A leading `+`/`-` (default
+/// `+`) sets the sign for the whole offset; each segment is `<digits><unit>`
+/// with unit in d / h / m / s. Returns None on anything malformed so the caller
+/// leaves the placeholder verbatim rather than guessing.
+fn parse_offset(s: &str) -> Option<chrono::Duration> {
+    let (sign, rest) = match s.as_bytes().first() {
+        Some(b'+') => (1i32, &s[1..]),
+        Some(b'-') => (-1i32, &s[1..]),
+        _ => (1i32, s),
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let mut total = chrono::Duration::zero();
+    let mut num = String::new();
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() {
+            num.push(ch);
+            continue;
+        }
+        if num.is_empty() {
+            return None; // a unit with no preceding number
+        }
+        let n: i64 = num.parse().ok()?;
+        num.clear();
+        let seg = match ch {
+            'd' => chrono::Duration::days(n),
+            'h' => chrono::Duration::hours(n),
+            'm' => chrono::Duration::minutes(n),
+            's' => chrono::Duration::seconds(n),
+            _ => return None, // unknown unit
+        };
+        total = total.checked_add(&seg)?;
+    }
+    if !num.is_empty() {
+        return None; // trailing digits with no unit
+    }
+    Some(total * sign)
+}
+
+/// Resolve a time-builtin placeholder name, with an optional relative offset, to
+/// its value at `now` (issue #191). `date` / `time` / `datetime` / `timestamp` /
+/// `now` resolve directly; the same names followed by a signed offset (`date+1d`,
+/// `now-2h`, `datetime+30m`) resolve to the shifted instant. Returns None for any
+/// non-builtin name or a malformed offset, so unknown `${...}` is left verbatim.
+pub(crate) fn resolve_time_builtin(name: &str, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    // Longest bases first so `datetime` / `timestamp` win over `date` / `time`.
+    const BASES: [&str; 5] = ["timestamp", "datetime", "date", "time", "now"];
+    for base in BASES {
+        if name == base {
+            return format_time_builtin(base, now);
+        }
+        if let Some(rest) = name.strip_prefix(base) {
+            if rest.starts_with('+') || rest.starts_with('-') {
+                let dur = parse_offset(rest)?;
+                return format_time_builtin(base, now + dur);
+            }
+        }
+    }
+    None
+}
+
+/// Whether a placeholder name is a time builtin (with or without an offset).
+fn is_time_builtin(name: &str) -> bool {
+    resolve_time_builtin(name, chrono::Utc::now()).is_some()
+}
+
 /// Resolve the dynamic date/time builtins (see [`insert_time_builtins`]) in
 /// every string property of every node, in place. This is a RUN-TIME pass,
 /// kept separate from [`build_context_vars`] / [`resolve_workspace`] on
@@ -109,16 +190,19 @@ pub(crate) fn insert_time_builtins(vars: &mut HashMap<String, String>) {
 /// scheduler, the headless runner) apply this just before executing. An
 /// unknown `${...}` is left verbatim, exactly like the context-var pass.
 pub fn apply_time_builtins(doc: &mut PipelineDoc) {
-    let mut vars: HashMap<String, String> = HashMap::new();
-    insert_time_builtins(&mut vars);
+    // One `now` for the whole pass so every placeholder (and every offset) in a
+    // run stamps the same instant.
+    let now = chrono::Utc::now();
     let re = match regex::Regex::new(r"\$\{([^}]+)\}") {
         Ok(re) => re,
         Err(_) => return,
     };
     let replace = |s: &str| -> String {
-        re.replace_all(s, |caps: &regex::Captures| match vars.get(caps[1].trim()) {
-            Some(v) => v.clone(),
-            None => caps[0].to_string(),
+        re.replace_all(s, |caps: &regex::Captures| {
+            match resolve_time_builtin(caps[1].trim(), now) {
+                Some(v) => v,
+                None => caps[0].to_string(),
+            }
         })
         .into_owned()
     };
@@ -258,13 +342,17 @@ fn collect_param_names(
     re: &regex::Regex,
     out: &mut std::collections::BTreeSet<String>,
 ) {
-    const BUILTINS: [&str; 7] =
-        ["date", "time", "datetime", "timestamp", "now", "workspace", "projectroot"];
+    // Path builtins resolved automatically; the date/time family (including
+    // offset forms like date+1d, #191) is excluded via is_time_builtin.
+    const PATH_BUILTINS: [&str; 2] = ["workspace", "projectroot"];
     match value {
         JsonValue::String(s) => {
             for caps in re.captures_iter(s) {
                 let name = caps[1].trim();
-                if name.starts_with("ENV:") || BUILTINS.contains(&name) {
+                if name.starts_with("ENV:")
+                    || PATH_BUILTINS.contains(&name)
+                    || is_time_builtin(name)
+                {
                     continue;
                 }
                 out.insert(name.to_string());
@@ -796,6 +884,57 @@ mod tests {
             serde_json::json!("${UNKNOWN}"),
             "an unknown placeholder must be left verbatim"
         );
+    }
+
+    #[test]
+    fn time_builtin_offsets_shift_the_instant() {
+        // #191: a signed d/h/m/s offset shifts the builtin's instant.
+        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(
+            super::resolve_time_builtin("date", now).unwrap(),
+            now.format("%Y-%m-%d").to_string()
+        );
+        assert_eq!(
+            super::resolve_time_builtin("date+1d", now).unwrap(),
+            (now + chrono::Duration::days(1)).format("%Y-%m-%d").to_string()
+        );
+        assert_eq!(
+            super::resolve_time_builtin("timestamp-2h", now).unwrap(),
+            (now.timestamp() - 7200).to_string()
+        );
+        // datetime wins over date (longest base), minute offset, filename-safe.
+        assert_eq!(
+            super::resolve_time_builtin("datetime-45m", now).unwrap(),
+            (now - chrono::Duration::minutes(45)).format("%Y-%m-%d_%H%M%S").to_string()
+        );
+        // combined segments.
+        assert_eq!(
+            super::resolve_time_builtin("now+1d6h30m", now).unwrap(),
+            (now + chrono::Duration::days(1) + chrono::Duration::hours(6) + chrono::Duration::minutes(30))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn time_builtin_offsets_reject_garbage() {
+        let now = chrono::Utc::now();
+        for bad in ["date+", "date+1", "date+1y", "date+x", "nope", "datexyz", "now-"] {
+            assert!(
+                super::resolve_time_builtin(bad, now).is_none(),
+                "{bad} should not resolve"
+            );
+        }
+    }
+
+    #[test]
+    fn discover_parameters_excludes_offset_builtins() {
+        // #191: date+1d / now-2h are builtins, not user parameters.
+        let doc: crate::PipelineDoc = serde_json::from_str(
+            r#"{"nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"P","componentId":"snk.parquet","properties":{"path":"out/${date+1d}/${REGION}.parquet","x":"${now-2h}"}}}],"edges":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(super::discover_parameters(&doc), vec!["REGION".to_string()]);
     }
 
     #[test]

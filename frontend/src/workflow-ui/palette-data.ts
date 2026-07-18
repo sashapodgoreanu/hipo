@@ -468,6 +468,7 @@ export const PALETTE: Category[] = [
                     xf('geo.flip', 'Flip Coordinates', 'available', 'Swap X/Y of every vertex to fix lat,lon vs lon,lat order (ST_FlipCoordinates)'),
                     xf('geo.setcrs', 'Define Projection', 'available', 'Assign a CRS to geometry with missing/unknown CRS, without moving the coordinates (ST_SetCRS)'),
                     xf('geo.reproject', 'Reproject Geometry', 'available', 'Reproject a geometry column from one CRS to another (ST_Transform)'),
+                    xf('geo.create', 'Create Geometry', 'available', 'Build a geometry column from X/Y coordinates, WKT, or WKB (ST_Point / ST_GeomFromText / ST_GeomFromWKB)'),
                 ],
             },
             {

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 371,
+  "componentCount": 372,
   "components": [
     {
       "id": "src.csv",
@@ -25152,6 +25152,157 @@
                 "kind": "bool",
                 "defaultValue": true,
                 "description": "Force lon/lat (X/Y) axis order, matching the GeoParquet / de-facto standard. Leave on unless you specifically need authority-defined axis order."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            },
+            {
+              "id": "reject",
+              "label": "reject",
+              "type": "reject",
+              "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.geo.create",
+      "label": "Create Geometry",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Build a geometry column from X/Y coordinates, WKT, or WKB (ST_Point / ST_GeomFromText / ST_GeomFromWKB)",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          },
+          {
+            "id": "reject",
+            "label": "reject",
+            "type": "reject",
+            "optional": true
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.geo.create",
+        "kind": "transform",
+        "label": "Create Geometry",
+        "description": "Build a geometry column from X/Y coordinates, WKT, or WKB (ST_Point / ST_GeomFromText / ST_GeomFromWKB)",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Create geometry",
+            "fields": [
+              {
+                "key": "source",
+                "label": "Build from",
+                "kind": "select",
+                "defaultValue": "xy",
+                "options": [
+                  {
+                    "label": "X / Y coordinate columns (Point)",
+                    "value": "xy"
+                  },
+                  {
+                    "label": "WKT text column",
+                    "value": "wkt"
+                  },
+                  {
+                    "label": "WKB binary column",
+                    "value": "wkb"
+                  }
+                ],
+                "description": "How the geometry is stored in the input. X/Y builds a point; WKT and WKB parse whatever geometry they contain."
+              },
+              {
+                "key": "xColumn",
+                "label": "X (longitude) column",
+                "kind": "column",
+                "visibleWhen": [
+                  {
+                    "key": "source",
+                    "equals": "xy"
+                  }
+                ]
+              },
+              {
+                "key": "yColumn",
+                "label": "Y (latitude) column",
+                "kind": "column",
+                "visibleWhen": [
+                  {
+                    "key": "source",
+                    "equals": "xy"
+                  }
+                ]
+              },
+              {
+                "key": "wktColumn",
+                "label": "WKT column",
+                "kind": "column",
+                "visibleWhen": [
+                  {
+                    "key": "source",
+                    "equals": "wkt"
+                  }
+                ]
+              },
+              {
+                "key": "wkbColumn",
+                "label": "WKB column",
+                "kind": "column",
+                "visibleWhen": [
+                  {
+                    "key": "source",
+                    "equals": "wkb"
+                  }
+                ]
+              },
+              {
+                "key": "crs",
+                "label": "Coordinate reference system",
+                "kind": "text",
+                "defaultValue": "EPSG:4326",
+                "placeholder": "EPSG:4326",
+                "description": "Stamped onto the new geometry with ST_SetCRS. Leave blank to build the geometry without a CRS."
+              },
+              {
+                "key": "outputColumn",
+                "label": "Output column",
+                "kind": "text",
+                "defaultValue": "geom"
+              },
+              {
+                "key": "removeSource",
+                "label": "Remove source field(s)",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Drop the X/Y, WKT, or WKB column(s) once the geometry column is built."
               }
             ]
           }
