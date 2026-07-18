@@ -63,8 +63,8 @@ use plan::{
     SnowflakeSinkSpec,
     SnowflakeSourceSpec,
     SqlServerSinkSpec,
-    SqlServerSourceSpec, WasmSpec, WeaviateSourceSpec, WebhookSourceSpec, WebhookSpec, XmlSinkSpec,
-    XmlSourceSpec,
+    SqlServerSourceSpec, WasmSpec, WeaviateSourceSpec, WebSocketSinkSpec, WebSocketSourceSpec,
+    WebhookSourceSpec, WebhookSpec, XmlSinkSpec, XmlSourceSpec,
 };
 
 #[derive(Debug, Error)]
@@ -1486,6 +1486,12 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::EmailSource(spec)) => self.run_email_source(&db_path, spec),
                     Some(RuntimeSpec::WebhookSource(spec)) => {
                         self.run_webhook_source(&db_path, spec)
+                    }
+                    Some(RuntimeSpec::WebSocketSource(spec)) => {
+                        self.run_websocket_source(&db_path, spec)
+                    }
+                    Some(RuntimeSpec::WebSocketSink(spec)) => {
+                        self.run_websocket_sink(&db_path, spec)
                     }
                     Some(RuntimeSpec::EmailSink(spec)) => self.run_email_sink(&db_path, spec),
                     Some(RuntimeSpec::DynamodbSource(spec)) => {

@@ -858,6 +858,38 @@ pub struct WebhookSourceSpec {
     pub path_filter: Option<String>,
 }
 
+/// src.websocket (issue #192): connect to a WebSocket URL (ws:// or wss://),
+/// optionally send one subscribe frame on connect, then read up to
+/// `max_messages` messages (or until the `timeout_ms` deadline), parse each as
+/// JSON (object -> one row, array -> a row per element, anything else ->
+/// `{message: text}`), and close. A client connector for live feeds (market
+/// data, sensor streams, chat). tungstenite answers server pings automatically.
+#[derive(Debug, Clone)]
+pub struct WebSocketSourceSpec {
+    pub node_id: String,
+    pub url: String,
+    /// Optional frame sent immediately after connect, e.g. a subscription like
+    /// `{"type":"subscribe","channel":"trades"}`.
+    pub subscribe: Option<String>,
+    pub max_messages: u64,
+    pub timeout_ms: u64,
+    /// Extra request headers (e.g. `Authorization`) applied to the handshake.
+    pub headers: Vec<(String, String)>,
+}
+
+/// snk.websocket (issue #192): connect to a WebSocket URL (ws:// or wss://) and
+/// send each upstream row as a text frame - the whole row as JSON, or one
+/// column's value when `message_column` is set - then close.
+#[derive(Debug, Clone)]
+pub struct WebSocketSinkSpec {
+    pub from_view: String,
+    pub url: String,
+    /// When set, send this column's value as the frame; otherwise send the whole
+    /// row serialized as JSON.
+    pub message_column: Option<String>,
+    pub headers: Vec<(String, String)>,
+}
+
 /// xf.ai.embed: per-row embedding transform. Reads `input_column`
 /// from each upstream row, batches up to `batch_size`, POSTs to
 /// `{base_url}/v1/embeddings` with Bearer `api_key`, adds the

@@ -2344,6 +2344,55 @@ function synthStorageSink(comp: ComponentDef): ComponentManifest {
 }
 
 function synthStreamingSource(comp: ComponentDef): ComponentManifest {
+    // src.websocket is a WebSocket client, not a Kafka-family broker consumer,
+    // so it needs its own url / subscribe / maxMessages form rather than the
+    // brokers + topic + SASL fields below (#192). Keys mirror the engine's
+    // WebSocketSourceSpec parse in plan/mod.rs.
+    if (comp.id === 'src.websocket') {
+        return base(comp, [
+            {
+                label: 'Connection',
+                fields: [
+                    {
+                        key: 'url',
+                        label: 'URL',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 'wss://stream.example.com/socket',
+                        description: 'ws:// or wss:// endpoint to connect to.',
+                    },
+                    {
+                        key: 'subscribe',
+                        label: 'Subscribe message',
+                        kind: 'textarea',
+                        rows: 3,
+                        placeholder: '{"type":"subscribe","channel":"trades"}',
+                        description: 'Optional. Sent as a text frame right after the connection opens (e.g. a subscribe/auth JSON).',
+                    },
+                    { key: 'headers', label: 'Headers', kind: 'key-value' },
+                ],
+            },
+            {
+                label: 'Collection',
+                fields: [
+                    {
+                        key: 'maxMessages',
+                        label: 'Max messages',
+                        kind: 'integer',
+                        defaultValue: 1,
+                        description: 'Read this many frames, then close the socket.',
+                    },
+                    {
+                        key: 'timeoutMs',
+                        label: 'Timeout (ms)',
+                        kind: 'integer',
+                        defaultValue: 30000,
+                        description: 'Global deadline for the whole collection window.',
+                    },
+                ],
+            },
+        ]);
+    }
     return base(comp, [
         {
             label: 'Broker',
@@ -2416,6 +2465,37 @@ function synthStreamingSource(comp: ComponentDef): ComponentManifest {
 }
 
 function synthStreamingSink(comp: ComponentDef): ComponentManifest {
+    // snk.websocket is a WebSocket client sink (#192): connect, send each row
+    // as a text frame, close. It has no brokers/topic/acks, so give it its own
+    // form. Keys mirror the engine's WebSocketSinkSpec parse in plan/mod.rs.
+    if (comp.id === 'snk.websocket') {
+        return base(
+            comp,
+            [
+                {
+                    label: 'Connection',
+                    fields: [
+                        {
+                            key: 'url',
+                            label: 'URL',
+                            kind: 'text',
+                            required: true,
+                            placeholder: 'wss://stream.example.com/socket',
+                            description: 'ws:// or wss:// endpoint to send frames to.',
+                        },
+                        {
+                            key: 'messageColumn',
+                            label: 'Message column',
+                            kind: 'column',
+                            description: 'Optional. Send this column value per row. Leave blank to send the whole row as JSON.',
+                        },
+                        { key: 'headers', label: 'Headers', kind: 'key-value' },
+                    ],
+                },
+            ],
+            'upstream',
+        );
+    }
     return base(
         comp,
         [

@@ -58,7 +58,7 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # TcpStream to the AsyncRead/Write that tiberius wants.
 tiberius = { version = "0.12", default-features = false, features = ["tds73", "rustls", "chrono"] }
 tokio-util = { version = "0.7", features = ["compat"] }
-futures-util = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Cassandra / ScyllaDB via the pure-Rust scylla driver (also speaks
 # CQL to Cassandra). Async; same block_on pattern as mongo + sqlserver.
 scylla = "0.13"
@@ -193,6 +193,7 @@ parquet = { workspace = true }
 arrow-flight = { version = "53", features = ["tls"] }
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 prost = "0.13"
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 
 # Linux-only: on top of the base odbc-sys above, request its `static` /
 # `static_ltdl` features so the Teradata ODBC driver manager (unixODBC) is

@@ -184,6 +184,7 @@ export const PALETTE: Category[] = [
                     src('kinesis', 'AWS Kinesis', 'available', 'Single-shard Kinesis read via direct HTTP + AWS SigV4 (no AWS SDK). Walks ListShards -> GetShardIterator -> GetRecords. Props: region, accessKeyId, secretAccessKey, sessionToken (optional STS), streamName, shardIndex (default 0), iteratorType (TRIM_HORIZON or LATEST), maxRecords. Records with JSON-object payloads unfold as rows; others land as {partition_key, sequence_number, data}. Multi-shard parallelism deferred.'),
                     src('eventhubs', 'Azure Event Hubs', 'planned'),
                     src('pubsub', 'GCP Pub/Sub', 'available', 'Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows.'),
+                    src('websocket', 'WebSocket', 'available', 'Connect to a ws:// or wss:// URL, optionally send a subscribe frame, and collect up to maxMessages frames (or until timeoutMs). JSON object -> one row, JSON array -> a row each, other text -> {message}. For live feeds (market data, sensor streams). Batch ETL semantics.'),
                 ],
             },
             {
@@ -579,6 +580,7 @@ export const PALETTE: Category[] = [
                     snk('rabbit', 'RabbitMQ', 'available', 'Publish each upstream row as one persistent-delivery-mode AMQP 0.9.1 message via the pure-Rust `lapin` driver. Configurable exchange + routingKey; empty exchange = default direct exchange (route to queue named by routingKey).'),
                     snk('pubsub', 'GCP Pub/Sub', 'available', 'Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -> one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max).'),
                     snk('kinesis', 'AWS Kinesis', 'planned'),
+                    snk('websocket', 'WebSocket', 'available', 'Connect to a ws:// or wss:// URL and send each upstream row as a text frame - the whole row as JSON, or one column when messageColumn is set - then close. For pushing processed results to real-time dashboards or WebSocket APIs.'),
                 ],
             },
             {

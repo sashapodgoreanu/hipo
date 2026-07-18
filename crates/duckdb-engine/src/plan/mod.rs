@@ -193,6 +193,9 @@ pub enum RuntimeSpec {
     EmailSource(EmailSourceSpec),
     EmailSink(EmailSinkSpec),
     WebhookSource(WebhookSourceSpec),
+    /// src.websocket / snk.websocket (issue #192): WebSocket client connectors.
+    WebSocketSource(WebSocketSourceSpec),
+    WebSocketSink(WebSocketSinkSpec),
     DynamodbSource(DynamoDbSourceSpec),
     KinesisSource(KinesisSourceSpec),
     AiEmbed(AiEmbedSpec),
@@ -1063,6 +1066,8 @@ fn build_stage(
     let mut ftp_sink: Option<FtpSinkSpec> = None;
     let mut sftp_sink: Option<SftpSinkSpec> = None;
     let mut clipboard_source: Option<ClipboardSourceSpec> = None;
+    let mut websocket_source: Option<WebSocketSourceSpec> = None;
+    let mut websocket_sink: Option<WebSocketSinkSpec> = None;
     let mut email_source: Option<EmailSourceSpec> = None;
     let mut email_sink: Option<EmailSinkSpec> = None;
     let mut webhook_source: Option<WebhookSourceSpec> = None;
@@ -1145,6 +1150,22 @@ fn build_stage(
             body_extras: vec![("query".into(), serde_json::Value::String(mutation))],
             bulk_action: None,
             text_template: None,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.websocket" {
+        // WebSocket client sink (#192): connect, send each upstream row as a
+        // text frame (whole row as JSON, or one column), close.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let url = string_prop(&props, "url")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!(
+                "{}: url required (ws:// or wss://)", component_id
+            )))?;
+        websocket_sink = Some(WebSocketSinkSpec {
+            from_view: from_view.to_string(),
+            url,
+            message_column: string_prop(&props, "messageColumn").filter(|s| !s.is_empty()),
+            headers: headers_from_props(&props),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.webhook" || component_id == "snk.rest" {
@@ -3032,6 +3053,30 @@ fn build_stage(
             path_filter: string_prop(&props, "pathFilter").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.websocket" {
+        // WebSocket client source (#192): connect, optionally subscribe, read up
+        // to maxMessages frames (or until the timeout), emit rows.
+        let url = string_prop(&props, "url")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(format!(
+                "{}: url required (ws:// or wss://)", component_id
+            )))?;
+        websocket_source = Some(WebSocketSourceSpec {
+            node_id: node.id.clone(),
+            url,
+            subscribe: string_prop(&props, "subscribe").filter(|s| !s.is_empty()),
+            max_messages: props
+                .get("maxMessages")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1),
+            timeout_ms: props
+                .get("timeoutMs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(30000),
+            headers: headers_from_props(&props),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.email" {
         // IMAP source. host required (e.g. imap.fastmail.com); port
         // defaults to 993 (IMAPS). mailbox defaults to INBOX.
@@ -4509,6 +4554,8 @@ fn build_stage(
         .or_else(|| milvus_source.map(RuntimeSpec::MilvusSource))
         .or_else(|| format_source.map(RuntimeSpec::FormatSource))
         .or_else(|| format_sink.map(RuntimeSpec::FormatSink))
+        .or_else(|| websocket_source.map(RuntimeSpec::WebSocketSource))
+        .or_else(|| websocket_sink.map(RuntimeSpec::WebSocketSink))
         .or_else(|| kafka_sink.map(RuntimeSpec::KafkaSink))
         .or_else(|| kafka_source.map(RuntimeSpec::KafkaSource))
         .or_else(|| avro_source.map(RuntimeSpec::AvroSource))

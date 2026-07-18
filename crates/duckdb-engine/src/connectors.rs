@@ -5938,6 +5938,115 @@ impl DuckdbEngine {
         ))
     }
 
+    /// src.websocket (#192): WebSocket client source. Connects to the URL,
+    /// optionally sends one subscribe frame, reads up to `max_messages` frames
+    /// (or until the `timeout_ms` idle/total deadline), parses each as JSON, and
+    /// materializes the rows. Drives tokio-tungstenite on a current-thread
+    /// runtime, the same shape as the SFTP reader.
+    pub(crate) fn run_websocket_source(
+        &self,
+        db: &Path,
+        spec: &WebSocketSourceSpec,
+    ) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("websocket: tokio rt: {}", e)))?;
+        let mut rows: Vec<JsonValue> = Vec::new();
+        rt.block_on(async {
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::tungstenite::Message;
+            let request = websocket_request(&spec.url, &spec.headers)?;
+            let (mut ws, _resp) = tokio_tungstenite::connect_async(request)
+                .await
+                .map_err(|e| format!("connect {}: {}", spec.url, e))?;
+            if let Some(sub) = &spec.subscribe {
+                ws.send(Message::Text(sub.clone().into()))
+                    .await
+                    .map_err(|e| format!("send subscribe: {}", e))?;
+            }
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(spec.timeout_ms);
+            while (rows.len() as u64) < spec.max_messages {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(remaining, ws.next()).await {
+                    Ok(Some(Ok(msg))) => match msg {
+                        Message::Text(t) => websocket_parse_into_rows(&t, &mut rows),
+                        Message::Binary(b) => {
+                            websocket_parse_into_rows(&String::from_utf8_lossy(&b), &mut rows)
+                        }
+                        Message::Close(_) => break,
+                        // Ping/Pong/Frame: tungstenite answers pings automatically.
+                        _ => {}
+                    },
+                    Ok(Some(Err(e))) => return Err(format!("recv: {}", e)),
+                    Ok(None) => break, // server closed the stream
+                    Err(_) => break,   // idle/total timeout reached
+                }
+            }
+            let _ = ws.close(None).await;
+            Ok::<(), String>(())
+        })
+        .map_err(EngineError::Query)?;
+        let count = rows.len();
+        materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows)?;
+        Ok(format!(
+            "websocket: received {} message(s) from {} -> {}",
+            count, spec.url, spec.node_id
+        ))
+    }
+
+    /// snk.websocket (#192): WebSocket client sink. Reads the upstream view and
+    /// sends each row as a text frame - the whole row as JSON, or one column's
+    /// value when `message_column` is set - then closes.
+    pub(crate) fn run_websocket_sink(
+        &self,
+        db: &Path,
+        spec: &WebSocketSinkSpec,
+    ) -> Result<String, EngineError> {
+        self.check_cancelled()?;
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT * FROM {}", plan::quote_ident(&spec.from_view)),
+        )?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| EngineError::Query(format!("websocket: tokio rt: {}", e)))?;
+        let sent = rt
+            .block_on(async {
+                use futures_util::SinkExt;
+                use tokio_tungstenite::tungstenite::Message;
+                let request = websocket_request(&spec.url, &spec.headers)?;
+                let (mut ws, _resp) = tokio_tungstenite::connect_async(request)
+                    .await
+                    .map_err(|e| format!("connect {}: {}", spec.url, e))?;
+                let mut n = 0usize;
+                for row in &rows {
+                    let payload = match &spec.message_column {
+                        Some(col) => match row.get(col) {
+                            Some(JsonValue::String(s)) => s.clone(),
+                            Some(v) => v.to_string(),
+                            None => continue,
+                        },
+                        None => serde_json::to_string(row).unwrap_or_default(),
+                    };
+                    ws.send(Message::Text(payload.into()))
+                        .await
+                        .map_err(|e| format!("send: {}", e))?;
+                    n += 1;
+                }
+                let _ = ws.close(None).await;
+                Ok::<usize, String>(n)
+            })
+            .map_err(EngineError::Query)?;
+        Ok(format!("websocket: sent {} message(s) to {}", sent, spec.url))
+    }
+
     /// src.email: connect to an IMAP server via rustls, select a
     /// mailbox, fetch up to max_messages most recent messages by
     /// reverse-UID order, parse with mail-parser, emit one row per
@@ -10869,6 +10978,121 @@ mod salesforce_bulk_tests {
         append_bulk_result_csv(&path, body.as_bytes()).unwrap();
         let written = std::fs::metadata(&path).unwrap().len();
         assert_eq!(written, body.len() as u64, "streamed body must be complete");
+    }
+}
+
+/// Build a WebSocket handshake request (#192) from a URL plus optional extra
+/// headers (e.g. Authorization). ws:// and wss:// are both handled; wss uses the
+/// bundled webpki roots via tokio-tungstenite's rustls feature.
+fn websocket_request(
+    url: &str,
+    headers: &[(String, String)],
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+    // Reject a non-ws scheme up front. into_client_request() happily parses
+    // http:// / https:// (a common mistake for ws:// / wss://) and only fails
+    // deep inside connect_async with an opaque message; catch it here instead.
+    let scheme = url.split("://").next().unwrap_or("").to_ascii_lowercase();
+    if scheme != "ws" && scheme != "wss" {
+        return Err(format!(
+            "websocket url must start with ws:// or wss:// (got '{}')",
+            url
+        ));
+    }
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| format!("bad websocket url {}: {}", url, e))?;
+    for (k, v) in headers {
+        if let (Ok(name), Ok(val)) =
+            (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v))
+        {
+            request.headers_mut().insert(name, val);
+        }
+    }
+    Ok(request)
+}
+
+/// Parse one WebSocket frame's text (#192) into rows: a JSON object becomes one
+/// row, a JSON array a row per element (bare elements wrapped as `{value: ...}`),
+/// and any non-JSON text a `{message: text}` row - the same shape src.webhook
+/// uses so downstream transforms see consistent columns.
+fn websocket_parse_into_rows(text: &str, rows: &mut Vec<JsonValue>) {
+    match serde_json::from_str::<JsonValue>(text) {
+        Ok(JsonValue::Object(o)) => rows.push(JsonValue::Object(o)),
+        Ok(JsonValue::Array(arr)) => {
+            for v in arr {
+                if v.is_object() {
+                    rows.push(v);
+                } else {
+                    let mut m = serde_json::Map::new();
+                    m.insert("value".into(), v);
+                    rows.push(JsonValue::Object(m));
+                }
+            }
+        }
+        _ => {
+            let mut m = serde_json::Map::new();
+            m.insert("message".into(), JsonValue::String(text.to_string()));
+            rows.push(JsonValue::Object(m));
+        }
+    }
+}
+
+#[cfg(test)]
+mod websocket_tests {
+    use super::{websocket_parse_into_rows, websocket_request};
+    use crate::JsonValue;
+
+    fn parse(text: &str) -> Vec<JsonValue> {
+        let mut rows = Vec::new();
+        websocket_parse_into_rows(text, &mut rows);
+        rows
+    }
+
+    #[test]
+    fn object_frame_becomes_one_row() {
+        let rows = parse(r#"{"symbol":"BTC","price":42}"#);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["symbol"], JsonValue::String("BTC".into()));
+        assert_eq!(rows[0]["price"], JsonValue::from(42));
+    }
+
+    #[test]
+    fn array_frame_fans_out_and_wraps_scalars() {
+        // Objects pass through as rows; bare scalars are wrapped as {value}.
+        let rows = parse(r#"[{"id":1}, "hello", 7]"#);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["id"], JsonValue::from(1));
+        assert_eq!(rows[1]["value"], JsonValue::String("hello".into()));
+        assert_eq!(rows[2]["value"], JsonValue::from(7));
+    }
+
+    #[test]
+    fn non_json_frame_falls_back_to_message_column() {
+        // Plain-text frames (e.g. "pong") must not be dropped; they land in a
+        // single {message} row so the pipeline still sees them.
+        let rows = parse("pong");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["message"], JsonValue::String("pong".into()));
+    }
+
+    #[test]
+    fn request_carries_extra_headers() {
+        let req = websocket_request(
+            "wss://stream.example.com/socket",
+            &[("Authorization".to_string(), "Bearer tok".to_string())],
+        )
+        .expect("request builds");
+        assert_eq!(
+            req.headers().get("Authorization").map(|v| v.to_str().unwrap()),
+            Some("Bearer tok")
+        );
+    }
+
+    #[test]
+    fn request_rejects_non_ws_scheme() {
+        assert!(websocket_request("https://example.com", &[]).is_err());
     }
 }
 
