@@ -52,8 +52,13 @@ Each pipeline run owns one dedicated `duckle-db-runner` sidecar process.
 - The sidecar owns the run catalog, relations, attachments, memory budget and
   spill directory.
 - A run may use multiple Quack connections to the same sidecar.
-- `quack_parallelism` configures the stateless-query semaphore per worker and
-  defaults to `8`. It is independent from DuckDB `threads`.
+- `quack_parallelism` configures the stateless-query semaphore for the one
+  sidecar owned by a pipeline run and defaults to `8`. It is the maximum number
+  of queries sent concurrently to that sidecar, not the number of sidecars in
+  `WorkerPoolControl` and not a limit on requested pipeline runs. Feature 003
+  makes it part of the workspace resource profile, resolved to an effective
+  value under host/pool and future license policy; it remains independent from
+  DuckDB `threads`.
 - Parquet remains an explicit fallback transport where benchmarks show it is
   preferable or a runtime cannot use Quack.
 - Cancelling a run terminates its process scope, including the sidecar. There

@@ -77,12 +77,25 @@ cancellazione remota della singola query.
     permit, esegue il poco costoso `try_clone()`, invia `quack_query`, quindi
     rilascia clone e permit. Se tutti i permit sono occupati, la richiesta
     attende.
-20. `quack_parallelism` è configurabile in `WorkerSpec` per worker e ha default
-    e limite massimo di Fase 1 `8` (range valido `1..=8`). `QuackPermitGate`
-    è FIFO e cancellabile: se saturo, attende senza creare clone; la
-    cancellazione rimuove l'attesa. Il worker non precrea clone né alias
-    `ATTACH`. Il valore non modifica `SET threads`, che governa il parallelismo
-    interno di ogni singola query.
+20. `quack_parallelism` è il massimo di query contemporanee per **pipeline
+    run**: ogni run possiede un solo sidecar e può inviare al suo sidecar fino
+    a N query in parallelo. Non è il numero di worker/sidecar nel pool globale
+    e non limita quante pipeline l'utente può avviare. Il profilo per-workspace
+    della Feature 003 lo espone nel frontend come `automatico | 1..=8`, risolto
+    in valore effettivo da host, pool e futura licenza. Default e limite
+    massimo di Fase 1 restano `8`; aumentarlo richiede benchmark e ADR.
+    `QuackPermitGate` è FIFO e cancellabile: se saturo, attende senza creare
+    clone; la cancellazione rimuove l'attesa. Il worker non precrea clone né
+    alias `ATTACH`. Il valore non modifica `SET threads`, che governa il
+    parallelismo interno di ogni singola query, né decide quali stage sono
+    compatibili o paralleli.
+21. Il profilo risorse configurabile della stessa Feature 003 comprende
+    memoria, thread CPU, quota di spill e `quack_parallelism`. Sono preferenze
+    per-workspace risolte in valori effettivi per il sidecar della run. Il
+    resolver considera budget host/pool e, in futuro, licenza; espone richiesto,
+    effettivo e ragione di ogni clamp. Non è un editor generico di `SET`, non
+    consente di scegliere la directory temporanea della run e non espone una
+    configurazione del numero massimo di pipeline/sidecar del pool.
 
 ## Motivazione
 
@@ -274,7 +287,7 @@ runtime a semaforo; readiness non precrea le 8 clone e non crea alias `ATTACH`.
 3. Il control plane crea e conserva la master, configura il secret scoped e
    completa una health query stateless autenticata.
 4. Solo il bundle completo passa a `ready`; una richiesta di run entra in una
-   coda FIFO cancellabile e con timeout.
+   coda FIFO cancellabile finché l'admission può assegnarle risorse locali.
 5. L'acquisizione cambia atomicamente `ready -> leased` e lega worker ID, run ID
    e lease ID. Anche due esecuzioni della stessa pipeline ricevono worker
    diversi.
@@ -285,23 +298,24 @@ runtime a semaforo; readiness non precrea le 8 clone e non crea alias `ATTACH`.
 La capacità conta `starting + ready + leased`, non soltanto i worker disponibili.
 Questo evita creazioni duplicate mentre un avvio lento è già in corso.
 
-### Policy elastica bounded
+### Policy elastica guidata dalle risorse
 
 L'idea prende spunto da una policy esistente basata su capacità minima, soglia
 di utilizzo, crescita a step e riduzione da picco osservato, ma il contratto di
 Duckle non ne replica l'implementazione.
 
 - `base_capacity`: capacità minima prewarm;
-- `max_capacity`: limite rigido di worker, ulteriormente limitato dal budget
-  globale RAM/CPU/disco;
+- `admission_capacity`: capacità calcolata dalle risorse host disponibili e
+  dalle riserve necessarie, non un limite configurabile al numero di pipeline;
 - `grow_threshold`: soglia iniziale proposta 70%, da validare con benchmark;
 - `growth_step`: inizialmente `max(1, ceil(base_capacity * 0.25))`;
 - `scale_in_window`: finestra mobile o tumbling che viene sempre rinnovata;
 - `scale_in_headroom`: target derivato dal picco recente più margine;
-- `queue_limit`, `acquire_timeout` e politica di fairness espliciti.
+- politica di fairness, cancellazione e osservabilità dell'attesa esplicite.
 
-La saturazione non crea worker on-demand oltre `max_capacity`: applica
-backpressure e mantiene la richiesta in coda. Lo scale-in termina solo worker
+La saturazione applica backpressure e mantiene la richiesta in coda finché le
+risorse locali consentono un nuovo sidecar; non rappresenta un tetto configurato
+al numero di pipeline che l'utente può avviare. Lo scale-in termina solo worker
 `ready`; per quelli `leased` registra capacità da non rimpiazzare quando il run
 finisce. Una finestra conclusa senza riduzione deve comunque ripartire con un
 nuovo picco, evitando che un picco storico blocchi per sempre lo scale-in.
@@ -1132,8 +1146,8 @@ baseline, non inventate prima di misurare l'hardware reale.
 | Token osservabile nel bootstrap | Critico | pipe anonima ereditata tramite handle allowlist; niente argv, environment, file, stdin generico o readiness metadata |
 | Processo sibling legge memoria/handle | Alto | DACL processo, divieto handle generici, Job Object e threat model esplicito; admin/debugger privilegiato resta rischio residuo |
 | Crash C++/extension | Medio | isolamento sidecar; main resta vivo e registra `runner_crashed` |
-| Due pipeline concorrenti competono per RAM/disco | Alto | `max_capacity`, budget globale riservato anche a `starting`, profilo per-worker e admission queue |
-| Crescita elastica senza limite causa OOM o thrashing | Critico | nessun bypass on-demand, hard cap RAM/CPU/disco, hysteresis, cooldown e backpressure |
+| Due pipeline concorrenti competono per RAM/disco | Alto | capacità di admission calcolata, budget globale riservato anche a `starting`, profilo per-worker e admission queue |
+| Crescita elastica causa OOM o thrashing | Critico | budget host RAM/CPU/disco, hysteresis, cooldown e backpressure; nessun limite utente sul numero di pipeline |
 | Picco storico impedisce lo scale-in | Medio | finestre tumbling/mobili rinnovate anche quando non avviene una riduzione |
 | Due scheduler assegnano lo stesso worker | Critico | transizione atomica ready→leased; single writer locale, CAS/Lease/CRD in deployment distribuito |
 | Worker dichiarato pronto troppo presto | Alto | readiness infrastrutturale più handshake Quack applicativo prima della pubblicazione |
