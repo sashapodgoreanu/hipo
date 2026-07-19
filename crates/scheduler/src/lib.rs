@@ -6,6 +6,8 @@
 //! are due, and fires each as a non-blocking spawn that calls into the
 //! shared `DuckdbEngine`.
 
+mod runner_controller;
+
 use chrono::{DateTime, Utc};
 use cron::Schedule as CronSchedule;
 use duckle_duckdb_engine::{append_run_record, DuckdbEngine, RunRecord, RunResult};
@@ -102,12 +104,21 @@ struct SchedulerInner {
 
 impl Scheduler {
     pub fn new(engine: DuckdbEngine) -> Self {
-        Self::new_inner(engine, None)
+        let workspace_base = engine.clone();
+        Self::new_inner(
+            engine,
+            Some(Arc::new(move |workspace| {
+                Ok(runner_controller::configure_engine_for_workspace(
+                    workspace_base.clone(),
+                    workspace,
+                ))
+            })),
+        )
     }
 
     /// Build a scheduler whose run engine is resolved from the active workspace.
-    /// The desktop uses this to attach the same workspace-owned
-    /// `WorkerPoolControl` and cutover selection used by interactive runs.
+    /// Callers can override the default official-runner resolver while preserving
+    /// the rule that every scheduled run receives one workspace-owned engine.
     pub fn with_workspace_engine_factory<F>(engine: DuckdbEngine, factory: F) -> Self
     where
         F: Fn(&Path) -> Result<DuckdbEngine, String> + Send + Sync + 'static,
