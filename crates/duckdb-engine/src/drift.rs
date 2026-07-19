@@ -1,14 +1,200 @@
-//! Schema-drift detection: for each source node that declares a schema, read
-//! the source's LIVE schema from the real data and compare it to the declared
-//! schema (what the pipeline author / an LLM wrote). Reports the differences so
-//! drift is caught before a run instead of failing mid-pipeline. Shared by the
-//! MCP `schema_drift` tool and the `duckle-runner drift` CLI so both report the
-//! same thing. Needs a DuckDB binary: it reads each source through the engine's
-//! `inspect` path (the same one the desktop "Autodetect" button uses).
+//! Schema-drift detection and runner-routed data tools.
+//!
+//! Inspect, schema drift, and branch/data diff share one routing boundary. The
+//! compatibility route retains the current CLI implementation until cutover;
+//! the official route acquires one opaque worker lease and performs setup and
+//! queries through the same RunDatabase session.
 
-use crate::{DuckdbEngine, EngineError, PipelineDoc};
+use crate::{
+    plan, DuckdbEngine, EngineError, ExecutionRoute, OfficialRunnerController, PipelineDoc,
+};
+use duckle_db_runner::model::{RunId, RunnerFailureReason, WorkerLease};
 use duckle_metadata::Column;
-use serde_json::{json, Value};
+use duckle_plugin_sdk::Inspection;
+use serde_json::{json, Map, Value};
+use std::sync::Arc;
+
+/// Explicit inventory of data tools that must not spawn or address DuckDB
+/// directly after cutover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunDatabaseTool {
+    Inspect,
+    SchemaDrift,
+    BranchDiff,
+}
+
+pub const RUN_DATABASE_TOOL_INVENTORY: [RunDatabaseTool; 3] = [
+    RunDatabaseTool::Inspect,
+    RunDatabaseTool::SchemaDrift,
+    RunDatabaseTool::BranchDiff,
+];
+
+/// Runner-aware data-tool operations. These names are intentionally distinct
+/// from the compatibility methods while both routes coexist. T071 can remove
+/// the legacy methods after CutoverEvidence is approved.
+pub trait RunDatabaseDataTools {
+    fn inspect_via_run_database(
+        &self,
+        format: &str,
+        options: Value,
+    ) -> Result<Inspection, EngineError>;
+
+    fn branch_diff_rows_via_run_database(
+        &self,
+        setup_statements: Vec<String>,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<Value>, EngineError>;
+}
+
+struct DataToolLease {
+    controller: Arc<dyn OfficialRunnerController>,
+    lease: WorkerLease,
+}
+
+impl Drop for DataToolLease {
+    fn drop(&mut self) {
+        self.controller
+            .release(self.lease.clone(), crate::runner_now_millis());
+    }
+}
+
+impl DataToolLease {
+    fn execute_setup(
+        &self,
+        engine: &DuckdbEngine,
+        statements: Vec<String>,
+    ) -> Result<(), EngineError> {
+        if statements.is_empty() {
+            return Ok(());
+        }
+        self.controller
+            .execute_batch(
+                &self.lease,
+                statements,
+                engine.official_cancellation.clone(),
+            )
+            .map(|_| ())
+            .map_err(data_tool_failure)
+    }
+
+    fn query_rows(
+        &self,
+        engine: &DuckdbEngine,
+        sql: &str,
+        limit: u32,
+    ) -> Result<Vec<Value>, EngineError> {
+        let result = self
+            .controller
+            .preview_relation(
+                &self.lease,
+                sql,
+                limit.max(1),
+                engine.official_cancellation.clone(),
+            )
+            .map_err(data_tool_failure)?;
+        Ok(result
+            .rows
+            .into_iter()
+            .map(|row| Value::Object(row.into_iter().collect::<Map<String, Value>>()))
+            .collect())
+    }
+}
+
+impl DuckdbEngine {
+    fn acquire_data_tool_lease(&self) -> Result<DataToolLease, EngineError> {
+        let controller = self
+            .official_runner
+            .as_ref()
+            .ok_or_else(|| EngineError::Other("runner_unavailable".into()))?;
+        let lease = controller
+            .acquire(
+                RunId::new(),
+                1,
+                self.official_cancellation.clone(),
+                crate::runner_now_millis(),
+            )
+            .map_err(data_tool_failure)?;
+        Ok(DataToolLease {
+            controller: controller.clone(),
+            lease,
+        })
+    }
+}
+
+impl RunDatabaseDataTools for DuckdbEngine {
+    fn inspect_via_run_database(
+        &self,
+        format: &str,
+        mut options: Value,
+    ) -> Result<Inspection, EngineError> {
+        if self.execution_route != ExecutionRoute::OfficialRunner {
+            return self.inspect(format, options);
+        }
+
+        crate::context::apply_env_to_value(&mut options);
+        let select = match plan::source_select_for_format(format, &options) {
+            Some(select) => select,
+            None if plan::is_attach_relational_format(format) => {
+                return Err(EngineError::Unsupported(format!(
+                    "Format '{}' is not supported",
+                    format
+                )))
+            }
+            None => {
+                return Err(EngineError::Unsupported(
+                    "runner_data_tool_not_sql_addressable".into(),
+                ))
+            }
+        };
+
+        let lease = self.acquire_data_tool_lease()?;
+        let prelude = self.source_prelude(format, &options);
+        if !prelude.trim().is_empty() {
+            lease.execute_setup(self, vec![prelude])?;
+        }
+
+        let describe = lease.query_rows(self, &format!("DESCRIBE {}", select), 4_096)?;
+        let schema: Vec<Column> = describe
+            .iter()
+            .filter_map(crate::parse_describe_row)
+            .collect();
+        let sample_rows = lease.query_rows(
+            self,
+            &format!("{} LIMIT {}", select, crate::PREVIEW_LIMIT),
+            crate::PREVIEW_LIMIT as u32,
+        )?;
+
+        Ok(Inspection {
+            schema,
+            sample_rows,
+        })
+    }
+
+    fn branch_diff_rows_via_run_database(
+        &self,
+        setup_statements: Vec<String>,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<Value>, EngineError> {
+        if self.execution_route != ExecutionRoute::OfficialRunner {
+            let sql = if setup_statements.is_empty() {
+                query.to_string()
+            } else {
+                format!("{}; {}", setup_statements.join("; "), query)
+            };
+            return self.run_rows(None, &sql);
+        }
+
+        let lease = self.acquire_data_tool_lease()?;
+        lease.execute_setup(self, setup_statements)?;
+        lease.query_rows(self, query, limit)
+    }
+}
+
+fn data_tool_failure(reason: RunnerFailureReason) -> EngineError {
+    EngineError::Other(crate::runner_failure_code(reason).to_string())
+}
 
 /// The format string the engine's inspect path expects for a source component.
 /// Mirrors `plan::source_select_for_format`: the component id minus the `src.`
@@ -93,7 +279,7 @@ pub fn schema_drift(engine: &DuckdbEngine, doc: &PipelineDoc) -> Value {
         };
         let fmt = source_format(cid);
         let props = node.data.properties.clone().unwrap_or(Value::Null);
-        match engine.inspect(&fmt, props) {
+        match engine.inspect_via_run_database(&fmt, props) {
             Ok(insp) => {
                 checked += 1;
                 let (missing, added, type_changes) = compare_columns(declared, &insp.schema);
@@ -159,6 +345,18 @@ mod tests {
     }
 
     #[test]
+    fn inventory_contains_every_runner_routed_data_tool() {
+        assert_eq!(
+            RUN_DATABASE_TOOL_INVENTORY,
+            [
+                RunDatabaseTool::Inspect,
+                RunDatabaseTool::SchemaDrift,
+                RunDatabaseTool::BranchDiff,
+            ]
+        );
+    }
+
+    #[test]
     fn compare_detects_missing_added_and_type_change() {
         let declared = vec![
             col("id", DataType::Int64),
@@ -166,10 +364,9 @@ mod tests {
             col("gone", DataType::Date),
         ];
         let live = vec![
-            col("id", DataType::Int32),  // type changed
+            col("id", DataType::Int32),
             col("email", DataType::String),
-            col("extra", DataType::Bool), // added in source
-            // "gone" missing from source
+            col("extra", DataType::Bool),
         ];
         let (missing, added, changes) = compare_columns(&declared, &live);
         assert_eq!(missing, vec!["gone".to_string()]);
