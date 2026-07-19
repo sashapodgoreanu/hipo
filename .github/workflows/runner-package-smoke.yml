@@ -7,6 +7,7 @@ on:
       - 'crates/duckle-db-runner/**'
       - 'crates/duckle-runner/**'
       - 'apps/desktop/build.rs'
+      - 'apps/desktop/build_base.rs'
       - 'apps/desktop/src/engine_manager.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -14,10 +15,12 @@ on:
       - '.github/workflows/runner-package-smoke.yml'
   push:
     branches: [main]
+    tags: ['v*']
     paths:
       - 'crates/duckle-db-runner/**'
       - 'crates/duckle-runner/**'
       - 'apps/desktop/build.rs'
+      - 'apps/desktop/build_base.rs'
       - 'apps/desktop/src/engine_manager.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
