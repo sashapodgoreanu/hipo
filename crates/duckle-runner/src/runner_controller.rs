@@ -6,26 +6,34 @@
 //! still on the compatibility route.
 
 use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
+#[cfg(windows)]
 use duckle_db_runner::model::{
     RunCancellation, RunId, RunnerFailureReason, WorkerLease,
 };
+#[cfg(windows)]
 use duckle_db_runner::resources::{HostResourceLimits, RunnerResourcesProfile};
+#[cfg(windows)]
 use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
+#[cfg(windows)]
 use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_duckdb_engine::{DuckdbEngine, OfficialRunnerController};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-/// Build the engine shared by one headless workspace process.
+static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn OfficialRunnerController>>>> =
+    OnceLock::new();
+
+/// Build a headless engine using the single controller owned by this workspace
+/// process. Repeated manual, scheduled, and browser runs resolve the same
+/// controller rather than creating an entry-point-specific allocation path.
 ///
-/// The controller is attached whenever the packaged sidecar can be found. The
-/// rejected production gate deliberately retains CLI compatibility until T062
-/// evaluates approved CutoverEvidence. Because the controller is lazy, merely
-/// constructing this engine never starts a sidecar process.
-pub(crate) fn engine_for_workspace(duckdb: PathBuf, _workspace: &Path) -> DuckdbEngine {
+/// The rejected production gate deliberately retains CLI compatibility until
+/// T062 evaluates approved CutoverEvidence. The controller and its worker pool
+/// are lazy, so merely constructing this engine never starts a sidecar process.
+pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
     let base = DuckdbEngine::new(duckdb);
-    let with_controller = resolve_sidecar_path()
-        .and_then(lazy_controller)
+    let with_controller = controller_for_workspace(workspace)
         .map(|controller| base.with_official_runner_controller(controller))
         .unwrap_or(base);
     with_controller.with_runner_selection(
@@ -33,6 +41,34 @@ pub(crate) fn engine_for_workspace(duckdb: PathBuf, _workspace: &Path) -> Duckdb
         &CutoverGate::Rejected {
             missing_or_failed: vec!["cutover_evidence".to_string()],
         },
+    )
+}
+
+fn controller_for_workspace(workspace: &Path) -> Option<Arc<dyn OfficialRunnerController>> {
+    let sidecar_path = resolve_sidecar_path()?;
+    let workspace_key = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    let controllers = CONTROLLERS.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(existing) = controllers
+        .lock()
+        .expect("headless controller registry poisoned")
+        .get(&workspace_key)
+        .cloned()
+    {
+        return Some(existing);
+    }
+
+    let controller = lazy_controller(sidecar_path)?;
+    let mut registry = controllers
+        .lock()
+        .expect("headless controller registry poisoned");
+    Some(
+        registry
+            .entry(workspace_key)
+            .or_insert_with(|| controller.clone())
+            .clone(),
     )
 }
 
@@ -70,7 +106,10 @@ fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
     } else {
         std::env::current_dir().ok()?.join(path)
     };
-    absolute.canonicalize().ok().filter(|candidate| candidate.is_file())
+    absolute
+        .canonicalize()
+        .ok()
+        .filter(|candidate| candidate.is_file())
 }
 
 #[cfg(windows)]
@@ -164,6 +203,7 @@ impl OfficialRunnerController for LazyHeadlessController {
     }
 }
 
+#[cfg(windows)]
 fn pool_failure(error: PoolError) -> RunnerFailureReason {
     match error {
         PoolError::InvalidProfile => RunnerFailureReason::InvalidProfile,
@@ -175,6 +215,7 @@ fn pool_failure(error: PoolError) -> RunnerFailureReason {
     }
 }
 
+#[cfg(windows)]
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
