@@ -25,6 +25,7 @@ mod build;
 use duckle_duckdb_engine::context;
 mod drift;
 mod manifest;
+mod runner_controller;
 mod selfextract;
 mod serve;
 
@@ -350,7 +351,7 @@ fn run() -> Result<bool, String> {
     });
 
     eprintln!("duckle-runner: {} (workspace {})", pipeline.display(), workspace.display());
-    let engine = DuckdbEngine::new(duckdb);
+    let engine = runner_controller::engine_for_workspace(duckdb, &workspace).for_new_run();
     let result = engine.execute_pipeline_named(&doc, &name);
 
     println!("status   : {}", result.status);
@@ -633,7 +634,7 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
     context::apply_workspace_context(&mut doc, &ws_root);
 
     eprintln!("duckle-runner: {} (artifact, workspace {})", pipeline.display(), ws_root.display());
-    let engine = DuckdbEngine::new(duckdb);
+    let engine = runner_controller::engine_for_workspace(duckdb, &ws_root).for_new_run();
     let result = engine.execute_pipeline_named(&doc, &name);
 
     println!("status   : {}", result.status);
