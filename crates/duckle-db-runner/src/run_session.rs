@@ -7,8 +7,8 @@
 //! latest-only apply after the drain.
 
 use crate::model::{RunCancellation, RunnerFailureReason};
-use crate::run_database::{PreviewResult, RunDatabase, SqlBatchResult, TransferResult};
 use crate::resources::{AutomaticOrU16, RunnerResourcesProfile};
+use crate::run_database::{PreviewResult, RunDatabase, SqlBatchResult, TransferResult};
 use std::collections::HashSet;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -17,6 +17,14 @@ use thiserror::Error;
 pub trait ProfileApplier: Send + Sync + 'static {
     /// Must atomically apply every effective field before returning success.
     fn apply_profile(&self, profile: &RunnerResourcesProfile) -> Result<(), RunnerFailureReason>;
+
+    /// Confirms that the whole profile is effective in the managed worker. The
+    /// default preserves compatibility for appliers whose application protocol
+    /// already returns an authenticated attestation; explicit providers should
+    /// override it when verification is a separate operation.
+    fn verify_profile(&self, _profile: &RunnerResourcesProfile) -> Result<(), RunnerFailureReason> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +91,9 @@ impl RunSession {
         initial_profile
             .validate()
             .map_err(|_| RunSessionError::InvalidProfile)?;
+        applier
+            .verify_profile(&initial_profile)
+            .map_err(|_| RunSessionError::ConfigurationApplyFailed)?;
         Ok(Self {
             applier,
             state: Mutex::new(State {
@@ -288,7 +299,10 @@ impl RunSession {
     fn apply_latest(&self) {
         loop {
             let profile = { self.lock().requested.clone() };
-            let result = self.applier.apply_profile(&profile);
+            let result = self
+                .applier
+                .apply_profile(&profile)
+                .and_then(|_| self.applier.verify_profile(&profile));
             let mut state = self.lock();
             match result {
                 Ok(()) => {
@@ -336,7 +350,9 @@ mod tests {
     #[derive(Default)]
     struct RecordingApplier {
         applied: Mutex<Vec<u64>>,
+        verified: Mutex<Vec<u64>>,
         fail_version: Mutex<Option<u64>>,
+        fail_verification_version: Mutex<Option<u64>>,
     }
 
     impl ProfileApplier for RecordingApplier {
@@ -349,6 +365,18 @@ mod tests {
             }
             self.applied.lock().unwrap().push(profile.version);
             Ok(())
+        }
+
+        fn verify_profile(
+            &self,
+            profile: &RunnerResourcesProfile,
+        ) -> Result<(), RunnerFailureReason> {
+            self.verified.lock().unwrap().push(profile.version);
+            if *self.fail_verification_version.lock().unwrap() == Some(profile.version) {
+                Err(RunnerFailureReason::ConfigurationApplyFailed)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -377,6 +405,7 @@ mod tests {
         assert_eq!(state.effective_version, 3);
         assert_eq!(state.maximum_parallel_queries, 8);
         assert_eq!(*applier.applied.lock().unwrap(), vec![3]);
+        assert_eq!(*applier.verified.lock().unwrap(), vec![1, 3]);
     }
 
     #[test]
@@ -393,6 +422,38 @@ mod tests {
         *applier.fail_version.lock().unwrap() = None;
         session.save_profile(profile(3, 2)).unwrap();
         assert_eq!(session.profile_state().effective_version, 3);
+    }
+
+    #[test]
+    fn verification_failure_preserves_prior_effective_profile() {
+        let applier = Arc::new(RecordingApplier::default());
+        let session = RunSession::new(applier.clone(), profile(1, 1)).unwrap();
+        *applier.fail_verification_version.lock().unwrap() = Some(2);
+
+        session.save_profile(profile(2, 4)).unwrap();
+
+        let state = session.profile_state();
+        assert_eq!(state.requested_version, 2);
+        assert_eq!(state.effective_version, 1);
+        assert_eq!(state.maximum_parallel_queries, 1);
+        assert_eq!(state.apply_failure, Some(RunnerFailureReason::ConfigurationApplyFailed));
+        assert_eq!(
+            session.begin_query(&RunCancellation::default()),
+            Err(RunSessionError::ConfigurationApplyFailed)
+        );
+        assert_eq!(*applier.applied.lock().unwrap(), vec![2]);
+        assert_eq!(*applier.verified.lock().unwrap(), vec![1, 2]);
+    }
+
+    #[test]
+    fn initial_profile_must_be_verified_before_session_creation() {
+        let applier = Arc::new(RecordingApplier::default());
+        *applier.fail_verification_version.lock().unwrap() = Some(1);
+
+        assert!(matches!(
+            RunSession::new(applier, profile(1, 1)),
+            Err(RunSessionError::ConfigurationApplyFailed)
+        ));
     }
 
     #[test]
