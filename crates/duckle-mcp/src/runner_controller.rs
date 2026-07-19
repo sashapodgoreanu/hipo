@@ -215,7 +215,7 @@ mod tests {
     use duckle_duckdb_engine::ExecutionRoute;
 
     #[test]
-    fn MCP_production_route_stays_compatible_before_cutover() {
+    fn mcp_production_route_stays_compatible_before_cutover() {
         let engine = engine_for_workspace(PathBuf::from("duckdb"), Path::new("."));
         assert_eq!(engine.execution_route(), ExecutionRoute::CliCompatibility);
     }
