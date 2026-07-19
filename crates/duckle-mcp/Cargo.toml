@@ -16,6 +16,7 @@ name = "duckle-mcp"
 path = "src/main.rs"
 
 [dependencies]
+duckle-db-runner = { workspace = true }
 duckle-duckdb-engine = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
