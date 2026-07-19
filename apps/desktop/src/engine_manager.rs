@@ -2,7 +2,7 @@
 //!
 //! The existing installation implementation remains isolated in the base
 //! module. This wrapper owns the DuckDB/Quack pair metadata, performs offline
-//! checksum verification, and provides the real per-workspace runner controller.
+//! checksum verification, and provides the real lazy per-workspace controller.
 
 #[path = "engine_manager_base.rs"]
 mod base;
@@ -11,16 +11,22 @@ pub use base::*;
 use duckle_db_runner::cutover::{
     configured_entry_point_class, packaged_cutover_gate, CutoverGate, EntryPointClass,
 };
+#[cfg(windows)]
+use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 use duckle_db_runner::resources::{
     resolve_workspace_runner_resources, HostResourceLimits, RunnerResourcesProfile,
     WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
 };
-use duckle_db_runner::worker_pool::WorkerPoolControl;
+#[cfg(windows)]
+use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
+#[cfg(windows)]
+use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
+use duckle_duckdb_engine::OfficialRunnerController;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const QUACK_VERSION: &str = DUCKDB_VERSION;
 pub const QUACK_LICENSE: &str = "MIT";
@@ -85,14 +91,13 @@ pub fn verify_offline_quack_extension(
 
 #[derive(Default)]
 struct DesktopControllerState {
-    pools: HashMap<PathBuf, Arc<WorkerPoolControl>>,
-    profiles: HashMap<PathBuf, RunnerResourcesProfile>,
+    #[cfg(windows)]
+    controllers: HashMap<PathBuf, Arc<DesktopWorkspaceController>>,
 }
 
-/// Per-workspace controller used by the desktop shell. A staged sidecar is
-/// converted into one real WorkerPoolControl for each workspace. The profile is
-/// not copied into PipelineDoc and a later saved generation updates the same
-/// pool immediately.
+/// Process-wide desktop registry. It owns one lazy controller per workspace,
+/// while each controller owns at most one WorkerPoolControl. Registering the
+/// staged sidecar before cutover does not start a process or create warm workers.
 pub struct DesktopRunnerController {
     state: Mutex<DesktopControllerState>,
     sidecar_path: Option<PathBuf>,
@@ -117,59 +122,41 @@ impl DesktopRunnerController {
         &self,
         workspace: &Path,
         profile: &RunnerResourcesProfile,
-    ) -> Option<Arc<WorkerPoolControl>> {
+    ) -> Option<Arc<dyn OfficialRunnerController>> {
         profile.validate().ok()?;
-        let key = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.to_path_buf());
-
-        {
-            let mut state = self.state.lock().ok()?;
-            if let Some(pool) = state.pools.get(&key).cloned() {
-                if apply_profile_locked(&mut state, &key, profile, &pool).is_err() {
-                    return None;
-                }
-                return Some(pool);
-            }
-        }
-
         let sidecar_path = self.sidecar_path.as_ref()?.clone();
 
         #[cfg(windows)]
         {
-            use duckle_db_runner::local_process_provider::LocalProcessProvider;
-            use duckle_db_runner::local_quack_sidecar::WindowsLocalSidecarLauncher;
-
-            let launcher = WindowsLocalSidecarLauncher::new(sidecar_path).ok()?;
-            let provider = Arc::new(LocalProcessProvider::new(
-                Arc::new(launcher),
-                HostResourceLimits::default(),
-            ));
-            let candidate = Arc::new(
-                WorkerPoolControl::new(provider, profile.clone(), now_millis()).ok()?,
-            );
+            let key = workspace
+                .canonicalize()
+                .unwrap_or_else(|_| workspace.to_path_buf());
             let mut state = self.state.lock().ok()?;
-            if let Some(existing) = state.pools.get(&key).cloned() {
-                if apply_profile_locked(&mut state, &key, profile, &existing).is_err() {
-                    return None;
-                }
-                return Some(existing);
-            }
-            state.profiles.insert(key.clone(), profile.clone());
-            state.pools.insert(key, candidate.clone());
-            Some(candidate)
+            let controller = state
+                .controllers
+                .entry(key)
+                .or_insert_with(|| {
+                    Arc::new(DesktopWorkspaceController::new(
+                        sidecar_path,
+                        profile.clone(),
+                    ))
+                })
+                .clone();
+            drop(state);
+            controller.apply_requested_profile(profile.clone()).ok()?;
+            Some(controller)
         }
 
         #[cfg(not(windows))]
         {
-            let _ = sidecar_path;
+            let _ = (workspace, profile, sidecar_path);
             None
         }
     }
 
     /// Apply a saved generation without waiting for another pipeline run. If the
-    /// workspace has not created a pool yet, persistence remains authoritative
-    /// and the first pool will start with that profile.
+    /// lazy controller has not been registered yet, persistence remains the
+    /// authority and the first registration will read that profile.
     pub fn apply_profile_if_active(
         &self,
         workspace: &Path,
@@ -178,17 +165,30 @@ impl DesktopRunnerController {
         profile
             .validate()
             .map_err(|_| "invalid_runner_resources".to_string())?;
-        let key = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.to_path_buf());
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "runner_resources_apply_failed".to_string())?;
-        let Some(pool) = state.pools.get(&key).cloned() else {
-            return Ok(());
-        };
-        apply_profile_locked(&mut state, &key, profile, &pool)
+
+        #[cfg(windows)]
+        {
+            let key = workspace
+                .canonicalize()
+                .unwrap_or_else(|_| workspace.to_path_buf());
+            let controller = self
+                .state
+                .lock()
+                .map_err(|_| "runner_resources_apply_failed".to_string())?
+                .controllers
+                .get(&key)
+                .cloned();
+            if let Some(controller) = controller {
+                controller
+                    .apply_requested_profile(profile.clone())
+                    .map_err(|_| "runner_resources_apply_failed".to_string())?;
+            }
+        }
+
+        #[cfg(not(windows))]
+        let _ = (workspace, profile);
+
+        Ok(())
     }
 
     pub fn entry_point_class(&self) -> EntryPointClass {
@@ -200,24 +200,127 @@ impl DesktopRunnerController {
     }
 }
 
-fn apply_profile_locked(
-    state: &mut DesktopControllerState,
-    key: &Path,
-    profile: &RunnerResourcesProfile,
-    pool: &Arc<WorkerPoolControl>,
-) -> Result<(), String> {
-    if let Some(current) = state.profiles.get(key) {
-        if current == profile {
-            return Ok(());
-        }
-        if profile.version <= current.version {
-            return Err("invalid_runner_resources".to_string());
+#[cfg(windows)]
+struct DesktopWorkspaceController {
+    sidecar_path: PathBuf,
+    requested_profile: Mutex<RunnerResourcesProfile>,
+    pool: OnceLock<Result<Arc<WorkerPoolControl>, RunnerFailureReason>>,
+}
+
+#[cfg(windows)]
+impl DesktopWorkspaceController {
+    fn new(sidecar_path: PathBuf, requested_profile: RunnerResourcesProfile) -> Self {
+        Self {
+            sidecar_path,
+            requested_profile: Mutex::new(requested_profile),
+            pool: OnceLock::new(),
         }
     }
-    pool.set_desired_profile(profile.clone(), now_millis())
-        .map_err(|_| "runner_resources_apply_failed".to_string())?;
-    state.profiles.insert(key.to_path_buf(), profile.clone());
-    Ok(())
+
+    fn pool(&self) -> Result<&Arc<WorkerPoolControl>, RunnerFailureReason> {
+        match self.pool.get_or_init(|| self.create_pool()) {
+            Ok(pool) => Ok(pool),
+            Err(reason) => Err(*reason),
+        }
+    }
+
+    fn create_pool(&self) -> Result<Arc<WorkerPoolControl>, RunnerFailureReason> {
+        use duckle_db_runner::local_process_provider::LocalProcessProvider;
+        use duckle_db_runner::local_quack_sidecar::WindowsLocalSidecarLauncher;
+
+        let profile = self
+            .requested_profile
+            .lock()
+            .map_err(|_| RunnerFailureReason::InvalidProfile)?
+            .clone();
+        let launcher = WindowsLocalSidecarLauncher::new(self.sidecar_path.clone())?;
+        let provider = Arc::new(LocalProcessProvider::new(
+            Arc::new(launcher),
+            HostResourceLimits::default(),
+        ));
+        WorkerPoolControl::new(provider, profile, now_millis())
+            .map(Arc::new)
+            .map_err(pool_failure)
+    }
+
+    fn apply_requested_profile(
+        &self,
+        profile: RunnerResourcesProfile,
+    ) -> Result<(), RunnerFailureReason> {
+        profile
+            .validate()
+            .map_err(|_| RunnerFailureReason::InvalidProfile)?;
+        let mut requested = self
+            .requested_profile
+            .lock()
+            .map_err(|_| RunnerFailureReason::InvalidProfile)?;
+        if *requested == profile {
+            return Ok(());
+        }
+        if profile.version <= requested.version {
+            return Err(RunnerFailureReason::InvalidProfile);
+        }
+        if let Some(Ok(pool)) = self.pool.get() {
+            pool.set_desired_profile(profile.clone(), now_millis())
+                .map_err(pool_failure)?;
+        }
+        *requested = profile;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl OfficialRunnerController for DesktopWorkspaceController {
+    fn acquire(
+        &self,
+        run_id: RunId,
+        attempt: u32,
+        cancellation: RunCancellation,
+        now_millis: u64,
+    ) -> Result<WorkerLease, RunnerFailureReason> {
+        self.pool()?
+            .acquire_for_current_profile(run_id, attempt, cancellation, now_millis)
+            .map_err(pool_failure)
+    }
+
+    fn release(&self, lease: WorkerLease, now_millis: u64) {
+        if let Some(Ok(pool)) = self.pool.get() {
+            let _ = pool.release(lease, now_millis);
+        }
+    }
+
+    fn execute_batch(
+        &self,
+        lease: &WorkerLease,
+        statements: Vec<String>,
+        cancellation: RunCancellation,
+    ) -> Result<SqlBatchResult, RunnerFailureReason> {
+        self.pool()?
+            .execute_database_batch(lease, statements, cancellation)
+    }
+
+    fn preview_relation(
+        &self,
+        lease: &WorkerLease,
+        sql: &str,
+        limit: u32,
+        cancellation: RunCancellation,
+    ) -> Result<PreviewResult, RunnerFailureReason> {
+        self.pool()?
+            .preview_database_relation(lease, sql, limit, cancellation)
+    }
+}
+
+#[cfg(windows)]
+fn pool_failure(error: PoolError) -> RunnerFailureReason {
+    match error {
+        PoolError::InvalidProfile => RunnerFailureReason::InvalidProfile,
+        PoolError::Cancelled => RunnerFailureReason::Cancelled,
+        PoolError::Provision(reason) => reason,
+        PoolError::DuplicateRun | PoolError::UnknownLease | PoolError::ShuttingDown => {
+            RunnerFailureReason::RunnerUnavailable
+        }
+    }
 }
 
 fn now_millis() -> u64 {
@@ -280,5 +383,21 @@ mod runner_pin_tests {
             crate::app_settings::load_runner_resources(workspace.path()),
             status.requested
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn desktop_controller_registration_does_not_create_the_pool() {
+        let controller = DesktopRunnerController::new(Some(PathBuf::from("missing-sidecar.exe")));
+        let workspace = tempfile::tempdir().unwrap();
+        let profile = RunnerResourcesProfile::default();
+        let official = controller
+            .controller_for_workspace(workspace.path(), &profile)
+            .expect("lazy controller registration does not inspect or launch the sidecar");
+        drop(official);
+
+        let state = controller.state.lock().unwrap();
+        let registered = state.controllers.values().next().unwrap();
+        assert!(registered.pool.get().is_none());
     }
 }
