@@ -18,6 +18,8 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
 mod catalog;
+mod run_tool;
+mod runner_controller;
 mod tools;
 
 /// MCP protocol revision this server implements. 2024-11-05 is broadly
@@ -79,6 +81,7 @@ fn dispatch(method: &str, params: Value) -> Result<Value, (i64, String)> {
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools::list_tools() })),
+        "tools/call" if run_tool::handles(&params) => run_tool::call(params),
         "tools/call" => tools::call_tool(params),
         "resources/list" => Ok(json!({ "resources": tools::list_resources() })),
         "resources/read" => tools::read_resource(params),
