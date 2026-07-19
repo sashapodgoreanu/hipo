@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+build = "build.rs"
 
 # Lean, no-GUI headless runner: executes a Duckle pipeline file through the
 # DuckDB engine. Bundled into "Build Pipeline" artifacts so a pipeline runs
@@ -12,6 +13,21 @@ repository.workspace = true
 [[bin]]
 name = "duckle-runner"
 path = "src/main.rs"
+
+# Trusted local database child used only by WorkerPoolControl. The Quack
+# extension is embedded by build.rs after version/checksum verification, so the
+# executable never performs INSTALL or downloads an extension at runtime.
+[[bin]]
+name = "duckle-db-sidecar"
+path = "src/db_sidecar.rs"
+
+[package.metadata.duckle-official-runner]
+sidecar-binary = "duckle-db-sidecar"
+extension-file = "quack.duckdb_extension"
+duckdb-version = "1.5.4"
+quack-version = "1.5.4"
+license = "MIT"
+provenance = "duckdb/duckdb-quack"
 
 [dependencies]
 duckle-duckdb-engine = { workspace = true }
@@ -32,6 +48,9 @@ ed25519-dalek = "2"
 # Self-extracting artifact payload (single-file build output). deflate-only
 # (drops aes/zstd/bzip2/lzma/xz); pulls flate2 rust_backend already in the lock.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[build-dependencies]
+sha2 = "0.10"
 
 # Teradata (ODBC via odbc-api) is enabled on gnu Linux and Windows, where a
 # dynamic libodbc driver manager is available to link and load. It is excluded
