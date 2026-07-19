@@ -148,6 +148,25 @@ impl SanitizedMetrics {
             transport_kind: None,
         }
     }
+
+    /// Records one provider-supplied resource sample. Current values follow the
+    /// latest sample while peaks can only increase. The structure contains no
+    /// path, process, endpoint, SQL, or credential field, so it remains safe for
+    /// events, history, headless output, and MCP responses.
+    pub fn observe_resource_sample(&mut self, memory_bytes: u64, spill_bytes: u64) {
+        self.memory_current_bytes = Some(memory_bytes);
+        self.spill_current_bytes = Some(spill_bytes);
+        self.memory_peak_bytes = Some(
+            self.memory_peak_bytes
+                .unwrap_or_default()
+                .max(memory_bytes),
+        );
+        self.spill_peak_bytes = Some(
+            self.spill_peak_bytes
+                .unwrap_or_default()
+                .max(spill_bytes),
+        );
+    }
 }
 
 impl Default for SanitizedMetrics {
