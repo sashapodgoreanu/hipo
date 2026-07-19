@@ -22,6 +22,7 @@ tauri-build = { workspace = true }
 # at build time so they ship ~60% smaller inside the desktop binary; the app
 # inflates them on first use (see inflate_embedded in lib.rs).
 zstd = "0.13"
+sha2 = "0.10"
 
 [dependencies]
 tauri = { workspace = true }
