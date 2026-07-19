@@ -110,7 +110,7 @@
 **Independent Test**: Use synthetic canaries and inspect spawn, files, IPC, logs, history, errors, export, profiler, cancellation, and access attempts.
 
 - [X] T053 [US5] Enforce opaque client handles and prohibit endpoint/capability exposure to runtime or user code in `crates/duckle-db-runner/src/local_process_provider.rs` and `crates/duckle-db-runner/src/run_session.rs`
-- [ ] T054 [US5] Redact failures/events before history, logs, desktop events, headless output, and MCP responses in `crates/duckdb-engine/src/history.rs`, `crates/duckdb-engine/src/run_log.rs`, `apps/desktop/src/lib.rs`, `crates/duckle-runner/src/main.rs`, and `crates/duckle-mcp/src/tools.rs`
+- [X] T054 [US5] Redact failures/events before history, logs, desktop events, headless output, and MCP responses in `crates/duckdb-engine/src/history.rs`, `crates/duckdb-engine/src/run_log.rs`, `apps/desktop/src/lib.rs`, `crates/duckle-runner/src/main.rs`, and `crates/duckle-mcp/src/tools.rs`
 - [X] T055 [US5] Verify no Tauri capability or CSP scope expands in `apps/desktop/capabilities/` and `apps/desktop/tauri.conf.json`
 - [ ] T056 [P] [US5] Add secret-canary redaction tests for argv, env, files, IPC, events, history, errors, and logs in `crates/duckle-db-runner/tests/security_redaction.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
 - [X] T057 [P] [US5] Add credential and external-runtime isolation tests in `crates/duckle-db-runner/tests/local_process_provider.rs`
