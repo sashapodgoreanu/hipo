@@ -8,9 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use cron::Schedule as CronSchedule;
-use duckle_duckdb_engine::{
-    append_run_record, DuckdbEngine, RunRecord, RunResult,
-};
+use duckle_duckdb_engine::{append_run_record, DuckdbEngine, RunRecord, RunResult};
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
 use serde::{Deserialize, Serialize};
@@ -29,6 +27,9 @@ const SCHEDULES_FILE: &str = "schedules.json";
 /// real-time schedules can fire closer to their configured rate (issue #135).
 const DEFAULT_TICK_INTERVAL: Duration = Duration::from_secs(15);
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(2);
+
+type WorkspaceEngineFactory =
+    Arc<dyn Fn(&Path) -> Result<DuckdbEngine, String> + Send + Sync + 'static>;
 
 /// Resolve the scheduler poll cadence: DUCKLE_TICK_INTERVAL (whole seconds)
 /// if set and greater than 0, otherwise the 15s default.
@@ -85,6 +86,7 @@ fn default_true() -> bool {
 pub struct Scheduler {
     inner: Arc<Mutex<SchedulerInner>>,
     engine: DuckdbEngine,
+    workspace_engine_factory: Option<WorkspaceEngineFactory>,
     fire_tx: UnboundedSender<String>,
 }
 
@@ -100,6 +102,23 @@ struct SchedulerInner {
 
 impl Scheduler {
     pub fn new(engine: DuckdbEngine) -> Self {
+        Self::new_inner(engine, None)
+    }
+
+    /// Build a scheduler whose run engine is resolved from the active workspace.
+    /// The desktop uses this to attach the same workspace-owned
+    /// `WorkerPoolControl` and cutover selection used by interactive runs.
+    pub fn with_workspace_engine_factory<F>(engine: DuckdbEngine, factory: F) -> Self
+    where
+        F: Fn(&Path) -> Result<DuckdbEngine, String> + Send + Sync + 'static,
+    {
+        Self::new_inner(engine, Some(Arc::new(factory)))
+    }
+
+    fn new_inner(
+        engine: DuckdbEngine,
+        workspace_engine_factory: Option<WorkspaceEngineFactory>,
+    ) -> Self {
         let (fire_tx, fire_rx) = unbounded_channel();
         Self {
             inner: Arc::new(Mutex::new(SchedulerInner {
@@ -109,8 +128,17 @@ impl Scheduler {
                 fire_rx: Some(fire_rx),
             })),
             engine,
+            workspace_engine_factory,
             fire_tx,
         }
+    }
+
+    fn engine_for_workspace(&self, workspace: &Path) -> Result<DuckdbEngine, String> {
+        let configured = match &self.workspace_engine_factory {
+            Some(factory) => factory(workspace)?,
+            None => self.engine.clone(),
+        };
+        Ok(configured.for_new_run())
     }
 
     /// Switch to a different workspace path. Loads schedules from the
@@ -276,9 +304,10 @@ impl Scheduler {
         // Resolve ${ENV:NAME} from the process environment so scheduled runs see
         // OS env vars just like the headless runner does (issue #137).
         duckle_duckdb_engine::context::apply_env(&mut pipeline);
-        // A fresh per-run cancel scope so concurrent scheduled runs (and the
-        // interactive run) don't share or reset each other's cancellation.
-        let engine = self.engine.for_new_run();
+        // Resolve the workspace-owned controller first, then create a fresh
+        // cancellation scope for this scheduled run. No scheduler-local worker
+        // selection or admission queue exists.
+        let engine = self.engine_for_workspace(&workspace)?;
         let started = Utc::now();
         // Log scheduled runs under the pipeline id (the scheduler has no
         // friendly name handy) so they still land in the per-pipeline log.
@@ -500,5 +529,30 @@ mod tests {
         };
         compute_next_run(&mut s);
         assert!(s.next_run_at.is_none());
+    }
+
+    #[test]
+    fn workspace_engine_factory_is_used_for_every_scheduled_run_scope() {
+        let workspace = tempfile::tempdir().expect("temp workspace");
+        let seen = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
+        let captured = seen.clone();
+        let scheduler = Scheduler::with_workspace_engine_factory(
+            DuckdbEngine::new(PathBuf::from("duckdb")),
+            move |path| {
+                captured
+                    .lock()
+                    .expect("factory capture poisoned")
+                    .push(path.to_path_buf());
+                Ok(DuckdbEngine::new(PathBuf::from("duckdb")))
+            },
+        );
+
+        let _run_engine = scheduler
+            .engine_for_workspace(workspace.path())
+            .expect("workspace engine");
+        assert_eq!(
+            seen.lock().expect("factory capture poisoned").as_slice(),
+            &[workspace.path().to_path_buf()]
+        );
     }
 }
