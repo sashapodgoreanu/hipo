@@ -5,6 +5,9 @@ on:
   pull_request:
     paths:
       - 'crates/duckle-db-runner/**'
+      - 'crates/duckle-runner/**'
+      - 'apps/desktop/build.rs'
+      - 'apps/desktop/src/engine_manager.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -13,6 +16,9 @@ on:
     branches: [main]
     paths:
       - 'crates/duckle-db-runner/**'
+      - 'crates/duckle-runner/**'
+      - 'apps/desktop/build.rs'
+      - 'apps/desktop/src/engine_manager.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -20,19 +26,101 @@ on:
 
 jobs:
   smoke:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.repository_platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            repository_platform: windows_amd64
+            target: ''
+            sha256: 52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895
+            sidecar: duckle-db-sidecar.exe
+          - os: ubuntu-latest
+            repository_platform: linux_amd64
+            target: ''
+            sha256: decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e
+            sidecar: duckle-db-sidecar
+          - os: macos-14
+            repository_platform: osx_amd64
+            target: x86_64-apple-darwin
+            sha256: 85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970
+            sidecar: duckle-db-sidecar
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: duckle-db-runner-v1
+          shared-key: duckle-db-runner-v2-${{ matrix.repository_platform }}
+
+      - name: Stage and verify pinned Quack extension
+        shell: bash
+        env:
+          QUACK_PLATFORM: ${{ matrix.repository_platform }}
+          QUACK_SHA256: ${{ matrix.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p crates/duckle-runner/bin
+          python - <<'PY'
+          import gzip
+          import hashlib
+          import os
+          import pathlib
+          import urllib.request
+
+          platform = os.environ['QUACK_PLATFORM']
+          expected = os.environ['QUACK_SHA256']
+          base = f'https://extensions.duckdb.org/v1.5.4/{platform}/quack.duckdb_extension'
+          last_error = None
+          payload = None
+          for url in (base + '.gz', base):
+              try:
+                  with urllib.request.urlopen(url) as response:
+                      downloaded = response.read()
+                  payload = gzip.decompress(downloaded) if url.endswith('.gz') else downloaded
+                  if hashlib.sha256(payload).hexdigest() == expected:
+                      break
+                  payload = None
+                  last_error = RuntimeError(f'checksum mismatch from {url}')
+              except Exception as error:
+                  last_error = error
+          if payload is None:
+              raise SystemExit(f'could not stage verified Quack extension: {last_error}')
+          path = pathlib.Path('crates/duckle-runner/bin/quack.duckdb_extension')
+          path.write_bytes(payload)
+          print(f'verified {path} ({len(payload)} bytes)')
+          PY
+
+      - name: Build packaged headless runner and database sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build -p duckle-runner --target "${{ matrix.target }}" \
+              --bin duckle-runner --bin duckle-db-sidecar
+            base="target/${{ matrix.target }}/debug"
+          else
+            cargo build -p duckle-runner --bin duckle-runner --bin duckle-db-sidecar
+            base="target/debug"
+          fi
+          test -s "$base/${{ matrix.sidecar }}"
+          test -s "$base/quack.duckdb_extension"
+          mkdir -p _official-runner
+          cp "$base/${{ matrix.sidecar }}" _official-runner/
+          cp "$base/quack.duckdb_extension" _official-runner/
+
       - name: Verify official runner crate builds with bundled DuckDB
         run: cargo check -p duckle-db-runner
+
       - name: Run runner controller contract tests
         run: cargo test -p duckle-db-runner --lib
+
+      - name: Upload verified sidecar pair
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-runner-${{ matrix.repository_platform }}
+          path: _official-runner/
+          if-no-files-found: error
