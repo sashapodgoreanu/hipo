@@ -59,6 +59,15 @@ pub trait ManagedSidecar: Send + 'static {
         profile: &ResolvedRunnerResources,
     ) -> Result<(), RunnerFailureReason>;
 
+    /// Verifies that memory, CPU, spill quota, and private temporary-space
+    /// settings are actually effective inside the managed process. A worker is
+    /// never published as ready, and an updated profile is never accepted, until
+    /// this verification succeeds.
+    fn verify_effective_profile(
+        &mut self,
+        profile: &ResolvedRunnerResources,
+    ) -> Result<(), RunnerFailureReason>;
+
     /// Returns a new controlled database facade bound to this managed
     /// sidecar. Implementors retain all endpoint and credential state.
     fn open_database(
@@ -135,7 +144,11 @@ impl WorkerProvider for LocalProcessProvider {
             launched.managed.terminate();
             return Err(RunnerFailureReason::RunnerVersionMismatch);
         }
-        let managed = launched.managed;
+        let mut managed = launched.managed;
+        if let Err(reason) = managed.verify_effective_profile(&effective_profile) {
+            managed.terminate();
+            return Err(reason);
+        }
         if request.cancellation.is_cancelled() {
             managed.terminate();
             return Err(RunnerFailureReason::Cancelled);
@@ -160,7 +173,8 @@ impl WorkerProvider for LocalProcessProvider {
         let worker = workers
             .get_mut(&worker_id)
             .ok_or(RunnerFailureReason::RunnerUnavailable)?;
-        worker.apply_effective_profile(&effective_profile)
+        worker.apply_effective_profile(&effective_profile)?;
+        worker.verify_effective_profile(&effective_profile)
     }
 
     fn open_database(
@@ -198,7 +212,9 @@ mod tests {
     struct State {
         launched: Vec<(WorkerId, ResolvedRunnerResources)>,
         applied: Vec<(WorkerId, ResolvedRunnerResources)>,
+        verified: Vec<(WorkerId, ResolvedRunnerResources)>,
         terminated: Vec<WorkerId>,
+        fail_verification: bool,
     }
 
     struct FakeLauncher {
@@ -260,6 +276,19 @@ mod tests {
             Ok(())
         }
 
+        fn verify_effective_profile(
+            &mut self,
+            profile: &ResolvedRunnerResources,
+        ) -> Result<(), RunnerFailureReason> {
+            let mut state = self.state.lock().unwrap();
+            state.verified.push((self.worker_id, profile.clone()));
+            if state.fail_verification {
+                Err(RunnerFailureReason::ConfigurationApplyFailed)
+            } else {
+                Ok(())
+            }
+        }
+
         fn open_database(
             &mut self,
             _cancellation: crate::model::RunCancellation,
@@ -273,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_the_profile_before_launch_and_keeps_process_details_private() {
+    fn resolves_and_verifies_complete_profile_before_publishing_worker() {
         let state = Arc::new(Mutex::new(State::default()));
         let provider = LocalProcessProvider::new(
             Arc::new(FakeLauncher {
@@ -282,15 +311,17 @@ mod tests {
             HostResourceLimits {
                 memory_bytes: Some(1_000),
                 memory_cap_bytes: Some(600),
+                spill_bytes: Some(2_000),
+                spill_cap_bytes: Some(1_000),
                 cpu_threads: Some(16),
                 cpu_thread_cap: Some(8),
-                ..HostResourceLimits::default()
             },
         );
         let worker_id = WorkerId::new();
         let profile = RunnerResourcesProfile {
             memory: ResourceLimit::Percent(80),
             cpu_threads: AutomaticOrU16::Value(12),
+            spill: ResourceLimit::Percent(75),
             ..RunnerResourcesProfile::default()
         };
 
@@ -307,6 +338,8 @@ mod tests {
             assert_eq!(state.launched.len(), 1);
             assert_eq!(state.launched[0].1.memory_bytes, Some(600));
             assert_eq!(state.launched[0].1.cpu_threads, Some(8));
+            assert_eq!(state.launched[0].1.spill_bytes, Some(1_000));
+            assert_eq!(state.verified, state.launched);
         }
         assert_eq!(provider.active_workers(), 1);
 
@@ -314,11 +347,41 @@ mod tests {
         provider.terminate(worker_id);
         let state = state.lock().unwrap();
         assert_eq!(state.applied.len(), 1);
+        assert_eq!(state.verified.len(), 2);
         assert_eq!(state.terminated, vec![worker_id]);
     }
 
     #[test]
-    fn cancelled_requests_do_not_reach_the_launcher() {
+    fn rejects_and_terminates_worker_when_profile_verification_fails() {
+        let state = Arc::new(Mutex::new(State {
+            fail_verification: true,
+            ..State::default()
+        }));
+        let provider = LocalProcessProvider::new(
+            Arc::new(FakeLauncher {
+                state: state.clone(),
+            }),
+            HostResourceLimits::default(),
+        );
+        let worker_id = WorkerId::new();
+
+        assert_eq!(
+            provider.provision(WorkerProvisionRequest {
+                worker_id,
+                kind: WorkerKind::Warm,
+                profile: RunnerResourcesProfile::default(),
+                cancellation: RunCancellation::default(),
+            }),
+            Err(RunnerFailureReason::ConfigurationApplyFailed)
+        );
+        assert_eq!(provider.active_workers(), 0);
+        let state = state.lock().unwrap();
+        assert_eq!(state.verified.len(), 1);
+        assert_eq!(state.terminated, vec![worker_id]);
+    }
+
+    #[test]
+    fn cancellation_before_launch_never_reaches_the_launcher() {
         let state = Arc::new(Mutex::new(State::default()));
         let provider = LocalProcessProvider::new(
             Arc::new(FakeLauncher {
