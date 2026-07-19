@@ -104,6 +104,16 @@ fn runner_resources_config(settings: &AppSettings) -> RunnerResourcesConfig {
     }
 }
 
+fn apply_active_runner_profile(
+    workspace: &Path,
+    profile: &RunnerResourcesProfile,
+) -> Result<(), String> {
+    if let Some(controller) = crate::RUNNER_CONTROLLER.get() {
+        controller.apply_profile_if_active(workspace, profile)?;
+    }
+    Ok(())
+}
+
 /// Load the workspace's saved proxy and apply it to the engine HTTP layer.
 /// Best-effort: a missing / unreadable settings file leaves the current
 /// (environment-derived) proxy in place.
@@ -184,9 +194,10 @@ pub fn settings_set_memory_limit(workspace: String, mb: Option<u32>) -> Result<(
             duckle_db_runner::resources::ResourceLimit::Bytes(u64::from(value) * 1024 * 1024)
         })
         .unwrap_or(duckle_db_runner::resources::ResourceLimit::Automatic);
-    s.runner_resources = Some(profile);
+    s.runner_resources = Some(profile.clone());
     store(Path::new(&workspace), &s)?;
-    // Apply immediately so the current session's runs use it without a relaunch.
+    apply_active_runner_profile(Path::new(&workspace), &profile)?;
+    // Apply immediately so the compatibility route also uses it without a relaunch.
     match mb {
         Some(m) => std::env::set_var("DUCKLE_MEMORY_LIMIT", format!("{}MB", m)),
         None => std::env::remove_var("DUCKLE_MEMORY_LIMIT"),
@@ -220,8 +231,9 @@ pub fn settings_set_runner_resources(
     profile
         .validate()
         .map_err(|_| "invalid_runner_resources".to_string())?;
-    settings.runner_resources = Some(profile);
+    settings.runner_resources = Some(profile.clone());
     store(Path::new(&workspace), &settings)?;
+    apply_active_runner_profile(Path::new(&workspace), &profile)?;
     Ok(runner_resources_config(&settings))
 }
 
