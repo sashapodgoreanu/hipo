@@ -1,0 +1,30 @@
+name: Apply T060 source patch
+
+on:
+  push:
+    branches:
+      - agent/003-quack-runner-spec-implementation
+    paths:
+      - .github/workflows/t060-self-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/003-quack-runner-spec-implementation
+      - name: Apply verified source replacements
+        run: python3 scripts/apply-t060.py
+      - name: Commit patched runner entry points
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/duckle-runner/src/main.rs crates/duckle-runner/src/serve.rs
+          git diff --cached --check
+          git commit -m "feat: route headless runs through workspace controller"
+          git push origin HEAD:agent/003-quack-runner-spec-implementation
