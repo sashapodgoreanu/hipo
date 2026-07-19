@@ -270,19 +270,23 @@ pub fn evaluate_cutover_json(json: Option<&str>) -> CutoverGate {
     }
 }
 
-/// The official runner is never selected by a production or release-CI entry
-/// point until immutable evidence approves cutover. Test and compatibility
-/// paths may exercise it before that gate.
+/// The packaged gate is authoritative for production and release-CI builds.
+/// Before approval they stay on compatibility. After approval, an older caller
+/// cannot silently force the product back to CLI by passing a stale local
+/// rejection. Test and explicit compatibility entry points may exercise the
+/// official runner before the production gate.
 pub fn select_runner(entry_point: EntryPointClass, gate: &CutoverGate) -> RunnerSelection {
-    match (entry_point, gate) {
-        (EntryPointClass::Production | EntryPointClass::ReleaseCi, CutoverGate::Approved) => {
-            RunnerSelection::Official
+    match entry_point {
+        EntryPointClass::Test | EntryPointClass::Compatibility => RunnerSelection::Official,
+        EntryPointClass::Production | EntryPointClass::ReleaseCi => {
+            let approved = matches!(gate, CutoverGate::Approved)
+                || matches!(packaged_cutover_gate(), CutoverGate::Approved);
+            if approved {
+                RunnerSelection::Official
+            } else {
+                RunnerSelection::Compatibility
+            }
         }
-        (
-            EntryPointClass::Production | EntryPointClass::ReleaseCi,
-            CutoverGate::Rejected { .. },
-        ) => RunnerSelection::Compatibility,
-        (EntryPointClass::Test | EntryPointClass::Compatibility, _) => RunnerSelection::Official,
     }
 }
 
@@ -378,5 +382,12 @@ mod tests {
             .rejection_ids()
             .iter()
             .any(|id| id == "finding:quality-1:motivation"));
+    }
+
+    #[test]
+    fn entry_point_parser_fails_closed_for_unknown_values() {
+        assert_eq!(EntryPointClass::parse("release-ci"), Some(EntryPointClass::ReleaseCi));
+        assert_eq!(EntryPointClass::parse("compatibility"), Some(EntryPointClass::Compatibility));
+        assert_eq!(EntryPointClass::parse("unknown"), None);
     }
 }
