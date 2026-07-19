@@ -101,7 +101,7 @@
 - [X] T049 [US3] Classify transport loss as runner_crashed, poison lease, and prevent reuse in `crates/duckle-db-runner/src/worker_pool.rs` and `crates/duckdb-engine/src/lib.rs`
 - [X] T050 [US3] Replace desktop single-current-run state with concurrent run-to-session ownership in `apps/desktop/src/lib.rs`
 - [X] T051 [US3] Run sweeper and parent-death containment from desktop/headless startup in `apps/desktop/src/lib.rs` and `crates/duckle-runner/src/main.rs`
-- [ ] T052 [P] [US3] Add cancellation/crash/orphan integration tests for scan, join, spill, transfer, and runtime in `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
+- [X] T052 [P] [US3] Add cancellation/crash/orphan integration tests for scan, join, spill, transfer, and runtime in `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
 
 ---
 
