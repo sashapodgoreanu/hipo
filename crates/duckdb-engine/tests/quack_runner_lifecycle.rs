@@ -2,7 +2,8 @@
 //!
 //! These tests keep the provider opaque and exercise the engine/controller
 //! contract: one acquire per run, cancellation propagation, sanitized crash
-//! classification, single release, and bounded orphan cleanup.
+//! classification, single release, bounded orphan cleanup, and secret-safe
+//! boundary delivery.
 
 use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 use duckle_db_runner::model::{
@@ -11,14 +12,21 @@ use duckle_db_runner::model::{
 };
 use duckle_db_runner::process_cleanup::{sweep_run_artifacts, RunArtifactScope};
 use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
-use duckle_duckdb_engine::{DuckdbEngine, OfficialRunnerController, PipelineDoc};
+use duckle_duckdb_engine::{
+    append_run_record, load_run_history, DuckdbEngine, NodeRunStatus, OfficialRunnerController,
+    PipelineDoc, RunRecord, RunResult,
+};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+static LOG_ENV_LOCK: Mutex<()> = Mutex::new(());
+
 #[derive(Debug, Clone, Copy)]
 enum BatchOutcome {
+    Succeed,
     WaitForCancellation,
     Fail(RunnerFailureReason),
 }
@@ -70,6 +78,16 @@ impl LifecycleController {
         let state = self.state.lock().expect("lifecycle state poisoned");
         (state.acquired, state.released, state.batches.len())
     }
+
+    fn batches_contain(&self, needle: &str) -> bool {
+        self.state
+            .lock()
+            .expect("lifecycle state poisoned")
+            .batches
+            .iter()
+            .flatten()
+            .any(|statement| statement.contains(needle))
+    }
 }
 
 impl OfficialRunnerController for LifecycleController {
@@ -114,6 +132,10 @@ impl OfficialRunnerController for LifecycleController {
         }
 
         match self.outcome {
+            BatchOutcome::Succeed => Ok(SqlBatchResult {
+                rows: 0,
+                transport: TransportKind::Quack,
+            }),
             BatchOutcome::WaitForCancellation => {
                 let deadline = Instant::now() + Duration::from_secs(10);
                 while !cancellation.is_cancelled() {
@@ -263,10 +285,110 @@ fn stale_orphan_artifacts_are_removed_within_the_ten_second_cleanup_contract() {
 }
 
 #[test]
+fn secret_canaries_stay_internal_to_batches_and_out_of_events_history_and_logs() {
+    let _env_guard = LOG_ENV_LOCK.lock().expect("log environment lock poisoned");
+    let canary = "TOP_SECRET_CANARY";
+    let log_root = tempfile::tempdir().expect("temporary log root");
+    let previous_log_dir = std::env::var_os("DUCKLE_LOG_DIR");
+    std::env::set_var("DUCKLE_LOG_DIR", log_root.path());
+
+    let controller = Arc::new(LifecycleController::new(BatchOutcome::Fail(
+        RunnerFailureReason::RunnerCrashed,
+    )));
+    let engine = official_engine(controller.clone());
+    let mut delivered_events = Vec::new();
+    let result = engine.execute_pipeline_with_events(
+        &workload_doc(&format!("SELECT 'token={canary}' AS internal_secret")),
+        None,
+        Some("security-redaction"),
+        |event| {
+            delivered_events.push(
+                serde_json::to_string(&event).expect("pipeline event serializes"),
+            );
+        },
+    );
+
+    match previous_log_dir {
+        Some(value) => std::env::set_var("DUCKLE_LOG_DIR", value),
+        None => std::env::remove_var("DUCKLE_LOG_DIR"),
+    }
+
+    assert!(
+        controller.batches_contain(canary),
+        "the canary must reach only the provider-private SQL request"
+    );
+    assert!(delivered_events.iter().all(|event| !event.contains(canary)));
+    assert!(!serde_json::to_string(&result)
+        .expect("run result serializes")
+        .contains(canary));
+
+    let log = std::fs::read_to_string(
+        log_root
+            .path()
+            .join("security-redaction")
+            .join("runtime.log"),
+    )
+    .expect("runtime log written");
+    assert!(!log.contains(canary), "runtime log leaked the canary: {log}");
+
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        "source".to_string(),
+        NodeRunStatus {
+            status: "error".to_string(),
+            kind: Some("view".to_string()),
+            rows: None,
+            duration_ms: Some(1),
+            error: Some(format!("request rejected: Bearer {canary}")),
+            category: Some("auth".to_string()),
+            sql: Some(format!("SET token={canary}")),
+        },
+    );
+    let raw_result = RunResult {
+        status: "error".to_string(),
+        duration_ms: 1,
+        nodes,
+        preview: Vec::new(),
+        error: Some(format!("connection failed: password={canary}")),
+        category: Some("auth".to_string()),
+    };
+    append_run_record(
+        log_root.path(),
+        "security-redaction",
+        RunRecord::from_result(&raw_result, "manual"),
+    )
+    .expect("history record written");
+
+    let history_text = std::fs::read_to_string(
+        log_root
+            .path()
+            .join("runs")
+            .join("security-redaction.json"),
+    )
+    .expect("history file written");
+    assert!(
+        !history_text.contains(canary),
+        "history file leaked the canary: {history_text}"
+    );
+    let history = load_run_history(log_root.path(), "security-redaction");
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0].error.as_deref(),
+        Some("connection failed: password=***")
+    );
+}
+
+#[test]
 fn lifecycle_results_keep_the_declared_quack_transport_internal() {
     let result = SqlBatchResult {
         rows: 0,
         transport: TransportKind::Quack,
     };
     assert_eq!(result.transport, TransportKind::Quack);
+
+    let controller = Arc::new(LifecycleController::new(BatchOutcome::Succeed));
+    let engine = official_engine(controller.clone());
+    let run = engine.execute_pipeline(&workload_doc("SELECT 1 AS value"));
+    assert_eq!(run.status, "ok");
+    assert_eq!(controller.counts(), (1, 1, 1));
 }
