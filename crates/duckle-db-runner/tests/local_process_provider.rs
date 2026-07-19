@@ -31,6 +31,7 @@ enum LaunchMode {
 #[derive(Default)]
 struct LaunchState {
     effective_profiles: Vec<ResolvedRunnerResources>,
+    verified_profiles: Vec<ResolvedRunnerResources>,
     bootstrap_wires: Vec<Vec<u8>>,
     terminated: Vec<WorkerId>,
 }
@@ -109,6 +110,18 @@ impl ManagedSidecar for RecordingSidecar {
         Ok(())
     }
 
+    fn verify_effective_profile(
+        &mut self,
+        profile: &ResolvedRunnerResources,
+    ) -> Result<(), RunnerFailureReason> {
+        self.state
+            .lock()
+            .unwrap()
+            .verified_profiles
+            .push(profile.clone());
+        Ok(())
+    }
+
     fn open_database(
         &mut self,
         _cancellation: RunCancellation,
@@ -161,7 +174,7 @@ fn provision_request(worker_id: WorkerId, cancellation: RunCancellation) -> Work
 }
 
 #[test]
-fn effective_profile_is_resolved_before_authenticated_readiness() {
+fn effective_profile_is_resolved_and_verified_before_authenticated_readiness() {
     let (provider, state) = provider(LaunchMode::Healthy);
     let worker_id = WorkerId::new();
 
@@ -171,7 +184,9 @@ fn effective_profile_is_resolved_before_authenticated_readiness() {
 
     let state = state.lock().unwrap();
     assert_eq!(state.effective_profiles.len(), 1);
+    assert_eq!(state.verified_profiles.len(), 1);
     let effective = &state.effective_profiles[0];
+    assert_eq!(&state.verified_profiles[0], effective);
     assert_eq!(effective.requested_version, 7);
     assert_eq!(effective.effective_version, 7);
     assert_eq!(effective.memory_bytes, Some(600_000_000));
