@@ -4260,6 +4260,7 @@ dependencies = [
 name = "duckle-mcp"
 version = "0.0.1"
 dependencies = [
+ "duckle-db-runner",
  "duckle-duckdb-engine",
  "serde",
  "serde_json",
@@ -4325,6 +4326,7 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "cron",
+ "duckle-db-runner",
  "duckle-duckdb-engine",
  "duckle-secrets",
  "notify",
