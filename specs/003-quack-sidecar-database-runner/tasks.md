@@ -124,7 +124,7 @@
 - [X] T058 [US6] Pin DuckDB/Quack with version, checksum, license, provenance, and offline staging verification in `apps/desktop/src/engine_manager.rs` and `apps/desktop/build.rs`
 - [X] T059 [US6] Package and locate sidecar/extension pair for desktop, headless, and releases in `crates/duckle-runner/Cargo.toml`, `apps/desktop/build.rs`, and `.github/workflows/`
 - [X] T060 [US6] Route headless CLI/web through controller and remove web run_lock serialization without an admission queue in `crates/duckle-runner/src/main.rs` and `crates/duckle-runner/src/serve.rs`
-- [ ] T061 [US6] Route scheduler and MCP through same controller/run database in `crates/scheduler/src/lib.rs` and `crates/duckle-mcp/src/tools.rs`
+- [X] T061 [US6] Route scheduler and MCP through same controller/run database in `crates/scheduler/src/lib.rs` and `crates/duckle-mcp/src/tools.rs`
 - [ ] T062 [US6] Implement CutoverEvidence manifest evaluation and production/test/compatibility/release-CI selection that keeps official runner non-productive until approval in `crates/duckle-db-runner/src/cutover.rs`, `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `crates/duckle-runner/src/main.rs`
 - [ ] T063 [US6] Add regression proving production/release-CI gate rejection, test/compatibility selection, and no post-cutover CLI fallback in `crates/duckdb-engine/tests/quack_runner_parity.rs` and `crates/duckle-runner/src/serve.rs`
 - [ ] T064 [US6] Apply and verify effective memory, CPU, spill, and temporary-space profile before worker readiness in `crates/duckle-db-runner/src/local_process_provider.rs` and `crates/duckle-db-runner/src/run_session.rs`
