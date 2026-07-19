@@ -2,9 +2,10 @@
 //!
 //! The MCP process is long-lived, so controllers are cached by workspace while
 //! individual tool calls receive fresh cancellation scopes. Provisioning stays
-//! lazy and production remains on compatibility until T062 approves cutover.
+//! lazy and production remains on compatibility until packaged CutoverEvidence
+//! approves cutover.
 
-use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
+use duckle_db_runner::cutover::{configured_entry_point_class, packaged_cutover_gate};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 #[cfg(windows)]
@@ -28,10 +29,8 @@ pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbE
         .unwrap_or(base);
     with_controller
         .with_runner_selection(
-            EntryPointClass::Production,
-            &CutoverGate::Rejected {
-                missing_or_failed: vec!["cutover_evidence".to_string()],
-            },
+            configured_entry_point_class(),
+            &packaged_cutover_gate(),
         )
         .for_new_run()
 }
