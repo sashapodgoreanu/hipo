@@ -2,9 +2,9 @@
 //!
 //! This mirrors the headless runner boundary: controller provisioning is lazy,
 //! the sidecar path stays private, and production remains on compatibility until
-//! CutoverEvidence is approved by T062.
+//! packaged CutoverEvidence is approved.
 
-use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
+use duckle_db_runner::cutover::{configured_entry_point_class, packaged_cutover_gate};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 #[cfg(windows)]
@@ -29,10 +29,8 @@ pub(crate) fn configure_engine_for_workspace(
         .map(|controller| base.with_official_runner_controller(controller))
         .unwrap_or(base);
     with_controller.with_runner_selection(
-        EntryPointClass::Production,
-        &CutoverGate::Rejected {
-            missing_or_failed: vec!["cutover_evidence".to_string()],
-        },
+        configured_entry_point_class(),
+        &packaged_cutover_gate(),
     )
 }
 
