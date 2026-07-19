@@ -134,6 +134,21 @@ impl ManagedSidecar for WindowsManagedSidecar {
         }
     }
 
+    fn verify_effective_profile(
+        &mut self,
+        profile: &ResolvedRunnerResources,
+    ) -> Result<(), RunnerFailureReason> {
+        // The child queried DuckDB's effective settings and verified its private
+        // temporary directory before authenticating readiness. The parent then
+        // authenticates that exact resolved profile; accepting any other value
+        // here would silently relabel the managed process.
+        if profile == &self.profile {
+            Ok(())
+        } else {
+            Err(RunnerFailureReason::ConfigurationApplyFailed)
+        }
+    }
+
     fn open_database(
         &mut self,
         cancellation: RunCancellation,
@@ -171,7 +186,7 @@ fn run_windows_sidecar_from_bootstrap(
     std::fs::create_dir_all(&temp_directory).map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     let cleanup = TempDirectoryGuard(temp_directory.clone());
     let connection = Connection::open_in_memory().map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-    apply_profile(&connection, profile, &temp_directory)?;
+    apply_and_verify_profile(&connection, profile, &temp_directory)?;
     connection
         .execute_batch("LOAD quack;")
         .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
@@ -209,11 +224,14 @@ fn run_windows_sidecar_from_bootstrap(
 }
 
 #[cfg(windows)]
-fn apply_profile(
+fn apply_and_verify_profile(
     connection: &Connection,
     profile: &ResolvedRunnerResources,
     temp_directory: &Path,
 ) -> Result<(), RunnerFailureReason> {
+    profile
+        .validate()
+        .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
     if let Some(memory_bytes) = profile.memory_bytes {
         connection
             .execute_batch(&format!("SET memory_limit = '{}B';", memory_bytes))
@@ -224,12 +242,126 @@ fn apply_profile(
             .execute_batch(&format!("SET threads = {cpu_threads};"))
             .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
     }
+    if let Some(spill_bytes) = profile.spill_bytes {
+        connection
+            .execute_batch(&format!("SET max_temp_directory_size = '{}B';", spill_bytes))
+            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+    }
     connection
         .execute_batch(&format!(
             "SET temp_directory = {}; SET preserve_insertion_order = false;",
             sql_literal(&temp_directory.to_string_lossy())
         ))
+        .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+
+    verify_temporary_directory(temp_directory)?;
+    verify_duckdb_profile(connection, profile, temp_directory)
+}
+
+#[cfg(windows)]
+fn verify_duckdb_profile(
+    connection: &Connection,
+    profile: &ResolvedRunnerResources,
+    temp_directory: &Path,
+) -> Result<(), RunnerFailureReason> {
+    if let Some(expected) = profile.memory_bytes {
+        let actual = setting_value(connection, "memory_limit")?;
+        if !setting_bytes_match(&actual, expected) {
+            return Err(RunnerFailureReason::ConfigurationApplyFailed);
+        }
+    }
+    if let Some(expected) = profile.cpu_threads {
+        let actual = setting_value(connection, "threads")?
+            .parse::<u16>()
+            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+        if actual != expected {
+            return Err(RunnerFailureReason::ConfigurationApplyFailed);
+        }
+    }
+    if let Some(expected) = profile.spill_bytes {
+        let actual = setting_value(connection, "max_temp_directory_size")?;
+        if !setting_bytes_match(&actual, expected) {
+            return Err(RunnerFailureReason::ConfigurationApplyFailed);
+        }
+    }
+    let actual_temp = setting_value(connection, "temp_directory")?;
+    if PathBuf::from(actual_temp) != temp_directory {
+        return Err(RunnerFailureReason::ConfigurationApplyFailed);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn setting_value(connection: &Connection, name: &str) -> Result<String, RunnerFailureReason> {
+    connection
+        .query_row(
+            "SELECT value FROM duckdb_settings() WHERE name = ?",
+            params![name],
+            |row| row.get(0),
+        )
         .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)
+}
+
+#[cfg(windows)]
+fn verify_temporary_directory(temp_directory: &Path) -> Result<(), RunnerFailureReason> {
+    use std::io::Write;
+
+    if !temp_directory.is_dir() {
+        return Err(RunnerFailureReason::ConfigurationApplyFailed);
+    }
+    let probe = temp_directory.join(format!(".duckle-resource-probe-{}", std::process::id()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&probe)
+            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+        file.write_all(b"duckle")
+            .and_then(|_| file.sync_all())
+            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)
+    })();
+    let _ = std::fs::remove_file(&probe);
+    result
+}
+
+fn setting_bytes_match(value: &str, expected: u64) -> bool {
+    let Some(actual) = parse_duckdb_bytes(value) else {
+        return false;
+    };
+    let tolerance = (expected / 10_000).max(4 * 1024);
+    actual.abs_diff(expected) <= tolerance
+}
+
+fn parse_duckdb_bytes(value: &str) -> Option<u64> {
+    let compact: String = value.chars().filter(|character| !character.is_whitespace()).collect();
+    let unit_start = compact
+        .char_indices()
+        .find(|(_, character)| !character.is_ascii_digit() && *character != '.')
+        .map(|(index, _)| index)
+        .unwrap_or(compact.len());
+    let number = compact[..unit_start].parse::<f64>().ok()?;
+    if !number.is_finite() || number < 0.0 {
+        return None;
+    }
+    let unit = compact[unit_start..].to_ascii_lowercase();
+    let multiplier = match unit.as_str() {
+        "" | "b" | "byte" | "bytes" => 1_f64,
+        "kb" => 1_000_f64,
+        "kib" => 1_024_f64,
+        "mb" => 1_000_000_f64,
+        "mib" => 1_048_576_f64,
+        "gb" => 1_000_000_000_f64,
+        "gib" => 1_073_741_824_f64,
+        "tb" => 1_000_000_000_000_f64,
+        "tib" => 1_099_511_627_776_f64,
+        _ => return None,
+    };
+    let bytes = number * multiplier;
+    if bytes > u64::MAX as f64 {
+        None
+    } else {
+        Some(bytes.round() as u64)
+    }
 }
 
 #[cfg(windows)]
@@ -286,5 +418,14 @@ mod tests {
         let token = bootstrap_token(&bootstrap);
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn parses_duckdb_binary_and_decimal_size_settings() {
+        assert_eq!(parse_duckdb_bytes("1024 B"), Some(1024));
+        assert_eq!(parse_duckdb_bytes("1 KiB"), Some(1024));
+        assert_eq!(parse_duckdb_bytes("1.5 MiB"), Some(1_572_864));
+        assert_eq!(parse_duckdb_bytes("2 GB"), Some(2_000_000_000));
+        assert_eq!(parse_duckdb_bytes("unlimited"), None);
     }
 }
