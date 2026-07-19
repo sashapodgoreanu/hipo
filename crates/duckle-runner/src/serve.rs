@@ -10,9 +10,9 @@
 //!     editable interval schedule.
 //!   - Run:        trigger any pipeline on demand and see the result.
 //!
-//! Runs execute in-process through the same engine as `duckle-runner run`, are
-//! serialized by a single lock (so a manual run and a scheduled run never
-//! collide on the shared workspace env), and append the same run history
+//! Runs execute through the workspace-owned controller with independent run
+//! cancellation scopes. Manual, scheduled, and browser requests may overlap
+//! without a global admission queue, and append the same run history
 //! (`<workspace>/runs/<id>.json`) and NDJSON logs (`<workspace>/logs/<id>/`)
 //! the desktop and runner already write. A background scheduler triggers any
 //! pipeline whose interval has elapsed. No authentication: bind it to a
@@ -101,9 +101,6 @@ fn parse_serve_args() -> Result<ServeArgs, String> {
 struct State {
     workspace: PathBuf,
     duckdb: PathBuf,
-    /// Serializes pipeline execution: the shared workspace env vars and DuckDB
-    /// process make concurrent runs unsafe, so manual + scheduled runs queue.
-    run_lock: Mutex<()>,
     /// Pipeline ids currently executing, so the console can show a live
     /// "Running" status (discussion #155). Populated for the duration of a run.
     running: Mutex<std::collections::HashSet<String>>,
@@ -120,8 +117,8 @@ pub fn run() -> Result<(), String> {
         .unwrap_or_else(|_| args.workspace.clone());
     let duckdb = crate::resolve_duckdb(args.duckdb.clone())?;
 
-    // Set the workspace env once for the process; runs are serialized so these
-    // stay consistent for every execution (matches the runner's run path).
+    // Set immutable workspace-scoped environment once for this server. All
+    // concurrent runs target the same workspace and own independent engines.
     std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
@@ -130,7 +127,6 @@ pub fn run() -> Result<(), String> {
     let state = Arc::new(State {
         workspace: workspace.clone(),
         duckdb: duckdb.clone(),
-        run_lock: Mutex::new(()),
         running: Mutex::new(std::collections::HashSet::new()),
         tick_interval: args.tick_interval,
     });
@@ -217,9 +213,6 @@ struct WebState {
     dist: PathBuf,
     /// Bind host, for the cross-origin / DNS-rebind guard on POST routes.
     host: String,
-    /// Serialize runs: the shared workspace env + DuckDB process make concurrent
-    /// executions unsafe, so browser run requests queue.
-    run_lock: Mutex<()>,
 }
 
 pub fn run_web() -> Result<(), String> {
@@ -242,7 +235,6 @@ pub fn run_web() -> Result<(), String> {
         duckdb: duckdb.clone(),
         dist: dist.clone(),
         host: args.host.clone(),
-        run_lock: Mutex::new(()),
     });
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).map_err(|e| format!("bind {}: {}", addr, e))?;
@@ -417,7 +409,7 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
         // Execute a pipeline on the server engine and return the RunResult (the
         // same shape the desktop returns). The frontend reads the final result
         // from this response; live per-stage events (the Channel) are not
-        // streamed in the MVP. Runs are serialized via run_lock.
+        // streamed in the MVP. WorkerPoolControl owns admission and allocation.
         "run_pipeline" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
@@ -440,8 +432,11 @@ fn dispatch_cmd(stream: &mut TcpStream, state: &WebState, cmd: &str, body: &[u8]
             duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
-            let _guard = state.run_lock.lock().unwrap_or_else(|p| p.into_inner());
-            let engine = DuckdbEngine::new(state.duckdb.clone());
+            let engine = crate::runner_controller::engine_for_workspace(
+                state.duckdb.clone(),
+                &state.workspace,
+            )
+            .for_new_run();
             let result = engine.execute_pipeline_named(&doc, &name);
             match serde_json::to_value(&result) {
                 Ok(v) => respond_json(stream, &v),
@@ -578,11 +573,14 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
     stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
-    let _guard = state.run_lock.lock().unwrap_or_else(|p| p.into_inner());
     // A second handle to the same socket for the event callback (the run is
     // synchronous, so events stream first, the result line follows).
     let mut ev = stream.try_clone().map_err(|e| e.to_string())?;
-    let engine = DuckdbEngine::new(state.duckdb.clone());
+    let engine = crate::runner_controller::engine_for_workspace(
+        state.duckdb.clone(),
+        &state.workspace,
+    )
+    .for_new_run();
     let result = engine.execute_pipeline_with_events(&doc, target.as_deref(), Some(&name), |evt| {
         if let Ok(j) = serde_json::to_string(&evt) {
             let _ = ev.write_all(format!("data: {}\n\n", j).as_bytes());
@@ -678,7 +676,11 @@ fn query_source_preview(stream: &mut TcpStream, state: &WebState, body: &[u8]) -
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
     );
     let started = Instant::now();
-    let engine = DuckdbEngine::new(state.duckdb.clone()).for_new_run();
+    let engine = crate::runner_controller::engine_for_workspace(
+        state.duckdb.clone(),
+        &state.workspace,
+    )
+    .for_new_run();
     let worker_engine = engine.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1372,8 +1374,8 @@ fn discover_pipeline_params(state: &State, file: &str) -> Result<Vec<String>, St
 
 /// Run one pipeline by its workspace-relative file path, end to end: resolve
 /// env/time placeholders (as the runner does), execute through the engine,
-/// append a run-history record, and return a result summary. Serialized by the
-/// run lock so a scheduled run never overlaps a manual one.
+/// append a run-history record, and return a result summary. Manual and
+/// scheduled runs may overlap; WorkerPoolControl owns admission and allocation.
 /// Removes a pipeline id from the running set when the run ends, no matter how
 /// (normal return, `?` error, or panic). Paired with the insert in execute_one.
 struct RunningGuard<'a> {
@@ -1400,8 +1402,6 @@ fn execute_one(
 
     let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "pipeline".into());
 
-    let _guard = state.run_lock.lock().map_err(|_| "run lock poisoned".to_string())?;
-
     // Mark this pipeline as running for the duration of the execution so the
     // console can show a live "Running" status (discussion #155). The guard
     // clears it on every exit path, including the `?` early returns below.
@@ -1427,7 +1427,11 @@ fn execute_one(
     // so file-loaded pipelines (manual /api/run + scheduled runs) work too.
     duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
 
-    let engine = DuckdbEngine::new(state.duckdb.clone());
+    let engine = crate::runner_controller::engine_for_workspace(
+        state.duckdb.clone(),
+        &state.workspace,
+    )
+    .for_new_run();
     let result = engine.execute_pipeline_named(&doc, &id);
 
     let _ = append_run_record(&state.workspace, &id, RunRecord::from_result(&result, trigger));
