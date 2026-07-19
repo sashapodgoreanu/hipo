@@ -121,8 +121,8 @@
 
 **Independent Test**: On clean offline builds with no system DuckDB CLI, run desktop, headless, scheduler, MCP, inspect, drift, branch/diff, artifacts, and data tools; establish the benchmark gate, then scan for retired references.
 
-- [ ] T058 [US6] Pin DuckDB/Quack with version, checksum, license, provenance, and offline staging verification in `apps/desktop/src/engine_manager.rs` and `apps/desktop/build.rs`
-- [ ] T059 [US6] Package and locate sidecar/extension pair for desktop, headless, and releases in `crates/duckle-runner/Cargo.toml`, `apps/desktop/build.rs`, and `.github/workflows/`
+- [X] T058 [US6] Pin DuckDB/Quack with version, checksum, license, provenance, and offline staging verification in `apps/desktop/src/engine_manager.rs` and `apps/desktop/build.rs`
+- [X] T059 [US6] Package and locate sidecar/extension pair for desktop, headless, and releases in `crates/duckle-runner/Cargo.toml`, `apps/desktop/build.rs`, and `.github/workflows/`
 - [ ] T060 [US6] Route headless CLI/web through controller and remove web run_lock serialization without an admission queue in `crates/duckle-runner/src/main.rs` and `crates/duckle-runner/src/serve.rs`
 - [ ] T061 [US6] Route scheduler and MCP through same controller/run database in `crates/scheduler/src/lib.rs` and `crates/duckle-mcp/src/tools.rs`
 - [ ] T062 [US6] Implement CutoverEvidence manifest evaluation and production/test/compatibility/release-CI selection that keeps official runner non-productive until approval in `crates/duckle-db-runner/src/cutover.rs`, `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `crates/duckle-runner/src/main.rs`
