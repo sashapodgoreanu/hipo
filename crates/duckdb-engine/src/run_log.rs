@@ -81,7 +81,14 @@ impl RunLog {
         let mut obj = self.event_fields(event);
         obj.insert("ts".into(), Value::String(now_rfc3339()));
         obj.insert("run_id".into(), Value::String(self.run_id.clone()));
-        if let Ok(mut line) = serde_json::to_string(&Value::Object(obj)) {
+
+        // Final boundary pass over the complete payload. Individual diagnostic
+        // fields are already redacted below, but this recursive pass protects
+        // future fields and user-controlled labels/ids from credential-shaped
+        // values before the NDJSON reaches a file or external log shipper.
+        let mut payload = Value::Object(obj);
+        redact_json_strings(&mut payload);
+        if let Ok(mut line) = serde_json::to_string(&payload) {
             line.push('\n');
             if let Some(file) = self.file.as_mut() {
                 let _ = file.write_all(line.as_bytes());
@@ -167,6 +174,25 @@ impl RunLog {
     }
 }
 
+fn redact_json_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            *text = crate::redact_untrusted_text(text);
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_json_strings(value);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_json_strings(value);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -192,5 +218,50 @@ fn sanitize_segment(name: &str) -> String {
         "pipeline".to_string()
     } else {
         cleaned.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn final_log_boundary_redacts_diagnostics_and_user_controlled_strings() {
+        let canary = "TOP_SECRET_CANARY";
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "source".to_string(),
+            NodeMeta {
+                component: format!("token={canary}"),
+                label: format!("password={canary}"),
+            },
+        );
+        let log = RunLog {
+            file: None,
+            run_id: format!("secret={canary}"),
+            nodes,
+        };
+        let event = PipelineEvent::StageFinished {
+            node_id: "source".to_string(),
+            kind: "view".to_string(),
+            status: "error".to_string(),
+            rows: None,
+            duration_ms: 1,
+            error: Some(format!("Authorization: Bearer {canary}")),
+            sql: Some(format!("SET token={canary}")),
+        };
+        let mut payload = Value::Object(log.event_fields(&event));
+        payload
+            .as_object_mut()
+            .unwrap()
+            .insert("run_id".into(), Value::String(log.run_id.clone()));
+        redact_json_strings(&mut payload);
+        let serialized = payload.to_string();
+
+        assert!(!serialized.contains(canary));
+        assert!(serialized.contains("Bearer ***"));
+        assert!(serialized.contains("token=***"));
+        assert!(serialized.contains("password=***"));
+        assert!(serialized.contains("secret=***"));
     }
 }
