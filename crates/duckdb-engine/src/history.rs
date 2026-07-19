@@ -47,9 +47,19 @@ impl RunRecord {
             rows,
             node_count: result.nodes.len(),
             trigger: trigger.to_string(),
-            error: result.error.as_deref().map(redact_untrusted_text),
+            error: result.error.clone(),
             category: result.category.clone(),
         }
+        .redact_diagnostics()
+    }
+
+    /// History is a persistence boundary. Redact again even when the caller did
+    /// not construct the record through `from_result`, and when old files are
+    /// loaded, so a raw provider diagnostic cannot survive through an alternate
+    /// entry point or a legacy record.
+    fn redact_diagnostics(mut self) -> Self {
+        self.error = self.error.as_deref().map(redact_untrusted_text);
+        self
     }
 }
 
@@ -69,7 +79,7 @@ pub fn append_run_record(
         std::fs::create_dir_all(parent)?;
     }
     let mut records = load_run_history(workspace, pipeline_id);
-    records.push(record);
+    records.push(record.redact_diagnostics());
     let start = records.len().saturating_sub(MAX_RECORDS);
     let trimmed = &records[start..];
     let json = serde_json::to_string_pretty(trimmed)
@@ -214,6 +224,37 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].category.as_deref(), Some("schema"));
     }
+
+    #[test]
+    fn direct_and_legacy_history_records_are_redacted_at_the_persistence_boundary() {
+        let ws = tempfile::tempdir().unwrap();
+        let canary = "TOP_SECRET_CANARY";
+        let mut direct = record("error", 10, 0);
+        direct.error = Some(format!("connection failed: password={canary}"));
+        append_run_record(ws.path(), "direct", direct).unwrap();
+        let direct_text = std::fs::read_to_string(history_file(ws.path(), "direct")).unwrap();
+        assert!(!direct_text.contains(canary));
+        assert!(direct_text.contains("password=***"));
+
+        std::fs::create_dir_all(ws.path().join("runs")).unwrap();
+        let legacy = vec![RunRecord {
+            at: Utc::now().to_rfc3339(),
+            status: "error".into(),
+            duration_ms: 1,
+            rows: 0,
+            node_count: 1,
+            trigger: "scheduled".into(),
+            error: Some(format!("Authorization: Bearer {canary}")),
+            category: Some("auth".into()),
+        }];
+        std::fs::write(
+            history_file(ws.path(), "legacy"),
+            serde_json::to_string(&legacy).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_run_history(ws.path(), "legacy");
+        assert_eq!(loaded[0].error.as_deref(), Some("Authorization: Bearer ***"));
+    }
 }
 
 /// Load the run history for a pipeline (oldest first). Returns an empty
@@ -223,5 +264,9 @@ pub fn load_run_history(workspace: &Path, pipeline_id: &str) -> Vec<RunRecord> {
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
-    serde_json::from_str(&content).unwrap_or_default()
+    serde_json::from_str::<Vec<RunRecord>>(&content)
+        .unwrap_or_default()
+        .into_iter()
+        .map(RunRecord::redact_diagnostics)
+        .collect()
 }
