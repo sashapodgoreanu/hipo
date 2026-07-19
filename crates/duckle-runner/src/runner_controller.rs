@@ -5,7 +5,9 @@
 //! before cutover must not provision warm workers while production selection is
 //! still on the compatibility route.
 
-use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
+use duckle_db_runner::cutover::{
+    configured_entry_point_class, packaged_cutover_gate, CutoverGate,
+};
 #[cfg(windows)]
 use duckle_db_runner::model::{
     RunCancellation, RunId, RunnerFailureReason, WorkerLease,
@@ -23,25 +25,34 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn OfficialRunnerController>>>> =
     OnceLock::new();
+static GATE_DIAGNOSTIC_REPORTED: OnceLock<()> = OnceLock::new();
 
 /// Build a headless engine using the single controller owned by this workspace
 /// process. Repeated manual, scheduled, and browser runs resolve the same
 /// controller rather than creating an entry-point-specific allocation path.
 ///
-/// The rejected production gate deliberately retains CLI compatibility until
-/// T062 evaluates approved CutoverEvidence. The controller and its worker pool
-/// are lazy, so merely constructing this engine never starts a sidecar process.
+/// The packaged evidence gate retains CLI compatibility until an approved
+/// manifest is embedded in the build. The controller and its worker pool are
+/// lazy, so merely constructing this engine never starts a sidecar process.
 pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
     let base = DuckdbEngine::new(duckdb);
     let with_controller = controller_for_workspace(workspace)
         .map(|controller| base.with_official_runner_controller(controller))
         .unwrap_or(base);
-    with_controller.with_runner_selection(
-        EntryPointClass::Production,
-        &CutoverGate::Rejected {
-            missing_or_failed: vec!["cutover_evidence".to_string()],
-        },
-    )
+    let gate = packaged_cutover_gate();
+    report_gate_once(&gate);
+    with_controller.with_runner_selection(configured_entry_point_class(), &gate)
+}
+
+fn report_gate_once(gate: &CutoverGate) {
+    if let CutoverGate::Rejected { missing_or_failed } = gate {
+        GATE_DIAGNOSTIC_REPORTED.get_or_init(|| {
+            eprintln!(
+                "duckle-runner: official runner gate rejected ({})",
+                missing_or_failed.join(",")
+            );
+        });
+    }
 }
 
 fn controller_for_workspace(workspace: &Path) -> Option<Arc<dyn OfficialRunnerController>> {
