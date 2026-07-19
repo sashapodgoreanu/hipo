@@ -8,23 +8,33 @@
 use duckle_db_runner::cutover::{configured_entry_point_class, packaged_cutover_gate};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
-#[cfg(windows)]
-use duckle_db_runner::resources::{HostResourceLimits, RunnerResourcesProfile};
+use duckle_db_runner::resources::{
+    resolve_workspace_runner_resources, HostResourceLimits, RunnerResourcesProfile,
+    WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
+};
 #[cfg(windows)]
 use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
 #[cfg(windows)]
 use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_duckdb_engine::{DuckdbEngine, OfficialRunnerController};
+#[cfg(windows)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn OfficialRunnerController>>>> =
+#[cfg(windows)]
+static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<LazyMcpController>>>> =
     OnceLock::new();
 
 pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
     let base = DuckdbEngine::new(duckdb);
-    let with_controller = controller_for_workspace(workspace)
+    let resources = workspace_resources(workspace);
+    if let Err(error) = &resources {
+        eprintln!("duckle-mcp: {error}");
+    }
+    let with_controller = resources
+        .ok()
+        .and_then(|resources| controller_for_workspace(workspace, &resources.requested))
         .map(|controller| base.with_official_runner_controller(controller))
         .unwrap_or(base);
     with_controller
@@ -35,7 +45,17 @@ pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbE
         .for_new_run()
 }
 
-fn controller_for_workspace(workspace: &Path) -> Option<Arc<dyn OfficialRunnerController>> {
+pub(crate) fn workspace_resources(
+    workspace: &Path,
+) -> Result<WorkspaceRunnerResources, WorkspaceRunnerResourcesError> {
+    resolve_workspace_runner_resources(workspace, HostResourceLimits::default())
+}
+
+#[cfg(windows)]
+fn controller_for_workspace(
+    workspace: &Path,
+    profile: &RunnerResourcesProfile,
+) -> Option<Arc<dyn OfficialRunnerController>> {
     let sidecar_path = resolve_sidecar_path()?;
     let workspace_key = workspace
         .canonicalize()
@@ -48,19 +68,32 @@ fn controller_for_workspace(workspace: &Path) -> Option<Arc<dyn OfficialRunnerCo
         .get(&workspace_key)
         .cloned()
     {
+        if existing.apply_requested_profile(profile.clone()).is_err() {
+            return None;
+        }
         return Some(existing);
     }
 
-    let controller = lazy_controller(sidecar_path)?;
+    let controller = Arc::new(LazyMcpController::new(sidecar_path, profile.clone()));
     let mut registry = controllers
         .lock()
         .expect("MCP controller registry poisoned");
-    Some(
-        registry
-            .entry(workspace_key)
-            .or_insert_with(|| controller.clone())
-            .clone(),
-    )
+    let controller = registry
+        .entry(workspace_key)
+        .or_insert_with(|| controller.clone())
+        .clone();
+    if controller.apply_requested_profile(profile.clone()).is_err() {
+        return None;
+    }
+    Some(controller)
+}
+
+#[cfg(not(windows))]
+fn controller_for_workspace(
+    _workspace: &Path,
+    _profile: &RunnerResourcesProfile,
+) -> Option<Arc<dyn OfficialRunnerController>> {
+    None
 }
 
 fn sidecar_name() -> &'static str {
@@ -100,26 +133,22 @@ fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn lazy_controller(path: PathBuf) -> Option<Arc<dyn OfficialRunnerController>> {
-    Some(Arc::new(LazyMcpController {
-        sidecar_path: path,
-        pool: OnceLock::new(),
-    }))
-}
-
-#[cfg(not(windows))]
-fn lazy_controller(_path: PathBuf) -> Option<Arc<dyn OfficialRunnerController>> {
-    None
-}
-
-#[cfg(windows)]
 struct LazyMcpController {
     sidecar_path: PathBuf,
+    requested_profile: Mutex<RunnerResourcesProfile>,
     pool: OnceLock<Result<Arc<WorkerPoolControl>, RunnerFailureReason>>,
 }
 
 #[cfg(windows)]
 impl LazyMcpController {
+    fn new(sidecar_path: PathBuf, requested_profile: RunnerResourcesProfile) -> Self {
+        Self {
+            sidecar_path,
+            requested_profile: Mutex::new(requested_profile),
+            pool: OnceLock::new(),
+        }
+    }
+
     fn pool(&self) -> Result<&Arc<WorkerPoolControl>, RunnerFailureReason> {
         match self.pool.get_or_init(|| self.create_pool()) {
             Ok(pool) => Ok(pool),
@@ -131,18 +160,44 @@ impl LazyMcpController {
         use duckle_db_runner::local_process_provider::LocalProcessProvider;
         use duckle_db_runner::local_quack_sidecar::WindowsLocalSidecarLauncher;
 
+        let profile = self
+            .requested_profile
+            .lock()
+            .map_err(|_| RunnerFailureReason::InvalidProfile)?
+            .clone();
         let launcher = WindowsLocalSidecarLauncher::new(self.sidecar_path.clone())?;
         let provider = Arc::new(LocalProcessProvider::new(
             Arc::new(launcher),
             HostResourceLimits::default(),
         ));
-        WorkerPoolControl::new(
-            provider,
-            RunnerResourcesProfile::default(),
-            now_millis(),
-        )
-        .map(Arc::new)
-        .map_err(pool_failure)
+        WorkerPoolControl::new(provider, profile, now_millis())
+            .map(Arc::new)
+            .map_err(pool_failure)
+    }
+
+    fn apply_requested_profile(
+        &self,
+        profile: RunnerResourcesProfile,
+    ) -> Result<(), RunnerFailureReason> {
+        profile
+            .validate()
+            .map_err(|_| RunnerFailureReason::InvalidProfile)?;
+        let mut requested = self
+            .requested_profile
+            .lock()
+            .map_err(|_| RunnerFailureReason::InvalidProfile)?;
+        if *requested == profile {
+            return Ok(());
+        }
+        if profile.version <= requested.version {
+            return Err(RunnerFailureReason::InvalidProfile);
+        }
+        if let Some(Ok(pool)) = self.pool.get() {
+            pool.set_desired_profile(profile.clone(), now_millis())
+                .map_err(pool_failure)?;
+        }
+        *requested = profile;
+        Ok(())
     }
 }
 
@@ -211,11 +266,47 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duckle_db_runner::resources::{AutomaticOrU16, ResourceLimit};
     use duckle_duckdb_engine::ExecutionRoute;
+
+    fn temporary_workspace() -> PathBuf {
+        let unique = format!(
+            "duckle-mcp-profile-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let workspace = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(workspace.join(".duckle")).unwrap();
+        workspace
+    }
 
     #[test]
     fn mcp_production_route_stays_compatible_before_cutover() {
         let engine = engine_for_workspace(PathBuf::from("duckdb"), Path::new("."));
         assert_eq!(engine.execution_route(), ExecutionRoute::CliCompatibility);
+    }
+
+    #[test]
+    fn mcp_resolves_the_complete_workspace_profile() {
+        let workspace = temporary_workspace();
+        std::fs::write(
+            workspace.join(".duckle").join("settings.json"),
+            r#"{"runner_resources":{"version":7,"memory":{"mode":"bytes","value":268435456},"cpuThreads":{"mode":"value","value":3},"spill":{"mode":"bytes","value":536870912},"quackParallelism":{"mode":"value","value":4},"baseCapacity":5}}"#,
+        )
+        .unwrap();
+
+        let status = workspace_resources(&workspace).unwrap();
+        assert_eq!(status.requested.version, 7);
+        assert_eq!(status.requested.memory, ResourceLimit::Bytes(268435456));
+        assert_eq!(status.requested.cpu_threads, AutomaticOrU16::Value(3));
+        assert_eq!(status.effective.requested_version, 7);
+        assert_eq!(status.effective.effective_version, 7);
+        assert_eq!(status.effective.quack_parallelism, 4);
+        assert_eq!(status.effective.base_capacity, 5);
+
+        let _ = std::fs::remove_dir_all(workspace);
     }
 }
