@@ -5,6 +5,7 @@
 //! become ready. No value in this module is a pool budget.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use thiserror::Error;
 
 /// A byte limit can be inherited from the host, expressed as a percentage of
@@ -216,6 +217,75 @@ impl ResolvedRunnerResources {
     }
 }
 
+/// The non-sensitive requested/effective view shared by every entry point.
+/// Keeping this DTO in the runner crate prevents desktop, headless, scheduler,
+/// and MCP from inventing different interpretations of the same settings file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRunnerResources {
+    pub requested: RunnerResourcesProfile,
+    pub effective: ResolvedRunnerResources,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct WorkspaceSettingsResources {
+    memory_limit_mb: Option<u32>,
+    runner_resources: Option<RunnerResourcesProfile>,
+}
+
+/// Load the complete requested profile from `<workspace>/.duckle/settings.json`.
+/// A missing file means the documented defaults. A present but unreadable,
+/// malformed, or invalid profile fails closed with a stable non-sensitive code.
+pub fn load_workspace_runner_resources(
+    workspace: &Path,
+) -> Result<RunnerResourcesProfile, WorkspaceRunnerResourcesError> {
+    let path = workspace.join(".duckle").join("settings.json");
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RunnerResourcesProfile::default())
+        }
+        Err(_) => return Err(WorkspaceRunnerResourcesError::ReadFailed),
+    };
+    let settings: WorkspaceSettingsResources =
+        serde_json::from_slice(&bytes).map_err(|_| WorkspaceRunnerResourcesError::ParseFailed)?;
+    let profile = settings.runner_resources.unwrap_or_else(|| {
+        RunnerResourcesProfile::from_legacy(LegacyRunnerResources {
+            memory_limit_mb: settings.memory_limit_mb,
+        })
+    });
+    profile
+        .validate()
+        .map_err(WorkspaceRunnerResourcesError::InvalidProfile)?;
+    Ok(profile)
+}
+
+/// Resolve the same requested profile every entry point passes to its provider.
+pub fn resolve_workspace_runner_resources(
+    workspace: &Path,
+    host: HostResourceLimits,
+) -> Result<WorkspaceRunnerResources, WorkspaceRunnerResourcesError> {
+    let requested = load_workspace_runner_resources(workspace)?;
+    let effective = requested
+        .resolve(host)
+        .map_err(WorkspaceRunnerResourcesError::InvalidProfile)?;
+    Ok(WorkspaceRunnerResources {
+        requested,
+        effective,
+    })
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum WorkspaceRunnerResourcesError {
+    #[error("runner_resources_read_failed")]
+    ReadFailed,
+    #[error("runner_resources_parse_failed")]
+    ParseFailed,
+    #[error("invalid_runner_resources")]
+    InvalidProfile(#[source] ResourceProfileError),
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ResourceProfileError {
     #[error("resource profile version must be positive")]
@@ -416,6 +486,59 @@ mod tests {
         assert_eq!(
             profile.resolve(HostResourceLimits::default()),
             Err(ResourceProfileError::MissingCapacityForPercent)
+        );
+    }
+
+    #[test]
+    fn workspace_loader_migrates_legacy_and_resolves_one_version() {
+        let workspace = tempfile::tempdir().unwrap();
+        let settings_dir = workspace.path().join(".duckle");
+        std::fs::create_dir_all(&settings_dir).unwrap();
+        std::fs::write(
+            settings_dir.join("settings.json"),
+            r#"{"memory_limit_mb":256}"#,
+        )
+        .unwrap();
+
+        let status = resolve_workspace_runner_resources(
+            workspace.path(),
+            HostResourceLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            status.requested.memory,
+            ResourceLimit::Bytes(256 * 1024 * 1024)
+        );
+        assert_eq!(status.requested.version, status.effective.requested_version);
+        assert_eq!(
+            status.effective.requested_version,
+            status.effective.effective_version
+        );
+    }
+
+    #[test]
+    fn workspace_loader_rejects_present_invalid_settings() {
+        let workspace = tempfile::tempdir().unwrap();
+        let settings_dir = workspace.path().join(".duckle");
+        std::fs::create_dir_all(&settings_dir).unwrap();
+        std::fs::write(
+            settings_dir.join("settings.json"),
+            r#"{"runner_resources":{"version":0}}"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            load_workspace_runner_resources(workspace.path()),
+            Err(WorkspaceRunnerResourcesError::InvalidProfile(_))
+        ));
+    }
+
+    #[test]
+    fn missing_workspace_settings_use_the_complete_default_profile() {
+        let workspace = tempfile::tempdir().unwrap();
+        assert_eq!(
+            load_workspace_runner_resources(workspace.path()).unwrap(),
+            RunnerResourcesProfile::default()
         );
     }
 }
