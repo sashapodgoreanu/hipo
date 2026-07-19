@@ -1,3 +1,81 @@
+use sha2::{Digest, Sha256};
+
+const RUNNER_DUCKDB_VERSION: &str = "1.5.4";
+const QUACK_VERSION: &str = "1.5.4";
+const QUACK_LICENSE: &str = "MIT";
+const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
+const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
+const QUACK_WINDOWS_AMD64_SHA256: &str =
+    "52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895";
+const QUACK_MACOS_AMD64_SHA256: &str =
+    "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
+const QUACK_LINUX_AMD64_SHA256: &str =
+    "decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e";
+
+fn quack_sha256_for(target_os: &str, target_arch: &str) -> Option<&'static str> {
+    match (target_os, target_arch) {
+        ("windows", "x86_64") => Some(QUACK_WINDOWS_AMD64_SHA256),
+        ("macos", "x86_64") => Some(QUACK_MACOS_AMD64_SHA256),
+        ("linux", "x86_64") => Some(QUACK_LINUX_AMD64_SHA256),
+        _ => None,
+    }
+}
+
+fn verify_staged_quack_extension(
+    extension: &std::path::Path,
+    target_os: &str,
+    target_arch: &str,
+) -> Result<&'static str, String> {
+    if RUNNER_DUCKDB_VERSION != QUACK_VERSION {
+        return Err(format!(
+            "official runner DuckDB/Quack version mismatch: {} vs {}",
+            RUNNER_DUCKDB_VERSION, QUACK_VERSION
+        ));
+    }
+    let expected = quack_sha256_for(target_os, target_arch).ok_or_else(|| {
+        format!(
+            "no verified Quack {} bundle for {}-{}",
+            QUACK_VERSION, target_os, target_arch
+        )
+    })?;
+    let bytes = std::fs::read(extension)
+        .map_err(|error| format!("read staged {}: {error}", extension.display()))?;
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if actual != expected {
+        return Err(format!(
+            "staged Quack checksum mismatch for {}-{}: expected {}, got {}",
+            target_os, target_arch, expected, actual
+        ));
+    }
+    Ok(expected)
+}
+
+fn write_runner_pin_manifest(out_dir: &std::path::Path, sha256: &str) -> std::path::PathBuf {
+    let manifest = format!(
+        concat!(
+            "{{\n",
+            "  \"schemaVersion\": 1,\n",
+            "  \"duckdbVersion\": \"{}\",\n",
+            "  \"quackVersion\": \"{}\",\n",
+            "  \"quackSha256\": \"{}\",\n",
+            "  \"license\": \"{}\",\n",
+            "  \"provenance\": \"{}\",\n",
+            "  \"extensionFile\": \"{}\"\n",
+            "}}\n"
+        ),
+        RUNNER_DUCKDB_VERSION,
+        QUACK_VERSION,
+        sha256,
+        QUACK_LICENSE,
+        QUACK_PROVENANCE,
+        QUACK_EXTENSION_FILE
+    );
+    let path = out_dir.join("official-runner-pin.json");
+    std::fs::write(&path, manifest)
+        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    path
+}
+
 fn main() {
     // Stamp the build time (unix seconds) into the binary so the running app
     // can compare itself to the latest GitHub release asset's upload time and
@@ -131,18 +209,23 @@ fn embed_mcp() {
 }
 
 /// Locate the trusted Quack database sidecar. It is optional while the
-/// compatibility route remains the production default, but release builds
-/// stage it alongside the desktop app before the official runner is enabled.
+/// compatibility route remains the production default, but any staged sidecar
+/// is accepted only with the offline, checksum-verified Quack extension from
+/// the immutable DuckDB/Quack pin above.
 fn embed_db_sidecar() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let name = if target_os == "windows" {
         "duckle-db-sidecar.exe"
     } else {
         "duckle-db-sidecar"
     };
     let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
+    let staged_extension = std::path::Path::new(&manifest_dir)
+        .join("bin")
+        .join(QUACK_EXTENSION_FILE);
     let profile_dir = std::path::Path::new(&out_dir)
         .ancestors()
         .nth(3)
@@ -152,31 +235,56 @@ fn embed_db_sidecar() {
     } else {
         profile_dir.filter(|path| path.exists())
     };
-    let destination = std::path::Path::new(&out_dir).join("embedded-db-sidecar.bin");
+    let out_dir = std::path::Path::new(&out_dir);
+    let destination = out_dir.join("embedded-db-sidecar.bin");
+    let pin_manifest = out_dir.join("official-runner-pin.json");
     match source {
         Some(source) => {
+            if !staged_extension.exists() {
+                panic!(
+                    "duckle-db-sidecar is staged but apps/desktop/bin/{} is missing; the official runner pair must be staged offline and atomically",
+                    QUACK_EXTENSION_FILE
+                );
+            }
+            let checksum = verify_staged_quack_extension(
+                &staged_extension,
+                &target_os,
+                &target_arch,
+            )
+            .unwrap_or_else(|error| panic!("official runner staging rejected: {error}"));
             compress_to(&source, &destination);
+            let manifest = write_runner_pin_manifest(out_dir, checksum);
+            println!("cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}", manifest.display());
             println!("cargo:rerun-if-changed={}", source.display());
+            println!("cargo:rerun-if-changed={}", staged_extension.display());
         }
         None => {
             std::fs::write(&destination, [])
                 .unwrap_or_else(|error| panic!("write empty embedded-db-sidecar: {error}"));
+            std::fs::write(&pin_manifest, [])
+                .unwrap_or_else(|error| panic!("write empty official-runner pin: {error}"));
+            println!("cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}", pin_manifest.display());
             println!(
-                "cargo:warning=duckle-db-sidecar not staged (apps/desktop/bin/{name}); official runner remains unavailable until CI stages it"
+                "cargo:warning=duckle-db-sidecar not staged (apps/desktop/bin/{name}); official runner remains unavailable until CI stages the verified sidecar/Quack pair"
             );
         }
     }
     println!("cargo:rustc-env=DUCKLE_EMBEDDED_DB_SIDECAR={}", destination.display());
+    println!("cargo:rustc-env=DUCKLE_RUNNER_DUCKDB_VERSION={RUNNER_DUCKDB_VERSION}");
+    println!("cargo:rustc-env=DUCKLE_QUACK_VERSION={QUACK_VERSION}");
+    println!("cargo:rustc-env=DUCKLE_QUACK_LICENSE={QUACK_LICENSE}");
+    println!("cargo:rustc-env=DUCKLE_QUACK_PROVENANCE={QUACK_PROVENANCE}");
     println!(
         "cargo:rerun-if-changed={}",
         std::path::Path::new(&manifest_dir).join("bin").join(name).display()
     );
+    println!("cargo:rerun-if-changed={}", staged_extension.display());
 }
 
 /// Locate the prebuilt STATIC Linux duckle-runner and expose its bytes to
 /// lib.rs via include_bytes!(env!("DUCKLE_EMBEDDED_RUNNER_LINUX")). This is the
-/// stub the desktop prepends when "Build Pipeline" targets Linux from a
-/// non-Linux host (cross-OS build). It is produced by
+/// stub the desktop prepends when "Build Pipeline" targets Linux from a non-Linux
+/// host (cross-OS build). It is produced by
 /// scripts/build-runner-linux.sh (Docker musl build) and staged, gitignored,
 /// at apps/desktop/bin/duckle-runner-linux-x64.
 ///
