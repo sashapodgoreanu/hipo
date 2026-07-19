@@ -8,6 +8,7 @@ members = [
     "crates/transform-engine",
     "crates/stream-engine",
     "crates/duckdb-engine",
+    "crates/duckle-db-runner",
     "crates/duckle-runner",
     "crates/duckle-mcp",
     "crates/duckle-lance",
@@ -26,7 +27,7 @@ license = "MIT OR Apache-2.0"
 authors = ["Sourav Roy"]
 repository = "https://github.com/ducklelabs/duckle"
 homepage = "https://github.com/ducklelabs/duckle"
-rust-version = "1.80"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # Internal crates
@@ -36,6 +37,7 @@ duckle-workflow-engine = { path = "crates/workflow-engine", version = "0.0.1" }
 duckle-transform-engine = { path = "crates/transform-engine", version = "0.0.1" }
 duckle-stream-engine = { path = "crates/stream-engine", version = "0.0.1" }
 duckle-duckdb-engine = { path = "crates/duckdb-engine", version = "0.0.1" }
+duckle-db-runner = { path = "crates/duckle-db-runner", version = "0.0.1" }
 duckle-slothdb-engine = { path = "crates/slothdb-engine", version = "0.0.1" }
 duckle-execution-core = { path = "crates/execution-core", version = "0.0.1" }
 duckle-plugin-sdk = { path = "crates/plugin-sdk", version = "0.0.1" }

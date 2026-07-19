@@ -323,6 +323,24 @@ fn run() -> Result<bool, String> {
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", &log_dir);
 
+    // Sweep orphaned run artifacts from a previous crash/kill. Best-effort.
+    let run_dir = workspace.join(".duckle").join("runs");
+    if run_dir.exists() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if let Ok(report) = duckle_db_runner::process_cleanup::sweep_run_artifacts(
+            &run_dir,
+            now,
+            std::time::Duration::from_secs(60),
+        ) {
+            if report.removed > 0 {
+                eprintln!("duckle-runner: swept {} orphaned run artifacts", report.removed);
+            }
+        }
+    }
+
     let duckdb = resolve_duckdb(args.duckdb)?;
     let name = args.name.clone().unwrap_or_else(|| {
         pipeline
@@ -338,7 +356,7 @@ fn run() -> Result<bool, String> {
     println!("status   : {}", result.status);
     println!("duration : {} ms", result.duration_ms);
     if let Some(err) = &result.error {
-        println!("error    : {err}");
+        println!("error    : {}", duckle_duckdb_engine::redact_untrusted_text(err));
     }
     for (id, st) in &result.nodes {
         let rows = st.rows.map(|r| format!(" ({r} rows)")).unwrap_or_default();
@@ -621,7 +639,7 @@ fn run_artifact(payload: Vec<u8>) -> ExitCode {
     println!("status   : {}", result.status);
     println!("duration : {} ms", result.duration_ms);
     if let Some(err) = &result.error {
-        println!("error    : {err}");
+        println!("error    : {}", duckle_duckdb_engine::redact_untrusted_text(err));
     }
     for (id, st) in &result.nodes {
         let rows = st.rows.map(|r| format!(" ({r} rows)")).unwrap_or_default();

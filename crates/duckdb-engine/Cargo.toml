@@ -15,6 +15,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 duckle-metadata = { workspace = true }
 duckle-plugin-sdk = { workspace = true }
+duckle-db-runner = { workspace = true }
 # Blocking HTTP client for SaaS connectors (snk.webhook, snk.rest,
 # src.rest, vector-DB HTTP APIs). ureq is ~20kb with minimal deps
 # vs ~100kb for reqwest + tokio, and it matches the per-stage CLI

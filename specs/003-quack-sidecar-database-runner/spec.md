@@ -21,7 +21,7 @@ percorsi per-stage per runtime, controlli e run parziali. Una parte delle
 pipeline Query Source usa inoltre `AffinitySession`, un worker CLI persistente
 e seriale. Desktop, runner headless, scheduler, MCP, build artifact, strumenti
 di inspect/drift/branch e test conoscono ancora il binario CLI o la sua
-configurazione. Lo spike isolato in `spikes/quack-sidecar` ha dimostrato su
+configurazione. Lo spike isolato in `spikes/quack-sidecar-phase0-spike` ha dimostrato su
 Windows x64 il confine parent/client Quack e sidecar/server, lo spill, la
 concorrenza stateless, il kill e il prewarm; non appartiene al workspace
 produttivo, non soddisfa il bootstrap di sicurezza definitivo e non è il runner
@@ -505,10 +505,10 @@ valore richiesto/effettivo.
   la migrazione; dopo i gate di parità DEVONO essere rimossi download, setup,
   binary staging, variabili dedicate, invocazioni, codice, test e documentazione
   che la presentano come requisito.
-- **FR-039**: Prima dell'integrazione produttiva, `spikes/quack-sidecar` DEVE
-  essere rinominato `spikes/quack-sidecar-phase0-spike`, mantenuto isolato dal
-  workspace e marcato inequivocabilmente come PoC non distribuibile e non
-  utilizzabile come fallback.
+- **FR-039**: Prima dell'integrazione produttiva,
+  `spikes/quack-sidecar-phase0-spike` DEVE restare isolato dal workspace e
+  marcato inequivocabilmente come PoC non distribuibile e non utilizzabile come
+  fallback.
 - **FR-040**: Nello stesso cutover che rende ufficiale il nuovo runner e rimuove
   la CLI, `spikes/quack-sidecar-phase0-spike` DEVE essere eliminato insieme a
   manifest, lockfile, sorgenti, comandi e riferimenti operativi; ADR e report

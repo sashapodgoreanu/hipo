@@ -32,7 +32,7 @@ mod secrets;
 mod self_update;
 mod update_check;
 mod workspace_git;
-use engine_manager::{EngineStatus, InstallProgress};
+use engine_manager::{DesktopRunnerController, EngineStatus, InstallProgress, RunToken};
 use llama_chat::{ChatEvent, ChatMessage};
 
 /// The headless duckle-runner, embedded at compile time (apps/desktop/build.rs
@@ -60,6 +60,10 @@ const EMBEDDED_MCP: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_MCP"));
 /// src.lancedb / snk.lancedb work out of the box; absent -> the engine falls
 /// back to a duckle-lance on PATH.
 const EMBEDDED_LANCE: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_LANCE"));
+
+/// Trusted Quack sidecar staged with the desktop package. It stays optional
+/// until the signed runner cutover selects the official route.
+const EMBEDDED_DB_SIDECAR: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_DB_SIDECAR"));
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -114,7 +118,42 @@ pub fn run() {
                 let bin = resolve_duckdb_bin(&dir);
                 std::env::set_var("DUCKLE_DUCKDB_BIN", &bin);
                 let _ = DUCKDB_BIN.set(bin);
+                let sidecar_path = if !EMBEDDED_DB_SIDECAR.is_empty() {
+                    match stage_db_sidecar(&dir) {
+                        Ok(path) => Some(path),
+                        Err(error) => {
+                            tracing::warn!("database sidecar staging failed: {error}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let _ = RUNNER_CONTROLLER
+                    .set(DesktopRunnerController::new(sidecar_path));
 
+                // Sweep orphaned run artifacts from a previous crash/kill.
+                // Best-effort: failure only logs a warning.
+                let run_dir = dir.join("engines").join("db-sidecar").join("runs");
+                if run_dir.exists() {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    match duckle_db_runner::process_cleanup::sweep_run_artifacts(
+                        &run_dir,
+                        now,
+                        Duration::from_secs(60),
+                    ) {
+                        Ok(report) if report.removed > 0 => {
+                            tracing::info!("swept {} orphaned run artifacts", report.removed);
+                        }
+                        Err(error) => {
+                            tracing::warn!("run artifact sweep failed: {error}");
+                        }
+                        _ => {}
+                    }
+                }
             }
             // Stage the bundled LanceDB sidecar (if this build carries one) and
             // point the engine at it, so src.lancedb / snk.lancedb work without a
@@ -203,6 +242,8 @@ pub fn run() {
             app_settings::settings_set_ai,
             app_settings::settings_get_memory_limit,
             app_settings::settings_set_memory_limit,
+            app_settings::settings_get_runner_resources,
+            app_settings::settings_set_runner_resources,
             app_settings::settings_get_allow_unsigned,
             app_settings::settings_set_allow_unsigned,
             app_settings::settings_get_context_file,
@@ -337,11 +378,17 @@ pub struct InspectionPayload {
 static DUCKDB_BIN: OnceLock<PathBuf> = OnceLock::new();
 static DUCKDB_ENGINE: OnceLock<DuckdbEngine> = OnceLock::new();
 
-/// The engine driving the current interactive run, so `cancel_pipeline` can
-/// stop THAT run specifically. Each run uses a fresh per-run cancel flag (via
-/// `for_new_run`), so cancelling the interactive run never touches concurrent
-/// scheduler runs, and a finished run can't be cancelled by a stale request.
-static CURRENT_RUN: std::sync::Mutex<Option<DuckdbEngine>> = std::sync::Mutex::new(None);
+/// Per-workspace runner controller. Created once at startup; manages
+/// WorkerPoolControl instances keyed by workspace path.
+static RUNNER_CONTROLLER: OnceLock<DesktopRunnerController> = OnceLock::new();
+
+/// Active interactive run sessions. Each run_pipeline / run_pipeline_partial
+/// call registers a cancellation handle keyed by a run-local counter. The
+/// cancel_pipeline command cancels ALL active interactive runs; concurrent
+/// scheduler runs are independent and unaffected.
+static ACTIVE_RUNS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, engine_manager::RunCancellationHandle>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static RUN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Resolve the DuckDB CLI the desktop should drive. An externally-set
 /// `DUCKLE_DUCKDB_BIN` takes precedence, so a user can point Duckle at a
@@ -372,6 +419,27 @@ fn engine() -> Result<DuckdbEngine, String> {
     Ok(DUCKDB_ENGINE
         .get_or_init(|| DuckdbEngine::new(bin))
         .clone())
+}
+
+/// Create a per-run engine with workspace-scoped controller injection.
+/// The returned `RunToken` owns the cancellation flag for this run; the
+/// caller stores its handle in `CURRENT_RUN` so `cancel_pipeline` can
+/// reach it.
+fn engine_for_run(workspace_path: Option<&str>) -> Result<(DuckdbEngine, RunToken), String> {
+    let mut eng = engine()?.for_new_run();
+    let token = RunToken::new();
+
+    // Inject the per-workspace controller and runner selection so the engine
+    // can route through the official runner when the cutover gate allows it.
+    if let (Some(ws), Some(ctrl)) = (workspace_path, RUNNER_CONTROLLER.get()) {
+        let profile = app_settings::load_runner_resources(std::path::Path::new(ws));
+        if let Some(pool) = ctrl.controller_for_workspace(std::path::Path::new(ws), &profile) {
+            eng = eng.with_official_runner_controller(pool as _);
+        }
+        eng = eng.with_runner_selection(ctrl.entry_point_class(), &ctrl.cutover_gate());
+    }
+
+    Ok((eng, token))
 }
 
 /// Inspect a source's schema. The frontend hands us a format string
@@ -445,8 +513,9 @@ async fn run_pipeline(
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
 ) -> Result<RunResult, String> {
-    let engine = engine()?.for_new_run();
-    *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
+    let (engine, token) = engine_for_run(workspace_path.as_deref())?;
+    let run_id = RUN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ACTIVE_RUNS.lock().unwrap_or_else(|p| p.into_inner()).insert(run_id, token.handle);
     // Resolve ${ENV:NAME} from the OS environment before running, so canvas runs
     // see process env vars like the headless runner does (issue #137). The
     // frontend already resolved ${workspace}/${context}/date builtins.
@@ -462,7 +531,7 @@ async fn run_pipeline(
         })
     })
     .await;
-    *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    ACTIVE_RUNS.lock().unwrap_or_else(|p| p.into_inner()).remove(&run_id);
     let result = joined.map_err(|e| e.to_string())?;
     record_history(&pipeline_id, &workspace_path, &result, "manual");
     Ok(result)
@@ -517,8 +586,9 @@ async fn run_pipeline_partial(
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
 ) -> Result<RunResult, String> {
-    let engine = engine()?.for_new_run();
-    *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
+    let (engine, token) = engine_for_run(workspace_path.as_deref())?;
+    let run_id = RUN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ACTIVE_RUNS.lock().unwrap_or_else(|p| p.into_inner()).insert(run_id, token.handle);
     // Resolve ${ENV:NAME} from the OS environment before running (issue #137);
     // saved Salesforce connections resolve first (#166 stage 2).
     let mut pipeline = pipeline;
@@ -537,7 +607,7 @@ async fn run_pipeline_partial(
         )
     })
     .await;
-    *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    ACTIVE_RUNS.lock().unwrap_or_else(|p| p.into_inner()).remove(&run_id);
     let result = joined.map_err(|e| e.to_string())?;
     record_history(&pipeline_id, &workspace_path, &result, "partial");
     Ok(result)
@@ -619,10 +689,10 @@ fn watermark_clear(
 /// skipped.
 #[tauri::command]
 fn cancel_pipeline() -> Result<(), String> {
-    // Cancel the active interactive run's own flag (not a shared global), so we
-    // don't also stop concurrent scheduler runs.
-    if let Some(e) = CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
-        e.request_cancel();
+    // Cancel ALL active interactive runs. Each run owns an independent flag,
+    // so concurrent scheduler runs (which don't register here) are unaffected.
+    for handle in ACTIVE_RUNS.lock().unwrap_or_else(|p| p.into_inner()).values() {
+        handle.cancel();
     }
     Ok(())
 }
@@ -1400,6 +1470,21 @@ fn stage_mcp(app_data: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
     let runner = dir.join(format!("duckle-runner{suffix}"));
     write_embedded_if_changed(&runner, EMBEDDED_RUNNER)?;
     Ok((mcp, runner))
+}
+
+/// Stage the production database sidecar into stable app data. The caller
+/// keeps the returned path private and passes it only to the local-process
+/// launcher; it is never sent over IPC or exposed as a workspace setting.
+fn stage_db_sidecar(app_data: &std::path::Path) -> Result<PathBuf, String> {
+    if EMBEDDED_DB_SIDECAR.is_empty() {
+        return Err("This build does not bundle the database sidecar".to_string());
+    }
+    let dir = app_data.join("engines").join("db-sidecar");
+    std::fs::create_dir_all(&dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let sidecar = dir.join(format!("duckle-db-sidecar{suffix}"));
+    write_embedded_if_changed(&sidecar, EMBEDDED_DB_SIDECAR)?;
+    Ok(sidecar)
 }
 
 /// Double-quote a token for a copyable shell command line (paths have spaces).

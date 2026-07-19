@@ -30,11 +30,11 @@ requires network access once. Offline packaging of the pinned extension is a
 separate release gate and is intentionally not solved by this PoC.
 
 ```powershell
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- smoke
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- pool-smoke
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- clone-attach-smoke
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- ready-worker-smoke
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- benchmark
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- pool-smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- clone-attach-smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- ready-worker-smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- benchmark
 ```
 
 The clone/attachment probe demonstrates that clones using one shared alias are
@@ -63,8 +63,8 @@ Manual use:
 
 ```powershell
 $env:DUCKLE_QUACK_SPIKE_BOOTSTRAP_TOKEN = '<64 lowercase hex characters>'
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- server --ready C:\temp\quack-ready.json --port 19494
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- query --ready C:\temp\quack-ready.json --sql "SELECT 42"
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- server --ready C:\temp\quack-ready.json --port 19494
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- query --ready C:\temp\quack-ready.json --sql "SELECT 42"
 ```
 
 The ready file is token-free bootstrap metadata; ordinary SQL requests and

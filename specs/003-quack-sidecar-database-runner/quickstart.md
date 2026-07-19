@@ -17,6 +17,13 @@
 11. Benchmark: congelare manifest con owner, approver, hardware, build,
     dataset/seed, warm-up, ripetizioni e soglie prima di raccogliere baseline.
 
+Il benchmark e la comparazione CLI/sidecar non sono parte dell'implementazione
+né della CI della feature. Dopo il completamento integrale della feature,
+l'owner esegue manualmente le prove con il precedente compilato CLI e il
+sidecar ufficiale, quindi registra manifest e risultati come evidenza di
+cutover. Fino a quel momento il gate prestazionale resta non approvato e il
+percorso di compatibilità rimane attivo.
+
 ## Commands
 
 ```powershell

@@ -10,7 +10,7 @@ Duckle sostituisce il backend DuckDB CLI con un runner Quack ufficiale. Ogni pip
 
 | Concern | Duckle baseline | Feature decision |
 |---|---|---|
-| Languages | Rust 2021; TypeScript/React | Nuovo crate ufficiale duckle-db-runner; alzare MSRV workspace a Rust 1.85.1, richiesto dalla coppia DuckDB/Quack validata dallo spike. |
+| Languages | Rust 2021; TypeScript/React | Nuovo crate ufficiale duckle-db-runner; alzare MSRV workspace a Rust 1.88. La coppia DuckDB/Quack richiede 1.85.1, ma l'attuale lockfile completo desktop richiede 1.88. |
 | Desktop/web | Tauri 2 e runner web | Controller long-lived per istanza/workspace; DTO IPC additivi per profilo e diagnostica. |
 | Engine | DuckDB CLI e RuntimeSpec | RunDatabase/RunSession Quack dietro l'esecutore; Stage e RuntimeSpec restano invariati. |
 | Storage | Workspace JSON e file run | RunnerResourcesProfile compatibile in settings; picco/target oltre base effimeri. |
@@ -109,6 +109,6 @@ Comandi: cargo fmt --all --check; cargo clippy --workspace --all-targets --exclu
 
 ## Dependency and ADR Decision
 
-**New dependency/plugin/extension/sidecar?** Sì: duckle-db-runner, DuckDB embedded e Quack. Risolve isolamento per-run, cleanup e catalogo condiviso. Alternative scartate: CLI affinity, DuckDB nel main, REST/JSON e Parquet-only. Costi: MSRV 1.85.1, binario più grande, pin/package offline e test tre OS.
+**New dependency/plugin/extension/sidecar?** Sì: duckle-db-runner, DuckDB embedded e Quack. Risolve isolamento per-run, cleanup e catalogo condiviso. Alternative scartate: CLI affinity, DuckDB nel main, REST/JSON e Parquet-only. Costi: MSRV 1.88 (per lockfile workspace), binario più grande, pin/package offline e test tre OS.
 
 **ADR needed?** Sì: aggiornare [ADR Quack](../../docs/architecture/adr-quack-sidecar-runner.md) e intent 003 prima dell'implementazione; l'ADR affinity è superseduto al cutover.

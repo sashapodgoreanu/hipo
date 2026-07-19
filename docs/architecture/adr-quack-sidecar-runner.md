@@ -9,6 +9,32 @@ not for production replacement of the CLI. See the
 This ADR is not accepted until the spike and benchmark gates below pass. Until
 then, the DuckDB CLI remains the production backend.
 
+## Feature 003 amendment — authoritative Phase 1 policy
+
+The following rules supersede every non-historical reference in this ADR to a
+bounded worker pool, hard worker maximum, admission queue, backpressure,
+70-percent threshold, or incremental growth step. Historical Phase 0 evidence
+is retained for context only and is not an implementation contract.
+
+- Every pipeline run calls `WorkerPoolControl` exactly once. The controller
+  atomically leases a `ready` warm worker or immediately provisions and assigns
+  a dedicated single-use on-demand worker. Neither a run nor an orchestrator
+  may select or spawn a worker directly.
+- There is no worker/pipeline budget, hard maximum, admission queue, or
+  backpressure. A run without `ready` capacity waits only for the authenticated
+  handshake of the worker decided by the controller.
+- Warm target is evaluated every five seconds as
+  `max(base_capacity, ceil(peak_5_minutes * 1.20))`; base defaults to 3, the
+  peak window is five minutes, and every on-demand-served run contributes once
+  and fully to demand. On-demand workers are never warm capacity and terminate
+  with their run.
+- Scale-in terminates only `ready` workers. Leased workers are not interrupted,
+  resized, or replaced when above the recalculated target. Peak/extra target is
+  not persisted across restart.
+- Quack remains test/compatibility-only until the Feature 003 cutover evidence
+  passes. The single cutover enables it for production and then removes CLI,
+  affinity, and the retained Phase 0 spike together.
+
 ## Context
 
 The current engine starts DuckDB CLI processes and communicates through
@@ -82,9 +108,10 @@ joins/materializations.
 
 ### `WorkerPoolControl`
 
-`WorkerPoolControl` owns a cancellable FIFO admission queue, the worker state machine, bounded
-elastic target, global resource reservations and atomic `ready -> leased`
-assignment. A listener or `ready.json` is only infrastructure-ready and is not
+`WorkerPoolControl` owns the worker state machine, elastic target and atomic
+`ready -> leased` assignment. It has no admission queue or worker/pipeline
+budget: absence of `ready` capacity selects immediate per-run on-demand
+provisioning. A listener or `ready.json` is only infrastructure-ready and is not
 acquirable. The published worker is a warm bundle containing the sidecar, one
 client-only DuckDB database, its retained master connection and scoped Quack
 secret. One authenticated stateless health query must pass before the bundle
@@ -272,13 +299,13 @@ independently elastic connection pool.
 
 ## Run lifecycle
 
-1. `WorkerPoolControl` provisions its bounded base capacity through the selected provider.
+1. `WorkerPoolControl` provisions its base capacity through the selected provider.
 2. The sidecar listener becomes infrastructure-ready, but remains `starting`.
 3. The worker creates and retains its client database/master, creates the scoped
    secret, then completes one authenticated stateless readiness query.
 4. Only this complete warm bundle is published as `ready`.
-5. A run request acquires an exclusive worker lease or waits in the bounded
-   admission queue.
+5. A run request atomically leases a ready worker or receives a dedicated
+   on-demand worker selected and provisioned by the controller.
 6. Each dispatched request acquires one of the 8 default permits, clones the
    master locally, executes stateless SQL, then drops the clone and releases the
    permit. Excess requests wait.
@@ -461,6 +488,28 @@ to compile or submit the whole pipeline eagerly.
 Existing pipeline documents remain readable. Documents selecting disabled
 SlothDB or containing `xf.dbt` fail with explicit `engine_disabled` or
 `component_disabled` diagnostics and never silently fall back.
+
+## Implemented controller diagnostics
+
+The controller records only opaque worker/run/lease identities. Warm workers
+move through `starting`, `ready`, `leased`, `terminating` and `terminated`;
+only `ready` may be leased. A run without a ready worker receives a dedicated
+on-demand worker that is never published as warm capacity and terminates with
+the run.
+
+The desired warm capacity is evaluated at startup, on a complete profile save,
+and every five seconds. It is `max(base_capacity, ceil(peak_5m * 1.20))`;
+the five-minute peak resets with the controller. Scale-in selects ready workers
+only, never a leased worker. Autoscale telemetry includes the evaluation
+reason, outcome, demand, peak, current/target/base capacity, warm-state counts
+and provision/termination totals. It intentionally excludes endpoint, port,
+PID, path, token, secret, SQL and capability.
+
+A complete `RunnerResourcesProfile` is versioned. A save becomes the desired
+generation atomically; starting workers converge before publication, ready
+workers apply the newest generation, and leased sessions drain active queries
+before applying the latest profile. A failed apply preserves the prior
+effective generation and exposes only `configuration_apply_failed`.
 
 ## Related documents
 

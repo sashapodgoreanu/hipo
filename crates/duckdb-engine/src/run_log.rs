@@ -120,7 +120,7 @@ impl RunLog {
                 set("status", json!(status));
                 set("rows", json!(rows));
                 set("duration_ms", json!(duration_ms));
-                set("error", json!(error));
+                set("error", json!(error.as_deref().map(crate::redact_untrusted_text)));
                 if let Some(err) = error {
                     set(
                         "category",
@@ -130,7 +130,7 @@ impl RunLog {
                 // The failing statement (present only on error) so the NDJSON
                 // trace shows exactly what each component ran.
                 if let Some(s) = sql {
-                    set("sql", json!(s));
+                    set("sql", json!(crate::redact_untrusted_text(s)));
                 }
                 self.enrich(&mut m, node_id);
             }
@@ -142,7 +142,7 @@ impl RunLog {
                 set("event", json!("log"));
                 set("level", json!(level));
                 set("node_id", json!(node_id));
-                set("message", json!(message));
+                set("message", json!(crate::redact_untrusted_text(message)));
                 self.enrich(&mut m, node_id);
             }
             PipelineEvent::Finished { status, duration_ms } => {

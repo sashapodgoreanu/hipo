@@ -5,7 +5,7 @@
 //! most recent [`MAX_RECORDS`] entries so the file stays small and
 //! git-diffs stay readable.
 
-use crate::RunResult;
+use crate::{redact_untrusted_text, RunResult};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -47,7 +47,7 @@ impl RunRecord {
             rows,
             node_count: result.nodes.len(),
             trigger: trigger.to_string(),
-            error: result.error.clone(),
+            error: result.error.as_deref().map(redact_untrusted_text),
             category: result.category.clone(),
         }
     }

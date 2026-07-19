@@ -109,6 +109,35 @@ pub(crate) fn redact_secret_values(sql: &str, secrets: &[Secret]) -> String {
     out
 }
 
+/// Removes common credential-bearing fragments from failures that originate
+/// outside a resolved pipeline document. This is deliberately a second line
+/// of defense: normal execution still replaces the exact known secret values
+/// above, while this protects history and logs from provider/driver text such
+/// as URI userinfo, bearer tokens and `password=value` diagnostics.
+pub fn redact_untrusted_text(text: &str) -> String {
+    static URL_USERINFO: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static BEARER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ASSIGNMENT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+    let without_userinfo = URL_USERINFO
+        .get_or_init(|| regex::Regex::new(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+@").unwrap())
+        .replace_all(text, "${1}***@")
+        .into_owned();
+    let without_bearer = BEARER
+        .get_or_init(|| regex::Regex::new(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+").unwrap())
+        .replace_all(&without_userinfo, "Bearer ***")
+        .into_owned();
+    ASSIGNMENT
+        .get_or_init(|| {
+            regex::Regex::new(
+                r#"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*([=:])\s*['"]?[^\s,;'\"]+"#,
+            )
+            .unwrap()
+        })
+        .replace_all(&without_bearer, "${1}${2}***")
+        .into_owned()
+}
+
 /// A human-readable comment describing a stage that has no DuckDB SQL
 /// (a driver source/sink or a ctl.* control step). Keeps the SQL export
 /// complete + self-documenting instead of emitting a bare empty stage.
@@ -975,7 +1004,7 @@ pub(crate) fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String>
 
 #[cfg(test)]
 mod tests {
-    use super::{finalize_xlsx_whitespace, infer_avro_nullable_field, walk_xml_to_rows};
+    use super::{finalize_xlsx_whitespace, infer_avro_nullable_field, redact_untrusted_text, walk_xml_to_rows};
     use serde_json::json;
     use std::io::{Read, Write};
     use std::sync::atomic::AtomicBool;
@@ -1072,5 +1101,18 @@ mod tests {
         );
         // Objects/arrays are JSON-stringified on write, so they map to string.
         assert_eq!(infer_avro_nullable_field(&rows, "obj"), json!(["null", "string"]));
+    }
+
+    #[test]
+    fn untrusted_diagnostics_redact_common_credential_forms() {
+        let canary = "TOP_SECRET_CANARY";
+        let text = format!(
+            "postgres://user:{canary}@db.example/orders password={canary} Authorization: Bearer {canary}"
+        );
+        let redacted = redact_untrusted_text(&text);
+        assert!(!redacted.contains(canary));
+        assert!(redacted.contains("postgres://***@db.example/orders"));
+        assert!(redacted.contains("password=***"));
+        assert!(redacted.contains("Bearer ***"));
     }
 }

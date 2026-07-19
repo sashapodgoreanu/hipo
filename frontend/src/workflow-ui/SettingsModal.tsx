@@ -6,12 +6,15 @@ import {
     settingsSetProxy,
     settingsGetAi,
     settingsSetAi,
-    settingsGetMemoryLimit,
-    settingsSetMemoryLimit,
+    settingsGetRunnerResources,
+    settingsSetRunnerResources,
     settingsGetAllowUnsigned,
     settingsSetAllowUnsigned,
     settingsGetContextFile,
     settingsSetContextFile,
+    type RunnerAutomaticOrNumber,
+    type RunnerResourceLimit,
+    type RunnerResourcesProfile,
 } from '../tauri-bridge';
 import { loadPersisted, savePersisted } from '../persistence';
 import {
@@ -21,6 +24,28 @@ import {
     getFontSize,
     setFontSize as applyAndSaveFontSize,
 } from '../font-size';
+
+const defaultRunnerResources = (): RunnerResourcesProfile => ({
+    version: 1,
+    memory: { mode: 'automatic' },
+    cpuThreads: { mode: 'automatic' },
+    spill: { mode: 'automatic' },
+    quackParallelism: { mode: 'automatic' },
+    baseCapacity: 3,
+});
+
+export const positiveNumber = (value: string, fallback: number) => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+export const clampConcurrentQueries = (value: string) => Math.min(8, positiveNumber(value, 1));
+
+const limitNumber = (limit: RunnerResourceLimit, unit: 'bytes' | 'percent') =>
+    limit.mode === unit ? String(unit === 'bytes' ? Math.ceil(limit.value / (1024 * 1024)) : limit.value) : '';
+
+const concurrentNumber = (value: RunnerAutomaticOrNumber) =>
+    value.mode === 'value' ? String(value.value) : '';
 
 /**
  * App settings, grouped into collapsible categories so the panel stays simple
@@ -41,8 +66,8 @@ export function SettingsModal({
     const [aiBaseUrl, setAiBaseUrl] = useState('');
     const [aiModel, setAiModel] = useState('');
     const [aiKey, setAiKey] = useState('');
-    // #102: per-workspace total memory cap in MB (empty = engine default).
-    const [memLimit, setMemLimit] = useState('');
+    const [runnerResources, setRunnerResources] = useState<RunnerResourcesProfile>(defaultRunnerResources);
+    const [runnerDiagnostics, setRunnerDiagnostics] = useState<string[]>([]);
     // #143: allow loading unsigned / community DuckDB extensions (off by default).
     const [allowUnsigned, setAllowUnsigned] = useState(false);
     // Global context file: a key/value file auto-merged into the global context.
@@ -69,17 +94,18 @@ export function SettingsModal({
         Promise.all([
             settingsGetProxy(workspace),
             settingsGetAi(workspace),
-            settingsGetMemoryLimit(workspace),
+            settingsGetRunnerResources(workspace),
             settingsGetContextFile(workspace),
             settingsGetAllowUnsigned(workspace),
         ])
-            .then(([p, ai, mem, ic, unsigned]) => {
+            .then(([p, ai, resources, ic, unsigned]) => {
                 if (!alive) return;
                 setProxy(p ?? '');
                 setAiBaseUrl(ai.baseUrl ?? '');
                 setAiModel(ai.model ?? '');
                 setAiKey(ai.apiKey ?? '');
-                setMemLimit(mem != null ? String(mem) : '');
+                setRunnerResources(resources.requested);
+                setRunnerDiagnostics(resources.diagnostics);
                 setContextFile(ic ?? '');
                 setAllowUnsigned(unsigned ?? false);
                 setLoaded(true);
@@ -107,8 +133,9 @@ export function SettingsModal({
                 model: aiModel.trim() || null,
                 apiKey: aiKey.trim() || null,
             });
-            const mb = parseInt(memLimit.trim(), 10);
-            await settingsSetMemoryLimit(workspace, Number.isFinite(mb) && mb > 0 ? mb : null);
+            const resources = await settingsSetRunnerResources(workspace, runnerResources);
+            setRunnerResources(resources.requested);
+            setRunnerDiagnostics(resources.diagnostics);
             await settingsSetAllowUnsigned(workspace, allowUnsigned);
             await settingsSetContextFile(workspace, contextFile.trim() || null);
             setSaved(true);
@@ -281,22 +308,175 @@ export function SettingsModal({
                         />
                     </Section>
 
-                    <Section id="memory" title="Memory limit">
+                    <Section id="runner-resources" title="Runner resources">
                         <p style={help}>
-                            Caps total RAM for every run in this workspace (sets DuckDB's memory_limit for
-                            both batched and per-stage execution). Leave empty for the engine default
-                            (about 80% of system RAM).
+                            Settings apply immediately as the desired profile. Active queries complete with
+                            their current profile; new queries wait for the atomic latest profile. Base
+                            capacity uses the normal elastic pool policy and never terminates leased workers.
                         </p>
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>Memory per worker</label>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                            <select
+                                value={runnerResources.memory.mode}
+                                onChange={e => setRunnerResources(current => ({
+                                    ...current,
+                                    memory: e.target.value === 'automatic'
+                                        ? { mode: 'automatic' }
+                                        : e.target.value === 'percent'
+                                            ? { mode: 'percent', value: 80 }
+                                            : { mode: 'bytes', value: 1024 * 1024 * 1024 },
+                                }))}
+                                disabled={!loaded || !workspace}
+                                style={{ ...aiInput, width: 150 }}
+                            >
+                                <option value="automatic">Automatic</option>
+                                <option value="percent">Percent of host</option>
+                                <option value="bytes">Absolute MB</option>
+                            </select>
+                            {runnerResources.memory.mode !== 'automatic' ? (
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={runnerResources.memory.mode === 'percent' ? 100 : undefined}
+                                    value={limitNumber(runnerResources.memory, runnerResources.memory.mode === 'percent' ? 'percent' : 'bytes')}
+                                    onChange={e => setRunnerResources(current => ({
+                                        ...current,
+                                        memory: current.memory.mode === 'percent'
+                                            ? { mode: 'percent', value: Math.min(100, positiveNumber(e.target.value, 1)) }
+                                            : { mode: 'bytes', value: positiveNumber(e.target.value, 1) * 1024 * 1024 },
+                                    }))}
+                                    aria-label={runnerResources.memory.mode === 'percent' ? 'Memory percent' : 'Memory MB'}
+                                    disabled={!loaded || !workspace}
+                                    style={aiInput}
+                                />
+                            ) : null}
+                        </div>
+
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>Spill / temporary space</label>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                            <select
+                                value={runnerResources.spill.mode}
+                                onChange={e => setRunnerResources(current => ({
+                                    ...current,
+                                    spill: e.target.value === 'automatic'
+                                        ? { mode: 'automatic' }
+                                        : e.target.value === 'percent'
+                                            ? { mode: 'percent', value: 80 }
+                                            : { mode: 'bytes', value: 1024 * 1024 * 1024 },
+                                }))}
+                                disabled={!loaded || !workspace}
+                                style={{ ...aiInput, width: 150 }}
+                            >
+                                <option value="automatic">Automatic</option>
+                                <option value="percent">Percent of disk</option>
+                                <option value="bytes">Absolute MB</option>
+                            </select>
+                            {runnerResources.spill.mode !== 'automatic' ? (
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={runnerResources.spill.mode === 'percent' ? 100 : undefined}
+                                    value={limitNumber(runnerResources.spill, runnerResources.spill.mode === 'percent' ? 'percent' : 'bytes')}
+                                    onChange={e => setRunnerResources(current => ({
+                                        ...current,
+                                        spill: current.spill.mode === 'percent'
+                                            ? { mode: 'percent', value: Math.min(100, positiveNumber(e.target.value, 1)) }
+                                            : { mode: 'bytes', value: positiveNumber(e.target.value, 1) * 1024 * 1024 },
+                                    }))}
+                                    aria-label={runnerResources.spill.mode === 'percent' ? 'Spill percent' : 'Spill MB'}
+                                    disabled={!loaded || !workspace}
+                                    style={aiInput}
+                                />
+                            ) : null}
+                        </div>
+
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>CPU threads per worker</label>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                            <select
+                                value={runnerResources.cpuThreads.mode}
+                                onChange={e => setRunnerResources(current => ({
+                                    ...current,
+                                    cpuThreads: e.target.value === 'automatic'
+                                        ? { mode: 'automatic' }
+                                        : { mode: 'value', value: 1 },
+                                }))}
+                                disabled={!loaded || !workspace}
+                                style={{ ...aiInput, width: 150 }}
+                            >
+                                <option value="automatic">Automatic</option>
+                                <option value="value">Fixed threads</option>
+                            </select>
+                            {runnerResources.cpuThreads.mode === 'value' ? (
+                                <input
+                                    type="number"
+                                    min={1}
+                                    value={concurrentNumber(runnerResources.cpuThreads)}
+                                    onChange={e => setRunnerResources(current => ({
+                                        ...current,
+                                        cpuThreads: { mode: 'value', value: positiveNumber(e.target.value, 1) },
+                                    }))}
+                                    aria-label="CPU threads"
+                                    disabled={!loaded || !workspace}
+                                    style={aiInput}
+                                />
+                            ) : null}
+                        </div>
+
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>Concurrent queries per run</label>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                            <select
+                                value={runnerResources.quackParallelism.mode}
+                                aria-label="Concurrent query mode"
+                                onChange={e => setRunnerResources(current => ({
+                                    ...current,
+                                    quackParallelism: e.target.value === 'automatic'
+                                        ? { mode: 'automatic' }
+                                        : { mode: 'value', value: 1 },
+                                }))}
+                                disabled={!loaded || !workspace}
+                                style={{ ...aiInput, width: 150 }}
+                            >
+                                <option value="automatic">Automatic (8)</option>
+                                <option value="value">Fixed 1–8</option>
+                            </select>
+                            {runnerResources.quackParallelism.mode === 'value' ? (
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={8}
+                                    value={concurrentNumber(runnerResources.quackParallelism)}
+                                    onChange={e => setRunnerResources(current => ({
+                                        ...current,
+                                        quackParallelism: { mode: 'value', value: clampConcurrentQueries(e.target.value) },
+                                    }))}
+                                    aria-label="Concurrent queries per run"
+                                    disabled={!loaded || !workspace}
+                                    style={aiInput}
+                                />
+                            ) : null}
+                        </div>
+
+                        <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>Warm worker base capacity</label>
                         <input
-                            id="settings-mem"
+                            id="settings-runner-base-capacity"
                             type="number"
-                            min={0}
-                            value={memLimit}
-                            onChange={e => setMemLimit(e.target.value)}
-                            placeholder="e.g. 4096 (MB)"
+                            min={1}
+                            value={runnerResources.baseCapacity}
+                            onChange={e => setRunnerResources(current => ({
+                                ...current,
+                                baseCapacity: positiveNumber(e.target.value, 1),
+                            }))}
                             disabled={!loaded || !workspace}
                             style={aiInput}
                         />
+                        <p style={{ ...help, marginTop: 8 }}>
+                            Default 3. The elastic target is max(base, ceil(peak over 5 minutes × 1.20)); this is not a worker limit.
+                        </p>
+                        {runnerDiagnostics.length > 0 ? (
+                            <p style={{ ...help, marginBottom: 0 }}>
+                                Effective profile constrained by: {runnerDiagnostics.join(', ').replaceAll('_', ' ')}.
+                            </p>
+                        ) : null}
                     </Section>
 
                     <Section id="unsigned" title="Unsigned extensions">

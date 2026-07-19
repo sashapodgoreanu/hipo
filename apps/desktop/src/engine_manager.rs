@@ -857,6 +857,104 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
     finalize_download(&tmp, &target)
 }
 
+// ── Desktop runner controller (per-workspace) ──
+
+use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
+use duckle_db_runner::model::RunCancellation;
+use duckle_db_runner::resources::RunnerResourcesProfile;
+use duckle_db_runner::worker_pool::WorkerPoolControl;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+/// Per-workspace controller that owns a `WorkerPoolControl` for the lifetime
+/// of the open workspace. The desktop creates at most one controller per
+/// workspace path; every interactive, scheduled, or MCP run in that workspace
+/// acquires its worker from the same controller.
+pub struct DesktopRunnerController {
+    controllers: Mutex<HashMap<PathBuf, Arc<WorkerPoolControl>>>,
+    sidecar_path: Option<PathBuf>,
+}
+
+/// A cancellation handle returned when a run starts. Dropping it does NOT
+/// cancel the run; the owner must call `cancel()` explicitly (from the
+/// `cancel_pipeline` IPC command).
+#[derive(Clone)]
+pub struct RunCancellationHandle {
+    inner: RunCancellation,
+}
+
+impl RunCancellationHandle {
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+/// A per-run token that owns its own cancellation flag. The run uses it to
+/// check for cancellation; the desktop keeps the handle for the cancel command.
+pub struct RunToken {
+    pub cancellation: RunCancellation,
+    pub handle: RunCancellationHandle,
+}
+
+impl RunToken {
+    pub fn new() -> Self {
+        let cancellation = RunCancellation::default();
+        Self {
+            handle: RunCancellationHandle {
+                inner: cancellation.clone(),
+            },
+            cancellation,
+        }
+    }
+}
+
+impl DesktopRunnerController {
+    pub fn new(sidecar_path: Option<PathBuf>) -> Self {
+        Self {
+            controllers: Mutex::new(HashMap::new()),
+            sidecar_path,
+        }
+    }
+
+    /// Get or create the controller for a workspace. The controller is kept
+    /// alive until the workspace is closed or the application exits.
+    pub fn controller_for_workspace(
+        &self,
+        _workspace_path: &Path,
+        _profile: &RunnerResourcesProfile,
+    ) -> Option<Arc<WorkerPoolControl>> {
+        // The sidecar must be staged (non-empty embedded binary) and the
+        // platform launcher must be available for the pool to provision real
+        // workers. Until the cutover gate is approved and the desktop
+        // integration tasks (T058-T062) wire the launcher, we return None so
+        // callers fall back to the compatibility route.
+        let _sidecar = self.sidecar_path.as_ref()?;
+
+        // TODO(T058): construct LocalProcessProvider from the staged sidecar
+        // binary and host resource limits, then create or return a cached
+        // WorkerPoolControl. The pool uses a real WorkerProvider here; a mock
+        // would bypass the security and containment contract.
+        None
+    }
+
+    /// The entry-point class and cutover gate determine whether this run
+    /// should go through the official runner or fall back to CLI compatibility.
+    /// Before the cutover is approved only `test` and `compatibility` entry
+    /// points receive the official route; interactive and scheduled desktop
+    /// runs use `Production`.
+    pub fn entry_point_class(&self) -> EntryPointClass {
+        EntryPointClass::Production
+    }
+
+    /// The cutover gate is not yet approved at the desktop level; the official
+    /// runner can be exercised only by tests and explicit compatibility callers.
+    pub fn cutover_gate(&self) -> CutoverGate {
+        CutoverGate::Rejected {
+            missing_or_failed: vec!["SC-001".to_string()],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

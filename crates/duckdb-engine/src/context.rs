@@ -13,7 +13,7 @@
 //! itself (a naive port reading only repository.json would see zero vars).
 
 use crate::PipelineDoc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -66,6 +66,174 @@ struct RoutinePayload {
 pub struct Resolved {
     pub doc: PipelineDoc,
     pub secret_values: Vec<String>,
+}
+
+pub const TRANSPORT_DECISION_POLICY_VERSION: u32 = 1;
+
+const PARQUET_REUSE_MIN_BYTES: u64 = 64 * 1024 * 1024;
+const STREAMING_MEMORY_CAP_BYTES: u64 = 16 * 1024 * 1024;
+
+/// What an external runtime can safely consume without receiving a raw runner
+/// handle. A caller states its capabilities instead of assuming a format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTransportCapabilities {
+    pub sql_remote: bool,
+    pub quack: bool,
+    pub parquet: bool,
+}
+
+/// Inputs that make the transfer policy observable and reproducible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportDecisionInput {
+    pub estimated_bytes: u64,
+    pub consumer_count: u32,
+    pub retry_required: bool,
+    pub relation_mutable: bool,
+    pub sidecar_available: bool,
+    pub materialization_cost_bytes: u64,
+    pub runtime: RuntimeTransportCapabilities,
+}
+
+/// Controlled data movement. Parquet remains a transport fallback, not an
+/// alternative execution backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportMechanism {
+    SqlRemote,
+    Quack,
+    Parquet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportDecisionReason {
+    SingleConsumerRemoteSql,
+    DirectQuackTransfer,
+    ReusableParquetSnapshot,
+    RuntimeCapabilityFallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportRetryStrategy {
+    OrchestratorRetry,
+    ReissueTransfer,
+    ReuseSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportCleanupStrategy {
+    NoArtifact,
+    DropEphemeralTransfer,
+    RemoveSnapshotAfterConsumers,
+}
+
+/// Planner-visible resource limits. They contain no endpoint, filesystem
+/// location, capability or secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportResourceLimits {
+    pub maximum_memory_bytes: u64,
+    pub maximum_spill_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportDecision {
+    pub policy_version: u32,
+    pub mechanism: TransportMechanism,
+    pub reason: TransportDecisionReason,
+    pub retry: TransportRetryStrategy,
+    pub cleanup: TransportCleanupStrategy,
+    pub limits: TransportResourceLimits,
+}
+
+/// Public failures are stable reason codes only; provider diagnostics, SQL and
+/// endpoint details cannot enter this decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportDecisionError {
+    RunnerUnavailable,
+    RuntimeUnsupported,
+}
+
+/// Selects SQL remote execution, Quack transfer, or a reusable Parquet
+/// snapshot from the complete, versioned input table.
+pub fn select_transport(
+    input: TransportDecisionInput,
+) -> Result<TransportDecision, TransportDecisionError> {
+    if !input.sidecar_available {
+        return Err(TransportDecisionError::RunnerUnavailable);
+    }
+
+    let fanout_or_retry = input.consumer_count > 1 || input.retry_required;
+    let parquet_is_worth_materializing = fanout_or_retry
+        && input.runtime.parquet
+        && input.estimated_bytes >= PARQUET_REUSE_MIN_BYTES
+        && input.materialization_cost_bytes <= input.estimated_bytes;
+    if parquet_is_worth_materializing {
+        return Ok(parquet_decision(input));
+    }
+
+    if input.runtime.sql_remote && input.consumer_count <= 1 && !input.relation_mutable {
+        return Ok(TransportDecision {
+            policy_version: TRANSPORT_DECISION_POLICY_VERSION,
+            mechanism: TransportMechanism::SqlRemote,
+            reason: TransportDecisionReason::SingleConsumerRemoteSql,
+            retry: TransportRetryStrategy::OrchestratorRetry,
+            cleanup: TransportCleanupStrategy::NoArtifact,
+            limits: streaming_limits(input.estimated_bytes),
+        });
+    }
+
+    if input.runtime.quack {
+        return Ok(TransportDecision {
+            policy_version: TRANSPORT_DECISION_POLICY_VERSION,
+            mechanism: TransportMechanism::Quack,
+            reason: if fanout_or_retry {
+                TransportDecisionReason::RuntimeCapabilityFallback
+            } else {
+                TransportDecisionReason::DirectQuackTransfer
+            },
+            retry: TransportRetryStrategy::ReissueTransfer,
+            cleanup: TransportCleanupStrategy::DropEphemeralTransfer,
+            limits: streaming_limits(input.estimated_bytes),
+        });
+    }
+
+    if input.runtime.parquet {
+        return Ok(parquet_decision(input));
+    }
+
+    Err(TransportDecisionError::RuntimeUnsupported)
+}
+
+fn parquet_decision(input: TransportDecisionInput) -> TransportDecision {
+    TransportDecision {
+        policy_version: TRANSPORT_DECISION_POLICY_VERSION,
+        mechanism: TransportMechanism::Parquet,
+        reason: if input.consumer_count > 1 || input.retry_required {
+            TransportDecisionReason::ReusableParquetSnapshot
+        } else {
+            TransportDecisionReason::RuntimeCapabilityFallback
+        },
+        retry: TransportRetryStrategy::ReuseSnapshot,
+        cleanup: TransportCleanupStrategy::RemoveSnapshotAfterConsumers,
+        limits: TransportResourceLimits {
+            maximum_memory_bytes: input.estimated_bytes.min(STREAMING_MEMORY_CAP_BYTES),
+            maximum_spill_bytes: input.estimated_bytes,
+        },
+    }
+}
+
+fn streaming_limits(estimated_bytes: u64) -> TransportResourceLimits {
+    TransportResourceLimits {
+        maximum_memory_bytes: estimated_bytes.min(STREAMING_MEMORY_CAP_BYTES),
+        maximum_spill_bytes: 0,
+    }
 }
 
 /// Read+parse repository.json into the repo item list. A missing file yields
@@ -867,5 +1035,102 @@ mod tests {
             format!("{}/exports/${{date}}/orders.parquet", root),
             "${{workspace}} resolves but ${{date}} must remain for the run-time pass"
         );
+    }
+
+    fn transfer_input(
+        estimated_bytes: u64,
+        consumer_count: u32,
+        retry_required: bool,
+        runtime: super::RuntimeTransportCapabilities,
+    ) -> super::TransportDecisionInput {
+        super::TransportDecisionInput {
+            estimated_bytes,
+            consumer_count,
+            retry_required,
+            relation_mutable: false,
+            sidecar_available: true,
+            materialization_cost_bytes: estimated_bytes / 4,
+            runtime,
+        }
+    }
+
+    #[test]
+    fn transport_decision_uses_versioned_sql_quack_and_parquet_branches() {
+        let sql = super::select_transport(transfer_input(
+            1_024,
+            1,
+            false,
+            super::RuntimeTransportCapabilities {
+                sql_remote: true,
+                quack: true,
+                parquet: true,
+            },
+        ))
+        .unwrap();
+        assert_eq!(sql.policy_version, super::TRANSPORT_DECISION_POLICY_VERSION);
+        assert_eq!(sql.mechanism, super::TransportMechanism::SqlRemote);
+        assert_eq!(sql.cleanup, super::TransportCleanupStrategy::NoArtifact);
+
+        let quack = super::select_transport(transfer_input(
+            1_024,
+            1,
+            false,
+            super::RuntimeTransportCapabilities {
+                sql_remote: false,
+                quack: true,
+                parquet: true,
+            },
+        ))
+        .unwrap();
+        assert_eq!(quack.mechanism, super::TransportMechanism::Quack);
+        assert_eq!(quack.retry, super::TransportRetryStrategy::ReissueTransfer);
+
+        let parquet = super::select_transport(transfer_input(
+            super::PARQUET_REUSE_MIN_BYTES,
+            2,
+            true,
+            super::RuntimeTransportCapabilities {
+                sql_remote: true,
+                quack: true,
+                parquet: true,
+            },
+        ))
+        .unwrap();
+        assert_eq!(parquet.mechanism, super::TransportMechanism::Parquet);
+        assert_eq!(parquet.retry, super::TransportRetryStrategy::ReuseSnapshot);
+        assert_eq!(
+            parquet.cleanup,
+            super::TransportCleanupStrategy::RemoveSnapshotAfterConsumers
+        );
+    }
+
+    #[test]
+    fn transport_decision_reports_only_sanitized_unavailable_and_capability_failures() {
+        let unavailable = super::select_transport(super::TransportDecisionInput {
+            sidecar_available: false,
+            ..transfer_input(
+                1_024,
+                1,
+                false,
+                super::RuntimeTransportCapabilities {
+                    sql_remote: true,
+                    quack: true,
+                    parquet: true,
+                },
+            )
+        });
+        assert_eq!(unavailable, Err(super::TransportDecisionError::RunnerUnavailable));
+
+        let unsupported = super::select_transport(transfer_input(
+            1_024,
+            1,
+            false,
+            super::RuntimeTransportCapabilities {
+                sql_remote: false,
+                quack: false,
+                parquet: false,
+            },
+        ));
+        assert_eq!(unsupported, Err(super::TransportDecisionError::RuntimeUnsupported));
     }
 }

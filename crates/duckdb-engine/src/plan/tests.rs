@@ -4011,3 +4011,133 @@ fn kafka_offset_latest_maps_to_the_latest_sentinel() {
         // No host / dsn / connectionString is a config error.
         assert!(teradata_conn_string(&json!({"user": "dbc"})).is_err());
     }
+
+    // ── T045: affinity-free planning tests ──
+
+    #[test]
+    fn query_source_stages_produce_self_contained_batch_sql_without_affinity() {
+        // A Query Source pipeline must produce stage SQL that includes
+        // ATTACH, materialization, and DETACH inline — the flat batch path
+        // in the official runner sends these as-is without affinity grouping.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes":[
+                {"id":"q","position":{"x":0,"y":0},"data":{"label":"query","componentId":"src.query","properties":{
+                  "dataSourceRefs":["ds-orders"],
+                  "sql":"SELECT * FROM sales.orders",
+                  "_duckleDataSourceRuntime":[{"id":"ds-orders","alias":"sales","kind":"duckdb","connection":{"database":"C:/tmp/orders.duckdb"}}]
+                }}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"C:/tmp/out.csv"}}}
+              ],
+              "edges":[{"id":"e","source":"q","target":"k","data":{"connectionType":"main"}}]
+            }"#,
+        );
+
+        let compiled = compile(&doc).unwrap();
+
+        // The stage SQL must be self-contained: ATTACH, CREATE TABLE, DETACH
+        // all in one statement — no external affinity worker setup required.
+        let query_stage = compiled
+            .stages
+            .iter()
+            .find(|s| s.node_id == "q")
+            .expect("Query Source stage");
+        assert!(
+            query_stage.sql.contains("ATTACH"),
+            "stage SQL must include ATTACH for self-contained batch: {}",
+            query_stage.sql
+        );
+        assert!(
+            query_stage.sql.contains("DETACH"),
+            "stage SQL must include DETACH for self-contained batch: {}",
+            query_stage.sql
+        );
+        assert!(
+            query_stage.sql.contains("CREATE OR REPLACE TABLE \"q\""),
+            "stage SQL must materialize into a TABLE: {}",
+            query_stage.sql
+        );
+
+        // All stages must be pure SQL so the official runner can batch them.
+        assert!(
+            compiled.stages.iter().all(|s| s.is_pure_sql()),
+            "all stages must be pure SQL for flat batch dispatch"
+        );
+
+        // Affinity metadata is still populated for the compatibility path.
+        assert!(
+            compiled.affinity.is_some(),
+            "affinity plan must still be emitted for compatibility"
+        );
+    }
+
+    #[test]
+    fn multiple_query_sources_compile_to_independent_batch_stages() {
+        // Two independent Query Source nodes with different data sources
+        // must each produce self-contained stage SQL.
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes":[
+                {"id":"q1","position":{"x":0,"y":0},"data":{"label":"q1","componentId":"src.query","properties":{
+                  "dataSourceRefs":["ds-a"],
+                  "sql":"SELECT 1 AS a",
+                  "_duckleDataSourceRuntime":[{"id":"ds-a","alias":"db_a","kind":"duckdb","connection":{"database":"C:/tmp/a.duckdb"}}]
+                }}},
+                {"id":"q2","position":{"x":0,"y":0},"data":{"label":"q2","componentId":"src.query","properties":{
+                  "dataSourceRefs":["ds-b"],
+                  "sql":"SELECT 2 AS b",
+                  "_duckleDataSourceRuntime":[{"id":"ds-b","alias":"db_b","kind":"duckdb","connection":{"database":"C:/tmp/b.duckdb"}}]
+                }}}
+              ],
+              "edges":[]
+            }"#,
+        );
+
+        let compiled = compile(&doc).unwrap();
+        let q1 = compiled.stages.iter().find(|s| s.node_id == "q1").unwrap();
+        let q2 = compiled.stages.iter().find(|s| s.node_id == "q2").unwrap();
+
+        // Each stage is self-contained with its own ATTACH/DETACH.
+        assert!(q1.sql.contains("ATTACH") && q1.sql.contains("DETACH"));
+        assert!(q2.sql.contains("ATTACH") && q2.sql.contains("DETACH"));
+
+        // Both are pure SQL — no affinity worker needed.
+        assert!(q1.is_pure_sql());
+        assert!(q2.is_pure_sql());
+
+        // Affinity assigns them to separate groups (different data sources).
+        let affinity = compiled.affinity.as_ref().unwrap();
+        assert_eq!(affinity.groups.len(), 2);
+    }
+
+    #[test]
+    fn query_source_partial_compile_preserves_self_contained_sql() {
+        let doc = pipeline_from_json(
+            r#"{
+              "nodes":[
+                {"id":"q","position":{"x":0,"y":0},"data":{"label":"query","componentId":"src.query","properties":{
+                  "dataSourceRefs":["ds-orders"],
+                  "sql":"SELECT * FROM sales.orders",
+                  "_duckleDataSourceRuntime":[{"id":"ds-orders","alias":"sales","kind":"duckdb","connection":{"database":"C:/tmp/orders.duckdb"}}]
+                }}},
+                {"id":"f","position":{"x":0,"y":0},"data":{"label":"filter","componentId":"xf.filter","properties":{"predicate":"a > 0"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"out","componentId":"snk.csv","properties":{"path":"C:/tmp/out.csv"}}}
+              ],
+              "edges":[
+                {"id":"e1","source":"q","target":"f","data":{"connectionType":"main"}},
+                {"id":"e2","source":"f","target":"k","data":{"connectionType":"main"}}
+              ]
+            }"#,
+        );
+
+        // Partial compile targeting the filter should include the Query Source
+        // stage with self-contained SQL, but NOT the sink.
+        let compiled = compile_partial(&doc, "f").unwrap();
+        assert!(compiled.stages.iter().any(|s| s.node_id == "q"));
+        assert!(compiled.stages.iter().any(|s| s.node_id == "f"));
+        assert!(!compiled.stages.iter().any(|s| s.node_id == "k"));
+
+        let q = compiled.stages.iter().find(|s| s.node_id == "q").unwrap();
+        assert!(q.sql.contains("ATTACH") && q.sql.contains("DETACH"));
+        assert!(q.is_pure_sql());
+    }

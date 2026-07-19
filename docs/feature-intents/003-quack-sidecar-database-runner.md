@@ -1280,3 +1280,26 @@ feature Spec Kit con requisiti e task eseguibili.
 - [Kubernetes resource management](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 - [Intento funzionale Feature 002](002-universal-query-source-and-multi-input-query.md)
 - [ADR affinity CLI corrente](../architecture/adr-affinity-session.md)
+# Feature 003 amendment — authoritative delivery policy
+
+This intent retains Phase 0 research, including old bounded/admission designs,
+as historical evidence. The following policy supersedes it for Feature 003;
+where the prose below conflicts, this amendment and
+`specs/003-quack-sidecar-database-runner/spec.md` are authoritative.
+
+1. Each run makes exactly one request to `WorkerPoolControl`. The controller,
+   not the run, leases one `ready` warm worker or immediately provisions and
+   assigns a dedicated on-demand worker.
+2. There is no admission queue, backpressure, hard worker maximum, worker
+   budget, 70% threshold, or incremental growth step. The run waits only for
+   the selected worker's authenticated handshake.
+3. Base capacity is a positive workspace setting with default 3. Every five
+   seconds target warm capacity is
+   `max(base_capacity, ceil(peak_5_minutes * 1.20))`. Demand includes every
+   run once, including on-demand runs; on-demand workers never count as warm
+   capacity and die with their run.
+4. Scale-in terminates only `ready` workers and never interrupts/reconfigures
+   leased workers. Peak and target above the base are discarded on restart.
+5. The Phase 0 spike is renamed to `spikes/quack-sidecar-phase0-spike`, remains
+   isolated and non-distributable during compatibility, then is removed with
+   CLI and affinity at the approved single cutover.

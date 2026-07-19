@@ -13,6 +13,10 @@
 //! Cancellation kills the in-flight child process.
 
 use duckle_metadata::{Column, DataType, Schema};
+use duckle_db_runner::cutover::{select_runner, CutoverGate, EntryPointClass, RunnerSelection};
+use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
+use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
+use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_plugin_sdk::{Inspection, InspectError};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -41,8 +45,13 @@ mod connectors;
 mod run_log;
 mod util;
 pub(crate) use util::*;
-pub use util::is_secret_prop_key;
+pub use util::{is_secret_prop_key, redact_untrusted_text};
 pub use history::{append_run_record, load_run_history, RunRecord};
+pub use context::{
+    select_transport, RuntimeTransportCapabilities, TransportCleanupStrategy, TransportDecision,
+    TransportDecisionError, TransportDecisionInput, TransportDecisionReason, TransportMechanism,
+    TransportResourceLimits, TransportRetryStrategy, TRANSPORT_DECISION_POLICY_VERSION,
+};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
 use plan::{
     quote_ident, AiChunkSpec, AiClassifySpec, AiDedupeSpec, AiEmbedSpec, AiLlmSpec, AiPiiSpec,
@@ -108,6 +117,141 @@ const AI_DEDUPE_MAX_ROWS: usize = 25_000;
 pub struct DuckdbEngine {
     bin: PathBuf,
     cancel: Arc<AtomicBool>,
+    execution_route: ExecutionRoute,
+    official_runner: Option<Arc<dyn OfficialRunnerController>>,
+    official_cancellation: RunCancellation,
+}
+
+/// The CLI remains the default route until a controller is injected by the
+/// desktop/headless integration. Test and explicit compatibility callers can
+/// select the official route, but it must never silently fall back to CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionRoute {
+    CliCompatibility,
+    OfficialRunner,
+}
+
+/// Controller boundary used by the engine when an explicit cutover selection
+/// targets the official runner. It deliberately exposes only opaque leases;
+/// the later RunDatabase adapter owns all transport and sidecar details.
+pub trait OfficialRunnerController: Send + Sync {
+    fn acquire(
+        &self,
+        run_id: RunId,
+        attempt: u32,
+        cancellation: RunCancellation,
+        now_millis: u64,
+    ) -> Result<WorkerLease, RunnerFailureReason>;
+
+    fn release(&self, lease: WorkerLease, now_millis: u64);
+
+    fn execute_batch(
+        &self,
+        lease: &WorkerLease,
+        statements: Vec<String>,
+        cancellation: RunCancellation,
+    ) -> Result<SqlBatchResult, RunnerFailureReason>;
+
+    /// Preview a relation created by a previous batch in the same worker.
+    /// Returns column names, rows, and truncation flag; no connection or
+    /// credential is exposed. Used by the engine to populate view-stage
+    /// previews with unchanged semantics.
+    fn preview_relation(
+        &self,
+        lease: &WorkerLease,
+        sql: &str,
+        limit: u32,
+        cancellation: RunCancellation,
+    ) -> Result<PreviewResult, RunnerFailureReason>;
+}
+
+impl OfficialRunnerController for WorkerPoolControl {
+    fn acquire(
+        &self,
+        run_id: RunId,
+        attempt: u32,
+        cancellation: RunCancellation,
+        now_millis: u64,
+    ) -> Result<WorkerLease, RunnerFailureReason> {
+        self.acquire_for_current_profile(run_id, attempt, cancellation, now_millis)
+            .map_err(pool_error_reason)
+    }
+
+    fn release(&self, lease: WorkerLease, now_millis: u64) {
+        let _ = WorkerPoolControl::release(self, lease, now_millis);
+    }
+
+    fn execute_batch(
+        &self,
+        lease: &WorkerLease,
+        statements: Vec<String>,
+        cancellation: RunCancellation,
+    ) -> Result<SqlBatchResult, RunnerFailureReason> {
+        self.execute_database_batch(lease, statements, cancellation)
+    }
+
+    fn preview_relation(
+        &self,
+        lease: &WorkerLease,
+        sql: &str,
+        limit: u32,
+        cancellation: RunCancellation,
+    ) -> Result<PreviewResult, RunnerFailureReason> {
+        self.preview_database_relation(lease, sql, limit, cancellation)
+    }
+}
+
+struct OfficialLeaseGuard {
+    controller: Arc<dyn OfficialRunnerController>,
+    lease: WorkerLease,
+}
+
+impl Drop for OfficialLeaseGuard {
+    fn drop(&mut self) {
+        self.controller.release(self.lease.clone(), runner_now_millis());
+    }
+}
+
+impl OfficialLeaseGuard {
+    fn execute_batch(&self, statements: Vec<String>, cancellation: RunCancellation) -> Result<SqlBatchResult, RunnerFailureReason> {
+        self.controller.execute_batch(&self.lease, statements, cancellation)
+    }
+
+    fn preview_relation(&self, sql: &str, limit: u32, cancellation: RunCancellation) -> Result<PreviewResult, RunnerFailureReason> {
+        self.controller.preview_relation(&self.lease, sql, limit, cancellation)
+    }
+}
+
+fn pool_error_reason(error: PoolError) -> RunnerFailureReason {
+    match error {
+        PoolError::InvalidProfile => RunnerFailureReason::InvalidProfile,
+        PoolError::Cancelled => RunnerFailureReason::Cancelled,
+        PoolError::Provision(reason) => reason,
+        PoolError::DuplicateRun | PoolError::UnknownLease | PoolError::ShuttingDown => {
+            RunnerFailureReason::RunnerUnavailable
+        }
+    }
+}
+
+fn runner_failure_code(reason: RunnerFailureReason) -> &'static str {
+    match reason {
+        RunnerFailureReason::HostLimit => "host_limit",
+        RunnerFailureReason::WorkspaceCapacity => "workspace_capacity",
+        RunnerFailureReason::LicenseLimit => "license_limit",
+        RunnerFailureReason::InvalidProfile => "invalid_profile",
+        RunnerFailureReason::ConfigurationApplyFailed => "configuration_apply_failed",
+        RunnerFailureReason::RunnerUnavailable => "runner_unavailable",
+        RunnerFailureReason::RunnerVersionMismatch => "runner_version_mismatch",
+        RunnerFailureReason::Cancelled => "cancelled",
+        RunnerFailureReason::RunnerCrashed => "runner_crashed",
+    }
+}
+
+fn runner_now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 impl std::fmt::Debug for DuckdbEngine {
@@ -126,6 +270,9 @@ impl DuckdbEngine {
         Self {
             bin,
             cancel: Arc::new(AtomicBool::new(false)),
+            execution_route: ExecutionRoute::CliCompatibility,
+            official_runner: None,
+            official_cancellation: RunCancellation::default(),
         }
     }
 
@@ -139,7 +286,51 @@ impl DuckdbEngine {
         DuckdbEngine {
             bin: self.bin.clone(),
             cancel: Arc::new(AtomicBool::new(false)),
+            execution_route: self.execution_route,
+            official_runner: self.official_runner.clone(),
+            official_cancellation: RunCancellation::default(),
         }
+    }
+
+    /// Selects a backend according to the explicit cutover gate. This only
+    /// changes routing intent; a missing official controller returns the
+    /// sanitized `runner_unavailable` result rather than spawning directly.
+    pub fn with_runner_selection(
+        &self,
+        entry_point: EntryPointClass,
+        gate: &CutoverGate,
+    ) -> DuckdbEngine {
+        let execution_route = match select_runner(entry_point, gate) {
+            RunnerSelection::Compatibility => ExecutionRoute::CliCompatibility,
+            RunnerSelection::Official => ExecutionRoute::OfficialRunner,
+        };
+        DuckdbEngine {
+            bin: self.bin.clone(),
+            cancel: self.cancel.clone(),
+            execution_route,
+            official_runner: self.official_runner.clone(),
+            official_cancellation: self.official_cancellation.clone(),
+        }
+    }
+
+    /// Supplies the controller owned by the current workspace. Selection and
+    /// ownership stay explicit: merely constructing an engine never starts a
+    /// sidecar or changes the default CLI compatibility route.
+    pub fn with_official_runner_controller(
+        &self,
+        controller: Arc<dyn OfficialRunnerController>,
+    ) -> DuckdbEngine {
+        DuckdbEngine {
+            bin: self.bin.clone(),
+            cancel: self.cancel.clone(),
+            execution_route: self.execution_route,
+            official_runner: Some(controller),
+            official_cancellation: self.official_cancellation.clone(),
+        }
+    }
+
+    pub fn execution_route(&self) -> ExecutionRoute {
+        self.execution_route
     }
 
     pub fn binary(&self) -> &Path {
@@ -155,6 +346,7 @@ impl DuckdbEngine {
     /// returns promptly.
     pub fn request_cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.official_cancellation.cancel();
     }
 
     pub fn clear_cancel(&self) {
@@ -830,7 +1022,28 @@ impl DuckdbEngine {
         // nested sub-pipeline run (ctl.iterate/foreach/runjob/parallelize) wipe
         // a cancel the user requested mid-loop.
 
-        if !self.bin.exists() {
+        let _official_lease = if self.execution_route == ExecutionRoute::OfficialRunner {
+            let Some(controller) = self.official_runner.as_ref() else {
+                return RunResult::failed(total_start, "runner_unavailable".into());
+            };
+            let lease = match controller.acquire(
+                RunId::new(),
+                1,
+                self.official_cancellation.clone(),
+                runner_now_millis(),
+            ) {
+                Ok(lease) => lease,
+                Err(reason) => return RunResult::failed(total_start, runner_failure_code(reason).into()),
+            };
+            Some(OfficialLeaseGuard {
+                controller: controller.clone(),
+                lease,
+            })
+        } else {
+            None
+        };
+
+        if _official_lease.is_none() && !self.bin.exists() {
             return RunResult::failed(
                 total_start,
                 "DuckDB engine isn't installed yet. Open Setup to install it.".into(),
@@ -861,29 +1074,12 @@ impl DuckdbEngine {
             Err(e) => return RunResult::failed(total_start, e.to_string()),
         };
 
-        // A Query Source makes the attachment/session lifetime observable. Do
-        // not silently drop to the ordinary per-stage executor if this run
-        // crosses a runtime/control boundary: it would create a new DuckDB
-        // connection and invalidate the attach-once guarantee. Preserving SQL
-        // stages are handled by `execute_affinity_worker`; suspending support
-        // will be enabled only with an explicit pause/resume implementation.
+        // The has_query_source check and the affinity worker guard are
+        // compatibility-path concerns: the official runner sends QS stage SQL
+        // as a flat batch (T043) and does not need session affinity. The guard
+        // is deferred until after the official dispatch below so it only
+        // applies to the CLI compatibility route.
         let has_query_source = compiled.stages.iter().any(|stage| stage.query_source.is_some());
-        if has_query_source {
-            if let Some(stage) = compiled.stages.iter().find(|stage| {
-                !matches!(stage.affinity_mode, plan::AffinityStageMode::SessionPreserving)
-                    || stage.retry_attempts > 1
-                    || stage.wait_ms.is_some()
-                    || stage.memory_limit_mb.is_some()
-            }) {
-                return RunResult::failed(
-                    total_start,
-                    format!(
-                        "{}: {:?} stages cannot yet cross a Query Source affinity session; remove the runtime/control boundary or materialize it outside this pipeline",
-                        stage.label, stage.affinity_mode
-                    ),
-                );
-            }
-        }
 
         // Component-level run log (Splunk / Dynatrace), gated on
         // DUCKLE_LOG_DIR. We tee every event through it so BOTH the fast
@@ -905,7 +1101,8 @@ impl DuckdbEngine {
             .collect();
         let run_id = format!("run-{}-{}", std::process::id(), now_nanos());
         let mut runlog = run_log::RunLog::open(pipeline_name, run_id, node_meta);
-        let mut on_event = |evt: PipelineEvent| {
+        let mut on_event = |mut evt: PipelineEvent| {
+            redact_pipeline_event(&mut evt);
             if runlog.enabled() {
                 runlog.record(&evt);
             }
@@ -915,6 +1112,42 @@ impl DuckdbEngine {
         on_event(PipelineEvent::Started {
             total_stages: compiled.stages.len() as u32,
         });
+
+        if let Some(official_lease) = _official_lease.as_ref() {
+            return self.execute_official_sql_batch(
+                doc,
+                &compiled,
+                official_lease,
+                total_start,
+                &mut on_event,
+            );
+        }
+
+        // ── Compatibility path only below this point ──
+
+        // A Query Source makes the attachment/session lifetime observable on
+        // the CLI compatibility path. Do not silently drop to the ordinary
+        // per-stage executor if this run crosses a runtime/control boundary:
+        // it would create a new DuckDB connection and invalidate the
+        // attach-once guarantee. Preserving SQL stages are handled by
+        // `execute_affinity_worker`; suspending support will be enabled only
+        // with an explicit pause/resume implementation.
+        if has_query_source {
+            if let Some(stage) = compiled.stages.iter().find(|stage| {
+                !matches!(stage.affinity_mode, plan::AffinityStageMode::SessionPreserving)
+                    || stage.retry_attempts > 1
+                    || stage.wait_ms.is_some()
+                    || stage.memory_limit_mb.is_some()
+            }) {
+                return RunResult::failed(
+                    total_start,
+                    format!(
+                        "{}: {:?} stages cannot yet cross a Query Source affinity session; remove the runtime/control boundary or materialize it outside this pipeline",
+                        stage.label, stage.affinity_mode
+                    ),
+                );
+            }
+        }
 
         // Temp on-disk DB for this run. The atomic counter guarantees a
         // unique path even when several runs start in the same process at
@@ -1767,6 +2000,7 @@ impl DuckdbEngine {
             error: overall_error,
             category,
         }
+        .redact_untrusted_diagnostics()
     }
 
     /// Run an all-pure-SQL pipeline as a single `duckdb.exe` invocation
@@ -1786,6 +2020,236 @@ impl DuckdbEngine {
     /// code and read stderr on failure. The stdin-piped-stdout-buffers
     /// behaviour that blocked the persistent-session attempt doesn't
     /// matter here.
+    fn execute_official_sql_batch(
+        &self,
+        doc: &PipelineDoc,
+        compiled: &plan::CompiledPipeline,
+        lease: &OfficialLeaseGuard,
+        total_start: Instant,
+        on_event: &mut dyn FnMut(PipelineEvent),
+    ) -> RunResult {
+        if compiled.stages.is_empty() || compiled.stages.iter().any(|stage| !stage.is_pure_sql()) {
+            on_event(PipelineEvent::Finished {
+                status: "error".into(),
+                duration_ms: total_start.elapsed().as_millis() as u64,
+            });
+            return RunResult::failed(total_start, "runner_unavailable".into());
+        }
+
+        // Collect setup statements: cloud credential secrets and session
+        // PRAGMAs that the compatibility path prepends to every CLI
+        // invocation. They run first in the same sidecar session so TEMP
+        // state and credentials persist across all stage SQL.
+        let mut setup: Vec<String> = Vec::new();
+        for secret in collect_pipeline_secrets(doc) {
+            setup.push(secret);
+        }
+        setup.push("PRAGMA enable_progress_bar=false".into());
+        if let Ok(m) = std::env::var("DUCKLE_MEMORY_LIMIT") {
+            let m = m.trim();
+            if !m.is_empty() {
+                setup.push(format!("PRAGMA memory_limit='{}'", m.replace('\'', "''")));
+            }
+        }
+        if let Ok(t) = std::env::var("DUCKLE_THREADS") {
+            if let Ok(n) = t.trim().parse::<u32>() {
+                if n > 0 {
+                    setup.push(format!("PRAGMA threads={n}"));
+                }
+            }
+        }
+
+        let mut batch: Vec<String> = setup;
+        batch.extend(compiled.stages.iter().map(|stage| stage.sql.clone()));
+
+        // Check cancellation before dispatching so a cancel that arrived during
+        // compilation or setup does not start the batch.
+        if self.official_cancellation.is_cancelled() {
+            on_event(PipelineEvent::Cancelled);
+            let duration_ms = total_start.elapsed().as_millis() as u64;
+            on_event(PipelineEvent::Finished {
+                status: "cancelled".into(),
+                duration_ms,
+            });
+            return RunResult {
+                status: "cancelled".into(),
+                duration_ms,
+                nodes: Default::default(),
+                preview: Vec::new(),
+                error: None,
+                category: None,
+            };
+        }
+
+        for stage in &compiled.stages {
+            on_event(PipelineEvent::StageStarted {
+                node_id: stage.node_id.clone(),
+                label: stage.label.clone(),
+                kind: stage_kind_label(&stage.kind).into(),
+            });
+        }
+        let result = lease.execute_batch(
+            batch,
+            self.official_cancellation.clone(),
+        );
+        match result {
+            Ok(_) => {
+                let mut nodes = std::collections::BTreeMap::new();
+                let mut preview: Vec<NodePreview> = Vec::new();
+                for stage in &compiled.stages {
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: stage.node_id.clone(),
+                        kind: stage_kind_label(&stage.kind).into(),
+                        status: "ok".into(),
+                        rows: None,
+                        duration_ms: 0,
+                        error: None,
+                        sql: None,
+                    });
+                    nodes.insert(
+                        stage.node_id.clone(),
+                        NodeRunStatus {
+                            status: "ok".into(),
+                            kind: Some(stage_kind_label(&stage.kind).into()),
+                            rows: None,
+                            duration_ms: Some(0),
+                            error: None,
+                            category: None,
+                            sql: None,
+                        },
+                    );
+                }
+
+                // Collect preview for view stages with the same eligibility
+                // criteria as the compatibility batched path: skip ctl.switch,
+                // xf.assert, and no_output_relation stages.
+                for stage in &compiled.stages {
+                    if !matches!(stage.kind, plan::StageKind::View)
+                        || stage.component_id == "ctl.switch"
+                        || stage.component_id == "xf.assert"
+                        || stage.no_output_relation
+                    {
+                        continue;
+                    }
+                    if let Some(node_preview) = self.official_preview_for_stage(
+                        lease,
+                        &stage.node_id,
+                    ) {
+                        preview.push(node_preview);
+                    }
+                }
+
+                let duration_ms = total_start.elapsed().as_millis() as u64;
+                on_event(PipelineEvent::Finished {
+                    status: "ok".into(),
+                    duration_ms,
+                });
+                RunResult {
+                    status: "ok".into(),
+                    duration_ms,
+                    nodes,
+                    preview,
+                    error: None,
+                    category: None,
+                }
+            }
+            Err(reason) => {
+                let duration_ms = total_start.elapsed().as_millis() as u64;
+                if matches!(reason, RunnerFailureReason::Cancelled) {
+                    // Match the compatibility path's cancellation semantics:
+                    // status is "cancelled" (not "error") with no error message.
+                    on_event(PipelineEvent::Cancelled);
+                    on_event(PipelineEvent::Finished {
+                        status: "cancelled".into(),
+                        duration_ms,
+                    });
+                    RunResult {
+                        status: "cancelled".into(),
+                        duration_ms,
+                        nodes: Default::default(),
+                        preview: Vec::new(),
+                        error: None,
+                        category: None,
+                    }
+                } else {
+                    let error = runner_failure_code(reason).to_string();
+                    on_event(PipelineEvent::Finished {
+                        status: "error".into(),
+                        duration_ms,
+                    });
+                    RunResult::failed(total_start, error)
+                }
+            }
+        }
+    }
+
+    /// Fetch schema + preview rows for a single view-stage relation through
+    /// the official runner.  Returns `None` on any transport error so a
+    /// preview failure never blocks the run result.
+    fn official_preview_for_stage(
+        &self,
+        lease: &OfficialLeaseGuard,
+        node_id: &str,
+    ) -> Option<NodePreview> {
+        let quoted = plan::quote_ident(node_id);
+
+        // Schema: DESCRIBE the view to get column names and DuckDB types.
+        let describe_sql = format!("SELECT * FROM (DESCRIBE {})", quoted);
+        let schema_result = lease
+            .preview_relation(
+                &describe_sql,
+                1000,
+                self.official_cancellation.clone(),
+            )
+            .ok()?;
+        let columns: Vec<Column> = schema_result
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.get("column_name")?.as_str()?.to_string();
+                let type_name = row
+                    .get("column_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("VARCHAR");
+                let nullable = row
+                    .get("null")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.eq_ignore_ascii_case("NO"))
+                    .unwrap_or(true);
+                Some(Column {
+                    name,
+                    data_type: map_duckdb_type(type_name),
+                    nullable,
+                    primary_key: None,
+                    format: None,
+                })
+            })
+            .collect();
+
+        // Rows: SELECT * FROM <view> LIMIT PREVIEW_ROW_LIMIT.
+        let select_sql = format!("SELECT * FROM {}", quoted);
+        let row_result = lease
+            .preview_relation(
+                &select_sql,
+                PREVIEW_ROW_LIMIT as u32,
+                self.official_cancellation.clone(),
+            )
+            .ok()?;
+        let rows: Vec<JsonValue> = row_result
+            .rows
+            .into_iter()
+            .map(|row| {
+                JsonValue::Object(row.into_iter().collect())
+            })
+            .collect();
+
+        Some(NodePreview {
+            node_id: node_id.to_string(),
+            columns,
+            rows,
+        })
+    }
+
     fn execute_batched(
         &self,
         db_path: &Path,
@@ -2251,6 +2715,7 @@ impl DuckdbEngine {
             error: overall_error,
             category,
         }
+        .redact_untrusted_diagnostics()
     }
 
     /// Execute an all-SQL pipeline containing one or more Query Sources in a
@@ -2429,6 +2894,7 @@ impl DuckdbEngine {
             error: overall_error,
             category,
         }
+        .redact_untrusted_diagnostics()
     }
 
     fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
@@ -2601,6 +3067,22 @@ fn stage_kind_label(k: &plan::StageKind) -> &'static str {
     match k {
         plan::StageKind::Sink => "sink",
         plan::StageKind::View => "view",
+    }
+}
+
+/// Ensures events are safe before they cross the engine boundary to desktop,
+/// headless logging, or another caller. Exact pipeline-secret replacement is
+/// performed by the execution path; this covers untrusted provider text.
+fn redact_pipeline_event(event: &mut PipelineEvent) {
+    match event {
+        PipelineEvent::StageFinished { error, sql, .. } => {
+            *error = error.as_deref().map(redact_untrusted_text);
+            *sql = sql.as_deref().map(redact_untrusted_text);
+        }
+        PipelineEvent::Log { message, .. } => {
+            *message = redact_untrusted_text(message);
+        }
+        _ => {}
     }
 }
 
@@ -4675,6 +5157,7 @@ pub struct RunResult {
 
 impl RunResult {
     fn failed(start: Instant, error: String) -> Self {
+        let error = redact_untrusted_text(&error);
         let category = error_category::categorize_error(&error);
         RunResult {
             status: "error".into(),
@@ -4684,6 +5167,15 @@ impl RunResult {
             error: Some(error),
             category: Some(category.into()),
         }
+    }
+
+    fn redact_untrusted_diagnostics(mut self) -> Self {
+        self.error = self.error.as_deref().map(redact_untrusted_text);
+        for node in self.nodes.values_mut() {
+            node.error = node.error.as_deref().map(redact_untrusted_text);
+            node.sql = node.sql.as_deref().map(redact_untrusted_text);
+        }
+        self
     }
 }
 
@@ -4813,10 +5305,72 @@ mod tests {
     use super::{
         aws_sigv4_sign, chunk_text, cosine_similarity, glob_match, map_sqlserver_type,
         mssql_numeric_to_string, parse_link_next, pii_patterns, read_marker, render_prompt_template,
-        secret_placeholder, sqlserver_preview_expr, unwrap_dynamodb_attrs, DuckdbEngine, MarkerState,
+        secret_placeholder, sqlserver_preview_expr, unwrap_dynamodb_attrs, DuckdbEngine,
+        MarkerState, NodeRunStatus, OfficialRunnerController, PipelineDoc, PipelineEvent, RunResult,
+        redact_pipeline_event,
     };
     use duckle_metadata::DataType;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct OfficialControllerState {
+        acquire_count: u32,
+        release_count: u32,
+    }
+
+    struct RecordingOfficialController {
+        state: Arc<Mutex<OfficialControllerState>>,
+    }
+
+    impl OfficialRunnerController for RecordingOfficialController {
+        fn acquire(
+            &self,
+            run_id: duckle_db_runner::model::RunId,
+            _attempt: u32,
+            _cancellation: duckle_db_runner::model::RunCancellation,
+            _now_millis: u64,
+        ) -> Result<duckle_db_runner::model::WorkerLease, duckle_db_runner::model::RunnerFailureReason> {
+            self.state.lock().unwrap().acquire_count += 1;
+            Ok(duckle_db_runner::model::WorkerLease {
+                lease_id: duckle_db_runner::model::WorkerLeaseId::new(),
+                worker_id: duckle_db_runner::model::WorkerId::new(),
+                run_id,
+                worker_kind: duckle_db_runner::model::WorkerKind::OnDemand,
+                profile_version: 1,
+            })
+        }
+
+        fn release(
+            &self,
+            _lease: duckle_db_runner::model::WorkerLease,
+            _now_millis: u64,
+        ) {
+            self.state.lock().unwrap().release_count += 1;
+        }
+
+        fn execute_batch(
+            &self,
+            _lease: &duckle_db_runner::model::WorkerLease,
+            _statements: Vec<String>,
+            _cancellation: duckle_db_runner::model::RunCancellation,
+        ) -> Result<duckle_db_runner::run_database::SqlBatchResult, duckle_db_runner::model::RunnerFailureReason> {
+            Ok(duckle_db_runner::run_database::SqlBatchResult {
+                rows: 0,
+                transport: duckle_db_runner::model::TransportKind::Quack,
+            })
+        }
+
+        fn preview_relation(
+            &self,
+            _lease: &duckle_db_runner::model::WorkerLease,
+            _sql: &str,
+            _limit: u32,
+            _cancellation: duckle_db_runner::model::RunCancellation,
+        ) -> Result<duckle_db_runner::run_database::PreviewResult, duckle_db_runner::model::RunnerFailureReason> {
+            Err(duckle_db_runner::model::RunnerFailureReason::RunnerUnavailable)
+        }
+    }
 
     #[test]
     fn for_new_run_isolates_cancel_but_clones_share_within_a_run() {
@@ -4833,6 +5387,108 @@ mod tests {
         let child = run_b.clone();
         run_b.request_cancel();
         assert!(child.check_cancelled().is_err(), "a clone shares the run's flag");
+    }
+
+    #[test]
+    fn official_runner_selection_does_not_fall_back_to_the_cli() {
+        let rejected = duckle_db_runner::cutover::CutoverGate::Rejected {
+            missing_or_failed: vec!["SC-001".to_string()],
+        };
+        let engine = DuckdbEngine::new(PathBuf::from("not-installed"))
+            .with_runner_selection(duckle_db_runner::cutover::EntryPointClass::Test, &rejected);
+
+        assert_eq!(engine.execution_route(), super::ExecutionRoute::OfficialRunner);
+        let doc = PipelineDoc {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        assert_eq!(engine.execute_pipeline(&doc).error.as_deref(), Some("runner_unavailable"));
+    }
+
+    #[test]
+    fn official_runner_selection_acquires_and_releases_only_through_the_controller() {
+        let state = Arc::new(Mutex::new(OfficialControllerState::default()));
+        let rejected = duckle_db_runner::cutover::CutoverGate::Rejected {
+            missing_or_failed: vec!["SC-001".to_string()],
+        };
+        let engine = DuckdbEngine::new(PathBuf::from("not-installed"))
+            .with_official_runner_controller(Arc::new(RecordingOfficialController {
+                state: state.clone(),
+            }))
+            .with_runner_selection(duckle_db_runner::cutover::EntryPointClass::Test, &rejected);
+        let doc = PipelineDoc {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+
+        assert_eq!(engine.execute_pipeline(&doc).error.as_deref(), Some("runner_unavailable"));
+        let state = state.lock().unwrap();
+        assert_eq!(state.acquire_count, 1);
+        assert_eq!(state.release_count, 1);
+    }
+
+    #[test]
+    fn pipeline_events_redact_untrusted_provider_credentials_before_delivery() {
+        let canary = "TOP_SECRET_CANARY";
+        let mut event = PipelineEvent::StageFinished {
+            node_id: "source".into(),
+            kind: "view".into(),
+            status: "error".into(),
+            rows: None,
+            duration_ms: 0,
+            error: Some(format!("postgres://user:{canary}@db.example/orders")),
+            sql: Some(format!("SET password={canary}")),
+        };
+
+        redact_pipeline_event(&mut event);
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(!serialized.contains(canary));
+        assert!(serialized.contains("postgres://***@db.example/orders"));
+        assert!(serialized.contains("password=***"));
+    }
+
+    #[test]
+    fn failed_run_results_redact_untrusted_provider_credentials() {
+        let canary = "TOP_SECRET_CANARY";
+        let result = RunResult::failed(
+            std::time::Instant::now(),
+            format!("connection failed: password={canary}"),
+        );
+
+        assert!(!result.error.as_deref().unwrap_or_default().contains(canary));
+        assert_eq!(result.error.as_deref(), Some("connection failed: password=***"));
+    }
+
+    #[test]
+    fn completed_run_results_redact_node_diagnostics_before_returning() {
+        let canary = "TOP_SECRET_CANARY";
+        let mut nodes = std::collections::BTreeMap::new();
+        nodes.insert(
+            "source".into(),
+            NodeRunStatus {
+                status: "error".into(),
+                kind: Some("view".into()),
+                rows: None,
+                duration_ms: Some(0),
+                error: Some(format!("request rejected: Bearer {canary}")),
+                category: Some("auth".into()),
+                sql: Some(format!("SET password={canary}")),
+            },
+        );
+        let result = RunResult {
+            status: "error".into(),
+            duration_ms: 0,
+            nodes,
+            preview: Vec::new(),
+            error: Some(format!("connection failed: password={canary}")),
+            category: Some("auth".into()),
+        }
+        .redact_untrusted_diagnostics();
+        let serialized = serde_json::to_string(&result).unwrap();
+
+        assert!(!serialized.contains(canary));
+        assert!(serialized.contains("Bearer ***"));
+        assert!(serialized.contains("password=***"));
     }
 
     #[test]

@@ -1,0 +1,38 @@
+name: Runner package smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/duckle-db-runner/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/runner-package-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/duckle-db-runner/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/runner-package-smoke.yml'
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: duckle-db-runner-v1
+      - name: Verify official runner crate builds with bundled DuckDB
+        run: cargo check -p duckle-db-runner
+      - name: Run runner controller contract tests
+        run: cargo test -p duckle-db-runner --lib

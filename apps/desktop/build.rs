@@ -24,6 +24,7 @@ fn main() {
     embed_runner_linux();
     embed_mcp();
     embed_lance();
+    embed_db_sidecar();
 
     tauri_build::build()
 }
@@ -123,6 +124,49 @@ fn embed_mcp() {
         }
     }
     println!("cargo:rustc-env=DUCKLE_EMBEDDED_MCP={}", dst.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        std::path::Path::new(&manifest_dir).join("bin").join(name).display()
+    );
+}
+
+/// Locate the trusted Quack database sidecar. It is optional while the
+/// compatibility route remains the production default, but release builds
+/// stage it alongside the desktop app before the official runner is enabled.
+fn embed_db_sidecar() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let name = if target_os == "windows" {
+        "duckle-db-sidecar.exe"
+    } else {
+        "duckle-db-sidecar"
+    };
+    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
+    let profile_dir = std::path::Path::new(&out_dir)
+        .ancestors()
+        .nth(3)
+        .map(|path| path.join(name));
+    let source = if staged.exists() {
+        Some(staged)
+    } else {
+        profile_dir.filter(|path| path.exists())
+    };
+    let destination = std::path::Path::new(&out_dir).join("embedded-db-sidecar.bin");
+    match source {
+        Some(source) => {
+            compress_to(&source, &destination);
+            println!("cargo:rerun-if-changed={}", source.display());
+        }
+        None => {
+            std::fs::write(&destination, [])
+                .unwrap_or_else(|error| panic!("write empty embedded-db-sidecar: {error}"));
+            println!(
+                "cargo:warning=duckle-db-sidecar not staged (apps/desktop/bin/{name}); official runner remains unavailable until CI stages it"
+            );
+        }
+    }
+    println!("cargo:rustc-env=DUCKLE_EMBEDDED_DB_SIDECAR={}", destination.display());
     println!(
         "cargo:rerun-if-changed={}",
         std::path::Path::new(&manifest_dir).join("bin").join(name).display()

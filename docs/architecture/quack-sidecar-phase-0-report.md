@@ -31,7 +31,7 @@ can use local child processes first and Kubernetes Jobs/Pods later.
 ## Implementation under test
 
 The isolated PoC is in
-[`spikes/quack-sidecar`](../../spikes/quack-sidecar/README.md). It is not a
+[`spikes/quack-sidecar-phase0-spike`](../../spikes/quack-sidecar-phase0-spike/README.md). It is not a
 member of the production Cargo workspace and does not change the CLI execution
 path.
 
@@ -122,7 +122,7 @@ Phase 0 also made the approved temporary product changes:
 Command:
 
 ```powershell
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml -- smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml -- smoke
 ```
 
 Representative release result on 2026-07-17. The smoke dataset contains 2M
@@ -165,7 +165,7 @@ Quack sessions.
 Command:
 
 ```powershell
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- clone-attach-smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- clone-attach-smoke
 ```
 
 The probe keeps one sidecar alive, sets the server to `threads=2`, executes
@@ -280,7 +280,7 @@ is never shared by concurrent queries and is never wrapped in
 Command:
 
 ```powershell
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- benchmark
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- benchmark
 ```
 
 Environment: Windows x64, DuckDB `1.5.4`, one sidecar, one client, 2,000,000
@@ -328,7 +328,7 @@ incremental, but CI cache and separate sidecar staging are mandatory.
 Command:
 
 ```powershell
-cargo run --manifest-path spikes/quack-sidecar/Cargo.toml --release -- pool-smoke
+cargo run --manifest-path spikes/quack-sidecar-phase0-spike/Cargo.toml --release -- pool-smoke
 ```
 
 The selected stateless implementation was run on 2026-07-17 with three local

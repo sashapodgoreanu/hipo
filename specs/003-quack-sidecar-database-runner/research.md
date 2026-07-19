@@ -2,13 +2,15 @@
 
 ## Confine Quack e versione
 
-**Decision:** creare il binario ufficiale duckle-db-runner e pinare una sola coppia DuckDB/Quack client-server, inizialmente quella validata dallo spike; alzare il MSRV workspace a Rust 1.85.1.
+**Decision:** creare il binario ufficiale duckle-db-runner e pinare una sola coppia DuckDB/Quack client-server, inizialmente quella validata dallo spike; alzare il MSRV workspace a Rust 1.88.
 
-**Rationale:** lo spike usa duckdb-rs 1.10504.0 / DuckDB 1.5.4 e richiede Rust 1.85.1. Quack è sperimentale, quindi wrapper interno e coppie atomiche riducono l'area di aggiornamento.
+**Rationale:** lo spike usa duckdb-rs 1.10504.0 / DuckDB 1.5.4 e richiede almeno Rust 1.85.1; il lockfile dell'attuale workspace include inoltre dipendenze desktop come `darling`, `mongodb`, `time` e `image` che dichiarano MSRV Rust 1.88. Quack è sperimentale, quindi wrapper interno e coppie atomiche riducono l'area di aggiornamento.
+
+**Bundle verificato:** l'estensione Quack ufficiale 1.5.4 è pinata a DuckDB 1.5.4 e deve essere verificata prima della readiness. Gli SHA-256 raccolti dall'endpoint ufficiale sono: Windows AMD64 `52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895`, macOS AMD64 `85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970`, Linux AMD64 `decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e`. La licenza è MIT e la provenienza è `duckdb/duckdb-quack`; il runtime non esegue `INSTALL quack` e il release package deve stageare il file già verificato.
 
 **Alternatives considered:** CLI, Quack non pinato/autoinstall, REST/JSON.
 
-Fonti: [spike](../../spikes/quack-sidecar/Cargo.toml), [Quack extension](https://duckdb.org/docs/current/core_extensions/quack), [Quack overview](https://duckdb.org/docs/current/quack/overview).
+Fonti: [spike](../../spikes/quack-sidecar-phase0-spike/Cargo.toml), [Quack extension](https://duckdb.org/docs/current/core_extensions/quack), [Quack overview](https://duckdb.org/docs/current/quack/overview).
 
 ## Controller obbligatorio e autoscaling
 
@@ -45,4 +47,3 @@ Fonti: [ADR bootstrap](../../docs/architecture/adr-worker-identity-bootstrap-sec
 **Rationale:** setter sequenziali non garantiscono drain-safe apply; desktop-only lascerebbe runner, MCP e scheduler sulla CLI.
 
 **Alternatives considered:** setter separati, riavvio leased, fallback CLI permanente.
-

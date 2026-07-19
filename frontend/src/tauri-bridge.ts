@@ -1019,6 +1019,43 @@ export async function settingsSetMemoryLimit(workspace: string, mb: number | nul
     await invoke('settings_set_memory_limit', { workspace, mb });
 }
 
+export type RunnerResourceLimit =
+    | { mode: 'automatic' }
+    | { mode: 'percent'; value: number }
+    | { mode: 'bytes'; value: number };
+
+export type RunnerAutomaticOrNumber =
+    | { mode: 'automatic' }
+    | { mode: 'value'; value: number };
+
+export interface RunnerResourcesProfile {
+    version: number;
+    memory: RunnerResourceLimit;
+    cpuThreads: RunnerAutomaticOrNumber;
+    spill: RunnerResourceLimit;
+    quackParallelism: RunnerAutomaticOrNumber;
+    baseCapacity: number;
+}
+
+export interface RunnerResourcesConfig {
+    requested: RunnerResourcesProfile;
+    effective: RunnerResourcesProfile;
+    diagnostics: Array<'host_limit' | 'workspace_capacity' | 'license_limit'>;
+}
+
+/** Read the complete versioned Feature 003 runner profile for a workspace. */
+export async function settingsGetRunnerResources(workspace: string): Promise<RunnerResourcesConfig> {
+    return await invoke<RunnerResourcesConfig>('settings_get_runner_resources', { workspace });
+}
+
+/** Persist the complete runner profile in one atomic Settings operation. */
+export async function settingsSetRunnerResources(
+    workspace: string,
+    profile: RunnerResourcesProfile,
+): Promise<RunnerResourcesConfig> {
+    return await invoke<RunnerResourcesConfig>('settings_set_runner_resources', { workspace, profile });
+}
+
 /** #143: read whether this workspace allows loading unsigned DuckDB extensions. */
 export async function settingsGetAllowUnsigned(workspace: string): Promise<boolean> {
     if (!workspace) return false;

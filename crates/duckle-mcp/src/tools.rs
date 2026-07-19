@@ -224,12 +224,45 @@ pub fn call_tool(params: Value) -> Result<Value, (i64, String)> {
 }
 
 fn content_ok(v: &Value) -> Value {
-    let text = serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string());
+    let mut safe = v.clone();
+    redact_response_diagnostics(&mut safe);
+    let text = serde_json::to_string_pretty(&safe).unwrap_or_else(|_| safe.to_string());
     json!({ "content": [ { "type": "text", "text": text } ], "isError": false })
 }
 
 fn content_err(msg: &str) -> Value {
-    json!({ "content": [ { "type": "text", "text": msg } ], "isError": true })
+    let message = duckle_duckdb_engine::redact_untrusted_text(msg);
+    json!({ "content": [ { "type": "text", "text": message } ], "isError": true })
+}
+
+/// Redact diagnostic strings in otherwise-successful structured responses.
+/// Several tools deliberately return `{ ok: false, error: ... }` as normal
+/// tool output, so routing only `Err` through `content_err` is insufficient.
+fn redact_response_diagnostics(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                redact_response_diagnostics(value);
+            }
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                if matches!(
+                    key.as_str(),
+                    "error" | "message" | "sql" | "stderr"
+                ) {
+                    if let Some(text) = value.as_str() {
+                        *value = Value::String(duckle_duckdb_engine::redact_untrusted_text(text));
+                    } else {
+                        redact_response_diagnostics(value);
+                    }
+                } else {
+                    redact_response_diagnostics(value);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,6 +1361,31 @@ fn sanitize_segment(name: &str) -> String {
 #[cfg(test)]
 mod verify_tests {
     use super::*;
+
+    #[test]
+    fn content_payloads_redact_nested_diagnostics() {
+        let canary = "mcp-redaction-canary";
+        let value = json!({
+            "ok": false,
+            "error": format!("connection failed: password={canary}"),
+            "details": [{ "message": format!("Bearer {canary}") }],
+            "nested": { "error": { "message": format!("token={canary}") } }
+        });
+
+        let rendered = content_ok(&value);
+        let text = rendered["content"][0]["text"]
+            .as_str()
+            .expect("MCP content text");
+        assert!(!text.contains(canary), "diagnostics leaked: {text}");
+        assert!(text.contains("password=***"), "password was not redacted: {text}");
+        assert!(text.contains("Bearer ***"), "bearer token was not redacted: {text}");
+
+        let error = content_err(&format!("request failed: token={canary}"));
+        let error_text = error["content"][0]["text"]
+            .as_str()
+            .expect("MCP error text");
+        assert!(!error_text.contains(canary), "error leaked: {error_text}");
+    }
 
     #[test]
     fn structural_risks_clean_pipeline_has_none() {
