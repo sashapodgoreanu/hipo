@@ -19,6 +19,7 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 notify = "8"
 notify-debouncer-mini = "0.6"
+duckle-db-runner = { workspace = true }
 duckle-duckdb-engine = { workspace = true }
 duckle-secrets = { workspace = true }
 
