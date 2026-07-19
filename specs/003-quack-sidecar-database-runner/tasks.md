@@ -85,7 +85,7 @@
 
 **Independent Test**: Verify shared relations, server setup, batches, and 2/4/8 compatible requests without affinity classification or fallback.
 
-- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckdb-engine/src/lib.rs` and `crates/duckle-db-runner/src/run_session.rs`
+- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckle-db-runner/src/run_session.rs`
 - [X] T044 [US2] Add per-run server-setup deduplication and catalog visibility across stateless requests in `crates/duckle-db-runner/src/run_session.rs`
 - [X] T045 [US2] Implement and test affinity-free planning while retaining affinity compatibility until cutover in `crates/duckdb-engine/src/plan/mod.rs`, `crates/duckdb-engine/src/plan/graph.rs`, and `crates/duckdb-engine/src/plan/builders.rs`
 - [X] T046 [US2] Migrate affinity callers to normal run database behind compatibility selection while retaining `AffinitySession` until cutover in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/src/affinity_session.rs`
@@ -126,7 +126,7 @@
 - [X] T060 [US6] Route headless CLI/web through controller and remove web run_lock serialization without an admission queue in `crates/duckle-runner/src/main.rs` and `crates/duckle-runner/src/serve.rs`
 - [X] T061 [US6] Route scheduler and MCP through same controller/run database in `crates/scheduler/src/lib.rs` and `crates/duckle-mcp/src/tools.rs`
 - [X] T062 [US6] Implement CutoverEvidence manifest evaluation and production/test/compatibility/release-CI selection that keeps official runner non-productive until approval in `crates/duckle-db-runner/src/cutover.rs`, `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `crates/duckle-runner/src/main.rs`
-- [ ] T063 [US6] Add regression proving production/release-CI gate rejection, test/compatibility selection, and no post-cutover CLI fallback in `crates/duckdb-engine/tests/quack_runner_parity.rs` and `crates/duckle-runner/src/serve.rs`
+- [X] T063 [US6] Add regression proving production/release-CI gate rejection, test/compatibility selection, and no post-cutover CLI fallback in `crates/duckdb-engine/tests/quack_runner_parity.rs` and `crates/duckle-runner/src/serve.rs`
 - [ ] T064 [US6] Apply and verify effective memory, CPU, spill, and temporary-space profile before worker readiness in `crates/duckle-db-runner/src/local_process_provider.rs` and `crates/duckle-db-runner/src/run_session.rs`
 - [ ] T065 [US6] Add bounded-spill, disk-full/quota, readiness-rejection, current/peak-metric, invalid-profile, and runner-unavailable integration coverage in `crates/duckle-db-runner/tests/run_session.rs`
 - [ ] T066 [US6] Add selection and correctness coverage for SQL remote, Quack transfer, and Parquet decision table in `crates/duckdb-engine/tests/quack_runner_parity.rs`
