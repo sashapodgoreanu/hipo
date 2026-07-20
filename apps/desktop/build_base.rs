@@ -6,7 +6,7 @@ const QUACK_LICENSE: &str = "MIT";
 const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
 const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 const QUACK_WINDOWS_AMD64_SHA256: &str =
-    "52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895";
+    "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122";
 const QUACK_MACOS_AMD64_SHA256: &str =
     "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
 const QUACK_LINUX_AMD64_SHA256: &str =
@@ -260,64 +260,27 @@ fn embed_db_sidecar() {
         }
         None => {
             std::fs::write(&destination, [])
-                .unwrap_or_else(|error| panic!("write empty embedded-db-sidecar: {error}"));
+                .unwrap_or_else(|error| panic!("write empty embedded database sidecar: {error}"));
             std::fs::write(&pin_manifest, [])
-                .unwrap_or_else(|error| panic!("write empty official-runner pin: {error}"));
+                .unwrap_or_else(|error| panic!("write empty official runner pin: {error}"));
             println!("cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}", pin_manifest.display());
             println!(
-                "cargo:warning=duckle-db-sidecar not staged (apps/desktop/bin/{name}); official runner remains unavailable until CI stages the verified sidecar/Quack pair"
+                "cargo:warning=duckle-db-sidecar not staged (apps/desktop/bin/{name}); official runner remains unavailable for this build"
             );
         }
     }
-    println!("cargo:rustc-env=DUCKLE_EMBEDDED_DB_SIDECAR={}", destination.display());
-    println!("cargo:rustc-env=DUCKLE_RUNNER_DUCKDB_VERSION={RUNNER_DUCKDB_VERSION}");
-    println!("cargo:rustc-env=DUCKLE_QUACK_VERSION={QUACK_VERSION}");
-    println!("cargo:rustc-env=DUCKLE_QUACK_LICENSE={QUACK_LICENSE}");
-    println!("cargo:rustc-env=DUCKLE_QUACK_PROVENANCE={QUACK_PROVENANCE}");
     println!(
-        "cargo:rerun-if-changed={}",
-        std::path::Path::new(&manifest_dir).join("bin").join(name).display()
+        "cargo:rustc-env=DUCKLE_EMBEDDED_DB_SIDECAR={}",
+        destination.display()
     );
+    println!("cargo:rerun-if-changed={}", staged.display());
     println!("cargo:rerun-if-changed={}", staged_extension.display());
 }
 
-/// Locate the prebuilt STATIC Linux duckle-runner and expose its bytes to
-/// lib.rs via include_bytes!(env!("DUCKLE_EMBEDDED_RUNNER_LINUX")). This is the
-/// stub the desktop prepends when "Build Pipeline" targets Linux from a non-Linux
-/// host (cross-OS build). It is produced by
-/// scripts/build-runner-linux.sh (Docker musl build) and staged, gitignored,
-/// at apps/desktop/bin/duckle-runner-linux-x64.
-///
-/// Unlike the host runner (required), this is OPTIONAL: when not staged we
-/// embed an empty file so the desktop still builds; the Build Pipeline command
-/// then reports that this build cannot target Linux. On a Linux host build the
-/// host runner already covers the Linux target, so the cross stub is not staged
-/// there either.
-fn embed_runner_linux() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
-
-    let staged = std::path::Path::new(&manifest_dir)
-        .join("bin")
-        .join("duckle-runner-linux-x64");
-    let dst = std::path::Path::new(&out_dir).join("embedded-runner-linux.bin");
-    if staged.exists() {
-        compress_to(&staged, &dst);
-    } else {
-        std::fs::write(&dst, [])
-            .unwrap_or_else(|e| panic!("write empty embedded-runner-linux: {}", e));
-        println!(
-            "cargo:warning=Linux runner not staged (apps/desktop/bin/duckle-runner-linux-x64); Build Pipeline will not be able to target Linux from this build. Stage it: bash scripts/build-runner-linux.sh"
-        );
-    }
-    println!("cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER_LINUX={}", dst.display());
-    println!("cargo:rerun-if-changed={}", staged.display());
-}
-
 /// Locate a freshly built `duckle-runner` and expose its bytes to lib.rs via
-/// include_bytes!(env!("DUCKLE_EMBEDDED_RUNNER")). The runner is captured at
-/// desktop-compile time, so developers must build duckle-runner BEFORE (or
-/// alongside) the desktop build. CI stages it to apps/desktop/bin/.
+/// include_bytes!(env!("DUCKLE_EMBEDDED_RUNNER")). The build must fail when the
+/// Windows runner is unavailable: Build Pipeline cannot be allowed to report
+/// success while carrying no executable sidecar.
 fn embed_runner() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
@@ -328,35 +291,54 @@ fn embed_runner() {
         "duckle-runner"
     };
 
-    // Candidate source order (first existing wins):
-    //  1. <CARGO_MANIFEST_DIR>/bin/<name> - CI/local staged copy (PRIMARY;
-    //     avoids guessing the profile dir).
-    //  2. <profile-dir>/<name> - OUT_DIR is target/<profile>/build/<hash>/out,
-    //     so the 3rd ancestor is target/<profile>. Do NOT hardcode
-    //     release/debug; release-runner changes it. Dev fallback only.
     let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
     let profile_dir = std::path::Path::new(&out_dir)
         .ancestors()
         .nth(3)
         .map(|p| p.join(name));
-
     let source = if staged.exists() {
         staged
     } else if let Some(p) = profile_dir.filter(|p| p.exists()) {
         p
     } else {
         panic!(
-            "duckle-runner not found for embedding. Build it first: cargo build --profile release-runner -p duckle-runner (CI stages it to apps/desktop/bin/)."
+            "duckle-runner not found; build it first with `cargo build --profile release-runner -p duckle-runner`, or stage it at apps/desktop/bin/{name}`"
         );
     };
 
     let dst = std::path::Path::new(&out_dir).join("embedded-runner.bin");
     compress_to(&source, &dst);
-
     println!("cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER={}", dst.display());
+    println!("cargo:rerun-if-changed={}", source.display());
     println!(
         "cargo:rerun-if-changed={}",
         std::path::Path::new(&manifest_dir).join("bin").join(name).display()
     );
-    println!("cargo:rerun-if-changed={}", source.display());
+}
+
+/// Best-effort embed of a prebuilt Linux x86_64 runner into every desktop build.
+/// CI stages `apps/desktop/bin/duckle-runner-linux-x64` before compiling the
+/// Windows installer. When present the app can build Linux pipeline bundles;
+/// when absent (local dev, or a non-release build) Linux target attempts fail
+/// with an actionable error at runtime while Windows builds remain unaffected.
+fn embed_runner_linux() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let name = "duckle-runner-linux-x64";
+    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
+    let dst = std::path::Path::new(&out_dir).join("embedded-runner-linux-x64.bin");
+    if staged.exists() {
+        compress_to(&staged, &dst);
+    } else {
+        std::fs::write(&dst, [])
+            .unwrap_or_else(|e| panic!("write empty embedded Linux runner: {}", e));
+        println!(
+            "cargo:warning=Linux runner not staged (apps/desktop/bin/{name}); Build Pipeline will not be able to target Linux from this build. Stage it: bash scripts/build-runner-linux.sh"
+        );
+    }
+    println!(
+        "cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER_LINUX_X64={}",
+        dst.display()
+    );
+    println!("cargo:rerun-if-changed={}", staged.display());
 }
