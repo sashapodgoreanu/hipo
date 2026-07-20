@@ -95,7 +95,6 @@ fn main() {
                     });
                 }
             }
-            println!("cargo:warning=verified Quack {} from {}", QUACK_VERSION, source.display());
         }
         (Some(_), None) => {
             std::fs::write(&embedded, [])
