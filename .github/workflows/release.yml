@@ -295,6 +295,30 @@ jobs:
           asset="${{ matrix.asset }}"
           gh release upload "$REL_TAG" "_release/$asset" --clobber
 
+      # Publish the headless runner as a first-class asset, not just an
+      # embedded sidecar. It is what CI, cron and a container actually need
+      # (~20 MB versus the ~100 MB desktop app), it is what scripts/install.sh
+      # downloads, and until now every leg built it and threw it away.
+      # Asset name mirrors the desktop one: Duckle-linux-x64 ->
+      # duckle-runner-linux-x64.
+      - name: Upload duckle-runner to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REL_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          set -e
+          runner_asset="$(printf '%s' "${{ matrix.asset }}" | sed 's/^Duckle-/duckle-runner-/')"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            src="apps/desktop/bin/duckle-runner.exe"
+          else
+            src="apps/desktop/bin/duckle-runner"
+          fi
+          [ -f "$src" ] || { echo "::error::$src missing; the runner build step did not stage it"; exit 1; }
+          cp "$src" "_release/$runner_asset"
+          gh release upload "$REL_TAG" "_release/$runner_asset" --clobber
+
   # Publish SHA256SUMS.txt covering the 6 binaries so the in-app self-updater
   # can verify a downloaded build before swapping it in. Uploads are per-matrix
   # job, so checksums must be a separate job that pulls the finished assets back.
@@ -323,10 +347,18 @@ jobs:
           set -e
           mkdir -p _sums && cd _sums
           gh release download "$REL_TAG" --clobber
-          # Checksum exactly the 6 published binaries (not any prior SHA file).
+          # Checksum the published binaries (not any prior SHA file): the 6
+          # desktop apps, plus every duckle-runner asset that made it up.
+          # scripts/install.sh verifies the runner against this file, so a
+          # missing runner entry would silently disable that check.
+          # The runners are globbed rather than listed so a partial re-roll
+          # (workflow_dispatch with os_filter) still produces a valid file.
+          runners=$(ls duckle-runner-* 2>/dev/null || true)
+          # shellcheck disable=SC2086
           sha256sum \
             Duckle-linux-x64 Duckle-linux-arm64 \
             Duckle-macos-x64 Duckle-macos-arm64 \
-            Duckle-windows-x64.exe Duckle-windows-arm64.exe > SHA256SUMS.txt
+            Duckle-windows-x64.exe Duckle-windows-arm64.exe \
+            $runners > SHA256SUMS.txt
           cat SHA256SUMS.txt
           gh release upload "$REL_TAG" SHA256SUMS.txt --clobber

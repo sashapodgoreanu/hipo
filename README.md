@@ -473,6 +473,26 @@ Pick the binary for your OS from the [latest release](https://github.com/slothfl
 
 The single-file binary above is all you need for **Build Pipeline** too: the headless runner is embedded into the app at build time, and exporting a pipeline produces ONE self-contained executable (the engine, the DuckDB CLI, any needed extensions, and the resolved pipeline are all inside that one file). Copy that single file to your server and run or schedule it - no separate runner download required.
 
+### CLI only (CI, cron, containers)
+
+If you do not want the desktop studio, install just the headless runner. It is about 20 MB rather than ~100 MB, has no GUI dependency, and is what a build step actually needs:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/slothflowlabs/duckle/main/scripts/install.sh | sh
+```
+
+The script picks the right binary for your OS and architecture, verifies it against the release's `SHA256SUMS.txt`, and installs it as `duckle`. Windows users download `duckle-runner-windows-x64.exe` from the release page directly. Per-platform assets are named `duckle-runner-<os>-<arch>`.
+
+Pipelines execute as SQL on the DuckDB CLI, so the runner needs a `duckdb` on PATH or `DUCKLE_DUCKDB_BIN` set (`pip install duckdb-cli` is the quickest route). Validation does not:
+
+```sh
+duckle validate                 # compile-check every pipeline under ./pipelines
+duckle validate --json          # machine-readable, for a CI step
+duckle --pipeline my.json       # run one
+```
+
+`validate` opens no source and writes no sink, so it needs no engine, no credentials and no network. Exit codes are stable: `0` clean, `1` a real finding (a pipeline failed or did not compile), `2` the runner could not start (bad usage, unreadable file, missing engine).
+
 The binary is ~55-78 MB depending on platform (it embeds the headless runner and the bundled MCP server). On first launch you'll be guided through downloading two engines into your app-data directory:
 
 | Engine | Size | Required? | What it powers |
