@@ -131,9 +131,12 @@ jobs:
             export DUCKLE_PACKAGE_EXTENSION="$extension"
           fi
           if [ -n "${{ matrix.target }}" ]; then
+            cargo test -p duckle-runner --target "${{ matrix.target }}" \
+              --test package_smoke --no-run
             cargo test --offline -p duckle-runner --target "${{ matrix.target }}" \
               --test package_smoke -- --ignored
           else
+            cargo test -p duckle-runner --test package_smoke --no-run
             cargo test --offline -p duckle-runner \
               --test package_smoke -- --ignored
           fi
