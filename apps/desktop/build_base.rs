@@ -1,54 +1,8 @@
-use sha2::{Digest, Sha256};
-
 const RUNNER_DUCKDB_VERSION: &str = "1.5.4";
 const QUACK_VERSION: &str = "1.5.4";
 const QUACK_LICENSE: &str = "MIT";
 const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
 const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
-const QUACK_WINDOWS_AMD64_SHA256: &str =
-    "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122";
-const QUACK_MACOS_AMD64_SHA256: &str =
-    "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
-const QUACK_LINUX_AMD64_SHA256: &str =
-    "decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e";
-
-fn quack_sha256_for(target_os: &str, target_arch: &str) -> Option<&'static str> {
-    match (target_os, target_arch) {
-        ("windows", "x86_64") => Some(QUACK_WINDOWS_AMD64_SHA256),
-        ("macos", "x86_64") => Some(QUACK_MACOS_AMD64_SHA256),
-        ("linux", "x86_64") => Some(QUACK_LINUX_AMD64_SHA256),
-        _ => None,
-    }
-}
-
-fn verify_staged_quack_extension(
-    extension: &std::path::Path,
-    target_os: &str,
-    target_arch: &str,
-) -> Result<&'static str, String> {
-    if RUNNER_DUCKDB_VERSION != QUACK_VERSION {
-        return Err(format!(
-            "official runner DuckDB/Quack version mismatch: {} vs {}",
-            RUNNER_DUCKDB_VERSION, QUACK_VERSION
-        ));
-    }
-    let expected = quack_sha256_for(target_os, target_arch).ok_or_else(|| {
-        format!(
-            "no verified Quack {} bundle for {}-{}",
-            QUACK_VERSION, target_os, target_arch
-        )
-    })?;
-    let bytes = std::fs::read(extension)
-        .map_err(|error| format!("read staged {}: {error}", extension.display()))?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if actual != expected {
-        return Err(format!(
-            "staged Quack checksum mismatch for {}-{}: expected {}, got {}",
-            target_os, target_arch, expected, actual
-        ));
-    }
-    Ok(expected)
-}
 
 fn write_runner_pin_manifest(out_dir: &std::path::Path, sha256: &str) -> std::path::PathBuf {
     let manifest = format!(
@@ -76,269 +30,158 @@ fn write_runner_pin_manifest(out_dir: &std::path::Path, sha256: &str) -> std::pa
     path
 }
 
-fn main() {
-    // Stamp the build time (unix seconds) into the binary so the running app
-    // can compare itself to the latest GitHub release asset's upload time and
-    // prompt the user to upgrade when a newer build is published (see
-    // update_check.rs). In CI release builds the target is clean, so this
-    // re-stamps to the build time of the shipped binary; for local incremental
-    // builds it only re-runs when build.rs changes, which is fine - the update
-    // check is a no-op for un-stamped / dev binaries.
-    let epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    println!("cargo:rustc-env=DUCKLE_BUILD_EPOCH={epoch}");
-    // Force this script to re-run on EVERY build so the stamped epoch is always
-    // the actual build time. Pinning rerun to build.rs alone left local rebuilds
-    // carrying the very first build's timestamp, which made the update check
-    // report "a newer build is available" even when the local build was newer
-    // than the release. Referencing a path that never exists makes Cargo treat
-    // the script as always-dirty and re-run it.
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=.duckle-always-restamp-build-epoch");
-
-    embed_runner();
-    embed_runner_linux();
-    embed_mcp();
-    embed_lance();
-    embed_db_sidecar();
-
-    tauri_build::build()
-}
-
-/// zstd-compress `src` into `dst` so the embedded sidecar ships small; the app
-/// inflates it on first use (inflate_embedded in lib.rs). Level 19 favors ratio
-/// (decompression speed is level-independent). Panics on IO/compress error so a
-/// broken embed fails the build loudly rather than shipping a corrupt sidecar.
 fn compress_to(src: &std::path::Path, dst: &std::path::Path) {
-    // build.rs re-runs on every build (to restamp the epoch), so skip recompressing
-    // ~135MB of sidecars when the output is already newer than the source. A changed
-    // sidecar re-triggers via its rerun-if-changed and is newer than dst, so it
-    // recompresses; a clean build has no dst and compresses.
-    if let (Ok(sm), Ok(dm)) = (
-        src.metadata().and_then(|m| m.modified()),
-        dst.metadata().and_then(|m| m.modified()),
+    if let (Ok(source_modified), Ok(destination_modified)) = (
+        src.metadata().and_then(|metadata| metadata.modified()),
+        dst.metadata().and_then(|metadata| metadata.modified()),
     ) {
-        if dm >= sm {
+        if destination_modified >= source_modified {
             return;
         }
     }
-    let raw = std::fs::read(src).unwrap_or_else(|e| panic!("read {}: {}", src.display(), e));
-    let comp = zstd::encode_all(std::io::Cursor::new(&raw), 19)
-        .unwrap_or_else(|e| panic!("zstd compress {}: {}", src.display(), e));
-    std::fs::write(dst, &comp).unwrap_or_else(|e| panic!("write {}: {}", dst.display(), e));
+
+    let raw = std::fs::read(src)
+        .unwrap_or_else(|error| panic!("read {}: {error}", src.display()));
+    let compressed = zstd::encode_all(std::io::Cursor::new(&raw), 19)
+        .unwrap_or_else(|error| panic!("zstd compress {}: {error}", src.display()));
+    std::fs::write(dst, compressed)
+        .unwrap_or_else(|error| panic!("write {}: {error}", dst.display()));
 }
 
-/// Locate a prebuilt `duckle-lance` (the LanceDB sidecar) and expose its bytes
-/// via include_bytes!(env!("DUCKLE_EMBEDDED_LANCE")). OPTIONAL, and deliberately
-/// NOT built here: lancedb needs protoc + pulls DataFusion, so the desktop build
-/// must never compile it. CI builds it separately (with protoc) and stages it to
-/// apps/desktop/bin/. When absent we embed an empty file so the desktop still
-/// builds; src.lancedb / snk.lancedb then fall back to a duckle-lance on PATH or
-/// DUCKLE_LANCE_BIN at runtime.
+fn staged_or_profile_binary(
+    manifest_dir: &std::path::Path,
+    out_dir: &std::path::Path,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    let staged = manifest_dir.join("bin").join(name);
+    if staged.is_file() {
+        return Some(staged);
+    }
+
+    out_dir
+        .ancestors()
+        .nth(3)
+        .map(|profile| profile.join(name))
+        .filter(|candidate| candidate.is_file())
+}
+
 fn embed_lance() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out_dir =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let name = if target_os == "windows" {
         "duckle-lance.exe"
     } else {
         "duckle-lance"
     };
-    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
-    let dst = std::path::Path::new(&out_dir).join("embedded-lance.bin");
-    if staged.exists() {
-        compress_to(&staged, &dst);
+    let staged = manifest_dir.join("bin").join(name);
+    let destination = out_dir.join("embedded-lance.bin");
+
+    if staged.is_file() {
+        compress_to(&staged, &destination);
     } else {
-        std::fs::write(&dst, [])
-            .unwrap_or_else(|e| panic!("write empty embedded-lance: {}", e));
+        std::fs::write(&destination, [])
+            .unwrap_or_else(|error| panic!("write empty embedded-lance: {error}"));
         println!(
             "cargo:warning=duckle-lance not staged (apps/desktop/bin/{name}); LanceDB nodes will need a duckle-lance on PATH or DUCKLE_LANCE_BIN. CI stages it."
         );
     }
-    println!("cargo:rustc-env=DUCKLE_EMBEDDED_LANCE={}", dst.display());
+
+    println!(
+        "cargo:rustc-env=DUCKLE_EMBEDDED_LANCE={}",
+        destination.display()
+    );
     println!("cargo:rerun-if-changed={}", staged.display());
 }
 
-/// Locate a freshly built `duckle-mcp` and expose its bytes to lib.rs via
-/// include_bytes!(env!("DUCKLE_EMBEDDED_MCP")). Unlike the runner (required for
-/// Build Pipeline), the MCP server is optional: when it is not staged we embed
-/// an empty file so the desktop still builds, and the in-app MCP popup reports
-/// that this build carries no bundled server. CI / release stage it for real.
 fn embed_mcp() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out_dir =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let name = if target_os == "windows" {
         "duckle-mcp.exe"
     } else {
         "duckle-mcp"
     };
+    let destination = out_dir.join("embedded-mcp.bin");
 
-    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
-    let profile_dir = std::path::Path::new(&out_dir)
-        .ancestors()
-        .nth(3)
-        .map(|p| p.join(name));
-    let source = if staged.exists() {
-        Some(staged)
-    } else {
-        profile_dir.filter(|p| p.exists())
-    };
-
-    let dst = std::path::Path::new(&out_dir).join("embedded-mcp.bin");
-    match source {
-        Some(src) => {
-            compress_to(&src, &dst);
-            println!("cargo:rerun-if-changed={}", src.display());
-        }
+    match staged_or_profile_binary(&manifest_dir, &out_dir, name) {
+        Some(source) => compress_to(&source, &destination),
         None => {
-            std::fs::write(&dst, [])
-                .unwrap_or_else(|e| panic!("write empty embedded-mcp: {}", e));
+            std::fs::write(&destination, [])
+                .unwrap_or_else(|error| panic!("write empty embedded-mcp: {error}"));
             println!(
                 "cargo:warning=duckle-mcp not staged (apps/desktop/bin/{name}); the in-app MCP popup will report no bundled server. Stage it: cargo build --profile release-runner -p duckle-mcp"
             );
         }
     }
-    println!("cargo:rustc-env=DUCKLE_EMBEDDED_MCP={}", dst.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        std::path::Path::new(&manifest_dir).join("bin").join(name).display()
-    );
-}
 
-/// Locate the trusted Quack database sidecar. It is optional while the
-/// compatibility route remains the production default, but any staged sidecar
-/// is accepted only with the offline, checksum-verified Quack extension from
-/// the immutable DuckDB/Quack pin above.
-fn embed_db_sidecar() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let name = if target_os == "windows" {
-        "duckle-db-sidecar.exe"
-    } else {
-        "duckle-db-sidecar"
-    };
-    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
-    let staged_extension = std::path::Path::new(&manifest_dir)
-        .join("bin")
-        .join(QUACK_EXTENSION_FILE);
-    let profile_dir = std::path::Path::new(&out_dir)
-        .ancestors()
-        .nth(3)
-        .map(|path| path.join(name));
-    let source = if staged.exists() {
-        Some(staged)
-    } else {
-        profile_dir.filter(|path| path.exists())
-    };
-    let out_dir = std::path::Path::new(&out_dir);
-    let destination = out_dir.join("embedded-db-sidecar.bin");
-    let pin_manifest = out_dir.join("official-runner-pin.json");
-    match source {
-        Some(source) => {
-            if !staged_extension.exists() {
-                panic!(
-                    "duckle-db-sidecar is staged but apps/desktop/bin/{} is missing; the official runner pair must be staged offline and atomically",
-                    QUACK_EXTENSION_FILE
-                );
-            }
-            let checksum = verify_staged_quack_extension(
-                &staged_extension,
-                &target_os,
-                &target_arch,
-            )
-            .unwrap_or_else(|error| panic!("official runner staging rejected: {error}"));
-            compress_to(&source, &destination);
-            let manifest = write_runner_pin_manifest(out_dir, checksum);
-            println!("cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}", manifest.display());
-            println!("cargo:rerun-if-changed={}", source.display());
-            println!("cargo:rerun-if-changed={}", staged_extension.display());
-        }
-        None => {
-            std::fs::write(&destination, [])
-                .unwrap_or_else(|error| panic!("write empty embedded database sidecar: {error}"));
-            std::fs::write(&pin_manifest, [])
-                .unwrap_or_else(|error| panic!("write empty official runner pin: {error}"));
-            println!("cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}", pin_manifest.display());
-            println!(
-                "cargo:warning=duckle-db-sidecar not staged (apps/desktop/bin/{name}); official runner remains unavailable for this build"
-            );
-        }
-    }
     println!(
-        "cargo:rustc-env=DUCKLE_EMBEDDED_DB_SIDECAR={}",
+        "cargo:rustc-env=DUCKLE_EMBEDDED_MCP={}",
         destination.display()
     );
-    println!("cargo:rerun-if-changed={}", staged.display());
-    println!("cargo:rerun-if-changed={}", staged_extension.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("bin").join(name).display()
+    );
 }
 
-/// Locate a freshly built `duckle-runner` and expose its bytes to lib.rs via
-/// include_bytes!(env!("DUCKLE_EMBEDDED_RUNNER")). The build must fail when the
-/// Windows runner is unavailable: Build Pipeline cannot be allowed to report
-/// success while carrying no executable sidecar.
 fn embed_runner() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out_dir =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let name = if target_os == "windows" {
         "duckle-runner.exe"
     } else {
         "duckle-runner"
     };
-
-    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
-    let profile_dir = std::path::Path::new(&out_dir)
-        .ancestors()
-        .nth(3)
-        .map(|p| p.join(name));
-    let source = if staged.exists() {
-        staged
-    } else if let Some(p) = profile_dir.filter(|p| p.exists()) {
-        p
-    } else {
+    let source = staged_or_profile_binary(&manifest_dir, &out_dir, name).unwrap_or_else(|| {
         panic!(
             "duckle-runner not found; build it first with `cargo build --profile release-runner -p duckle-runner`, or stage it at apps/desktop/bin/{name}`"
-        );
-    };
+        )
+    });
+    let destination = out_dir.join("embedded-runner.bin");
 
-    let dst = std::path::Path::new(&out_dir).join("embedded-runner.bin");
-    compress_to(&source, &dst);
-    println!("cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER={}", dst.display());
+    compress_to(&source, &destination);
+    println!(
+        "cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER={}",
+        destination.display()
+    );
     println!("cargo:rerun-if-changed={}", source.display());
     println!(
         "cargo:rerun-if-changed={}",
-        std::path::Path::new(&manifest_dir).join("bin").join(name).display()
+        manifest_dir.join("bin").join(name).display()
     );
 }
 
-/// Best-effort embed of a prebuilt Linux x86_64 runner into every desktop build.
-/// CI stages `apps/desktop/bin/duckle-runner-linux-x64` before compiling the
-/// Windows installer. When present the app can build Linux pipeline bundles;
-/// when absent (local dev, or a non-release build) Linux target attempts fail
-/// with an actionable error at runtime while Windows builds remain unaffected.
 fn embed_runner_linux() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out_dir =
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     let name = "duckle-runner-linux-x64";
-    let staged = std::path::Path::new(&manifest_dir).join("bin").join(name);
-    let dst = std::path::Path::new(&out_dir).join("embedded-runner-linux-x64.bin");
-    if staged.exists() {
-        compress_to(&staged, &dst);
+    let staged = manifest_dir.join("bin").join(name);
+    let destination = out_dir.join("embedded-runner-linux-x64.bin");
+
+    if staged.is_file() {
+        compress_to(&staged, &destination);
     } else {
-        std::fs::write(&dst, [])
-            .unwrap_or_else(|e| panic!("write empty embedded Linux runner: {}", e));
+        std::fs::write(&destination, [])
+            .unwrap_or_else(|error| panic!("write empty embedded Linux runner: {error}"));
         println!(
             "cargo:warning=Linux runner not staged (apps/desktop/bin/{name}); Build Pipeline will not be able to target Linux from this build. Stage it: bash scripts/build-runner-linux.sh"
         );
     }
+
     println!(
         "cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER_LINUX_X64={}",
-        dst.display()
+        destination.display()
     );
     println!("cargo:rerun-if-changed={}", staged.display());
 }
