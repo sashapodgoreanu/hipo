@@ -34,9 +34,16 @@ fn packaged_sidecar_stages_embedded_quack_with_a_clean_offline_home() {
     verify_staged_bundle(&packaged_extension, expected).expect("packaged extension identity");
 
     let home = tempfile::tempdir().expect("clean package-smoke home");
+    let missing_cli = home.path().join(if cfg!(windows) {
+        "missing-duckdb.exe"
+    } else {
+        "missing-duckdb"
+    });
     let output = Command::new(&sidecar)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
+        .env("DUCKLE_DUCKDB_BIN", &missing_cli)
+        .env_remove("DUCKLE_QUACK_EXTENSION")
         .env("HTTP_PROXY", "http://127.0.0.1:9")
         .env("HTTPS_PROXY", "http://127.0.0.1:9")
         .env("ALL_PROXY", "http://127.0.0.1:9")
@@ -54,6 +61,7 @@ fn packaged_sidecar_stages_embedded_quack_with_a_clean_offline_home() {
         "runner_unavailable",
         "the offline package must fail only at the private bootstrap boundary"
     );
+    assert!(!missing_cli.exists(), "the package must never create or install a CLI");
 
     let cached = extension_cache_path(home.path(), platform);
     assert!(cached.is_file(), "embedded Quack extension was not staged");
