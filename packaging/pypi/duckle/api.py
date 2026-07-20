@@ -62,6 +62,22 @@ class Pipeline:
         self._last = None
         self._x = 0
 
+    def __getattr__(self, name):
+        """Expose the component namespaces (src, xf, snk, qa, ctl, ...) on a chain.
+
+        Only consulted for names Pipeline does not define itself, so the
+        curated verbs above always win over a same-named namespace.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        from ._ns import Namespace
+        from ._components import COMPONENTS
+        if any(cid.split(".")[0] == name for cid in COMPONENTS):
+            return Namespace(name, self)
+        raise AttributeError(
+            "{!r} is not a Pipeline method or a Duckle component group".format(name)
+        )
+
     # ---------------------------------------------------------- graph building
 
     def _add(self, kind, component, properties, label=None, connect=True):
