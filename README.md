@@ -4,7 +4,7 @@
 
 <h3>The local-first data studio with a built-in AI assistant.</h3>
 
-<p><b>Duckle</b> is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, describe what you need in plain English to <b>Duckie</b> (the on-device AI assistant), and execute at native speed through DuckDB. 360+ components, a built-in scheduler, and a chat assistant that runs entirely on your CPU. Ships as a ~100 MB single-file desktop app. No cloud, no servers, no lock-in.</p>
+<p><b>Duckle</b> is an open-source desktop ETL / ELT studio. Drag a pipeline onto the canvas, describe what you need in plain English to <b>Duckie</b> (the on-device AI assistant), and execute at native speed through DuckDB. 370+ components, a built-in scheduler, and a chat assistant that runs entirely on your CPU. Ships as a ~100 MB single-file desktop app. No cloud, no servers, no lock-in.</p>
 
 <a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 160+ sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
@@ -47,7 +47,7 @@
 **Get started**
 
 - [What is Duckle?](#what-is-duckle)
-- [What's new in v0.5.5](#whats-new-in-v055)
+- [What's new in v0.5.6](#whats-new-in-v056)
 - [Quickstart (60 s)](#quickstart-60-seconds)
 - [Download / Install](#download--install)
 - [Build from source](#build-from-source)
@@ -120,7 +120,7 @@ In short: a free, open-source, local-first alternative to hosted ETL platforms l
 Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs locally - no API key, no telemetry, no cloud round-trip.
-2. **345 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
+2. **356 components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** ~65 MB download. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
 <div align="center">
@@ -129,23 +129,22 @@ Three things make Duckle different from the heavyweights and the toy ETL tools:
 
 ---
 
-## What's new in v0.5.5
+## What's new in v0.5.6
 
-A Salesforce write-back sink, deeper database connectivity, geospatial data-quality tools, and a batch of reliability fixes from reported issues.
+Real-time WebSocket connectors, a geospatial projection toolkit, streaming XML at multi-GB scale, and a scheduler that finally speaks your local time.
 
-- **Salesforce sink `snk.salesforce` (#164).** Write rows back into Salesforce through the sObject Collections API - insert, update, upsert by external Id, or delete - with Bearer-token auth over TLS.
-- **Salesforce Bulk sink `snk.salesforce.bulk` (#166).** Migration-scale write-back over Bulk API 2.0: DuckDB streams the upstream to CSV on disk and each ≤90 MB part runs the async job lifecycle (create → upload → poll → fetch result sets), so a multi-million-row load never lands in memory. Adds `hardDelete`; same Bearer / OAuth client-credentials auth as `snk.salesforce`.
-- **PostgreSQL advanced / SSL connection options (#161).** `sslmode`, root / client certificates, connect timeout, session `options`, and free-text passthrough, so the Postgres wire family (postgres / cockroach / redshift / pgvector) reaches TLS-enforced servers.
-- **Execute-in-source and remote-SQL pushdown (#115).** Push filters and joins down to Postgres / MySQL, or run a `CREATE TABLE AS` on the source server itself, so heavy work stays in the database instead of streaming every row.
-- **Geometry Validation and Repair data-quality tools (#158).** `qa.geomvalidate`, `qa.geomrepair`, and `qa.geomempty`, with robust WKT-to-GEOMETRY casting.
-- **Bulk Rename and Cast editors (#159, #160).** Rename or convert many columns in a single node, with the Schema tab kept in sync.
-- **Custom MySQL ATTACH, editable stage SQL, and masked secrets (#157)**, plus a plain-text / Influx Line Protocol body for `snk.rest` (#147) and a custom base URL for AI LLM providers (#142).
+- **WebSocket source and sink (#192).** `src.websocket` connects to a `ws://` or `wss://` endpoint, optionally sends a subscribe frame, and collects up to `maxMessages` frames into rows; `snk.websocket` pushes each row back out as a text frame. For live market data, sensor streams, and real-time dashboards.
+- **Geospatial projection toolkit (#188, #189, #190).** Define Projection stamps a CRS onto geometry that has none, Reproject Geometry transforms between CRS with the target CRS preserved on the output, and Create Geometry builds a GEOMETRY column from X/Y, WKT, or WKB.
+- **Dynamic time offsets in templates (#191).** `${date+1d}`, `${now-2h}`, `${timestamp+30m}`, and chained forms like `${date+1d-2h}`, all resolved against a single run instant so every reference in a run stays consistent.
+- **Streaming, multi-GB XML (#186).** `src.xml` streams local, `sftp://`, and `https://` inputs with automatic gzip / zip handling, and honours a declared schema instead of buffering the document.
+- **Salesforce Bulk sink `snk.salesforce.bulk` (#164).** Migration-scale write-back over Bulk API 2.0: DuckDB streams the upstream to CSV on disk and each ≤90 MB part runs the async job lifecycle (create → upload → poll → fetch result sets), so a multi-million-row load never lands in memory.
+- **Local-time cron and a minute-accurate countdown (#194).** Cron expressions now evaluate in the machine's local time zone, so "Every day at 03:00" means 03:00 where you are. The Next countdown shows hours *and* minutes ("in 1 h 7 min"), and a 5-field cron is accepted instead of silently never firing.
+- **OAuth client credentials for any REST source (#195).** Token minting is no longer Salesforce-only: give any REST connector a token URL and it mints a fresh access token per run. Suits a Xero Custom Connection, which needs HTTP Basic client auth.
+- **JSON transform `xf.jq` (#173)** for per-row jq over a JSON column, and **CRS-aware measurements (#177)** that pick planar or spheroid math from the column's own CRS.
 
-Fixes: Shapefile export now writes the `.prj` file from REST / JSON sources as well as CSV (#163, #150, #151), the `src.webhook` node shows its own Port / Timeout dialog in the web editor (#162), "Autodetect from Source" returns the real schema for every connector (#148), multi-key joins and the `SQL name` field work as expected (#152, #153, #154, #120), the SQL Server source handles older TDS servers and `sql_variant` / XML columns (#141), and the self-updater no longer trips on a stale checksum after a re-roll (#156).
+Fixes: saved S3 and other non-Salesforce connection references resolve at run time (#185), Duckie honours a configured custom AI endpoint (#183), the Linux window stays resizable after un-maximize (#182), an externally set `DUCKLE_DUCKDB_BIN` wins over the bundled binary (#179), and a zero-row result no longer collapses to a lone `json` column (#170). macOS engine signing was also hardened so `llama-server` launches from a downloaded build (#89) - reports from macOS users welcome, as it could not be exercised on the Windows dev box.
 
-Under the hood: the embedded sidecar binaries are now zstd-compressed for a smaller download.
-
-Full notes: see the [v0.5.5 release](https://github.com/slothflowlabs/duckle/releases/tag/v0.5.5).
+Full notes: see the [v0.5.6 release](https://github.com/slothflowlabs/duckle/releases/tag/v0.5.6).
 
 ---
 
@@ -178,7 +177,7 @@ The sidebar on the right is **Duckie AI Assistant** - powered by **Qwen 2.5 Code
 | **Single-file binary, no bundled DB** | ~65 MB app (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
-| **345 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
+| **356 components ready today** | Files, databases, warehouses, lakehouses, object stores, SaaS APIs, NoSQL, streaming brokers, vector DBs, FTP, IMAP, SMTP. Each is covered by tests. |
 | **Honest about scope** | Single-machine and embedded by design. Built to make local and small-team data work fast, not to replace a distributed warehouse. |
 | **60 UI languages** | Topbar, palette, chat assistant, properties panel, and common dialogs ship localized. English, Spanish, Chinese (Simplified + Traditional), Hindi, Arabic, Portuguese (Brazil), Bengali, Russian, Japanese, Punjabi, German, Korean, French, Vietnamese, Telugu, Marathi, Turkish, Tamil, Urdu, Persian, Polish, Italian, Ukrainian, Indonesian, Thai, Dutch, Hebrew, Swedish, Greek, Czech, Hungarian, Romanian, Filipino, Malay, Norwegian, Danish, Finnish, Catalan, Bulgarian, Slovak, Croatian, Serbian, Slovenian, Lithuanian, Latvian, Estonian, Khmer, Burmese, Sinhala, Nepali, Swahili, Afrikaans, Welsh, Irish, Icelandic, Albanian, Azerbaijani, Mongolian, Kazakh. RTL (Arabic, Hebrew, Persian, Urdu) supported. Switch languages from the topbar globe. |
 | **Open source** | Dual-licensed MIT OR Apache-2.0. Yours to use, fork, and extend. |
@@ -218,7 +217,7 @@ Duckle is in **public beta**. The visual designer, the DuckDB execution engine, 
 
 The component palette ships **363 nodes** so the roadmap is visible in the product itself:
 
-- **345 available** runs on the DuckDB engine today
+- **356 available** runs on the DuckDB engine today
 - **3 preview** is configurable in the designer (drag, wire, set properties); execution is being wired engine-by-engine
 - **15 planned** is reserved in the palette but not yet executable - see [`docs/roadmap.md`](docs/roadmap.md)
 
@@ -275,7 +274,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Network relational DBs** | IBM DB2, generic JDBC | Planned |
 | **Object storage** | Amazon S3, Google Cloud Storage, Azure Blob, HTTP(S), MinIO, Cloudflare R2, Backblaze B2 | Available (live CI for MinIO) |
 | **Cloud warehouses** | MotherDuck, Snowflake (SQL API + PAT/JWT), BigQuery, Redshift (postgres ATTACH), Databricks SQL (Statement Execution + chunk follow), Azure Synapse (TDS), **Teradata** (ODBC, Windows / Linux), **DuckDB Quack** (May 2026 remote protocol - HTTP on :9494, SECRET-based token auth) | Available |
-| **Streaming** | Apache Kafka / Redpanda (pure-Rust `rskafka`), NATS JetStream, GCP Pub/Sub (REST + auto-ack), RabbitMQ (`lapin` AMQP), AWS Kinesis (HTTP + SigV4 - no AWS SDK) | Available |
+| **Streaming** | Apache Kafka / Redpanda (pure-Rust `rskafka`), NATS JetStream, GCP Pub/Sub (REST + auto-ack), RabbitMQ (`lapin` AMQP), AWS Kinesis (HTTP + SigV4 - no AWS SDK), WebSocket (`ws://` / `wss://`, optional subscribe frame) | Available |
 | **Streaming** | Pulsar, Event Hubs, multi-shard Kinesis | Planned |
 | **APIs and SaaS (REST)** | Salesforce, HubSpot, Pipedrive, Zendesk, Intercom, Stripe, QuickBooks, Xero, Shopify, Notion, Airtable, Asana, Trello, ClickUp, Monday.com, GitHub, GitLab, Linear, Jira, Slack, Discord, Telegram, Twilio, Mailchimp, SendGrid, Segment - thin pre-configured wrappers over `src.rest` / `src.graphql`. `src.rest` takes a configurable API-key auth header name and offset pagination that stops on a body `total_count` | Available |
 | **APIs (protocols)** | OData v4 (follows `@odata.nextLink`), SOAP / generic XML APIs (XML response parsing with namespace local-name match) | Available |
@@ -310,7 +309,7 @@ For JSON sources, a **Format** selector picks how the file is read (auto / array
 | **Pivot / shape** | Pivot, Unpivot, Denormalize, Normalize, Transpose |
 | **CDC / SCD** | Incremental Load (watermark column; saves the high-water mark to workspace state and advances only on a fully successful run), Diff Detect, SCD Type 1, SCD Type 2 (valid_from / valid_to / is_current), Merge / Upsert (universal across embedded, network, warehouse and Mongo sinks, with optional delete propagation driven by a CDC change-type column), DuckLake CDC change-feed reader, Row Hash (md5 / sha1 / sha256 fingerprint), Audit Stamp (`_loaded_at` / `_loaded_date` / `_source` / `_batch_id`) |
 | **AI / Search** | **Vector Similarity Search** (cosine / L2 / inner product over FLOAT[N] via `vss`), **Full-Text Search** (BM25 via `fts`), **Embeddings** (OpenAI-compatible `/v1/embeddings`), **LLM Transform** (per-row chat completion with `{column}` templates), **Classify** (LLM-backed, normalizes to UNKNOWN), **Text Chunker** (RAG-ready, pure local), **PII Redact** (regex - emails / phones / SSNs / cards), **Semantic Dedupe** (cosine over precomputed embeddings) |
-| **Geospatial** | Spatial Distance, Length, Perimeter, Area (each auto-picks the planar or spheroidal function from the geometry CRS, and rejects geometry with no CRS), Spatial Buffer (ST_Buffer), Spatial Intersects (ST_Intersects), Flip Coordinates (ST_FlipCoordinates - fix lat,lon vs lon,lat order) |
+| **Geospatial** | Spatial Distance, Length, Perimeter, Area (each auto-picks the planar or spheroidal function from the geometry CRS, and rejects geometry with no CRS), Spatial Buffer (ST_Buffer), Spatial Intersects (ST_Intersects), Flip Coordinates (ST_FlipCoordinates - fix lat,lon vs lon,lat order), Define Projection (ST_SetCRS - stamp a CRS without moving coordinates), Reproject Geometry (ST_Transform between CRS, target CRS preserved on the output), Create Geometry (from X/Y, WKT, or WKB) |
 | **Debug** | Log Rows, Assert (hard-fail on SQL predicate violation) |
 
 > **All 6 AI transforms ship today.** Three need a model API (LLM, Classify, Embeddings) and ride the apiKey-in-props pattern; three are pure-local (Chunk, PII Redact, Dedupe).
@@ -365,7 +364,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Email (SMTP)** | Per-row SMTP send via pure-Rust `lettre` + rustls. Plain text v1; HTML + attachments follow. | Available |
 | **NoSQL** | MongoDB (insert_many batched; **upsert** via replace_one on a key, plus delete propagation via delete_one), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (`_bulk` NDJSON), Redis (pipelined SET) | Available |
 | **NoSQL** | DynamoDB | Planned |
-| **Streaming** | Kafka / Redpanda (`rskafka`), NATS JetStream, GCP Pub/Sub (REST + OAuth2), RabbitMQ (`lapin`) | Available |
+| **Streaming** | Kafka / Redpanda (`rskafka`), NATS JetStream, GCP Pub/Sub (REST + OAuth2), RabbitMQ (`lapin`), WebSocket (`ws://` / `wss://`) | Available |
 | **Streaming** | Pulsar, Kinesis | Planned |
 | **Vector / AI databases** | pgvector, Pinecone (`/vectors/upsert`), Qdrant (`/points` PUT), Weaviate (`/v1/batch/objects`), Milvus (`/v1/vector/insert`) | Available |
 | **Vector / AI databases** | Chroma, LanceDB | Preview (need vendor SDK) |
@@ -464,7 +463,7 @@ When the installer downloads the DuckDB CLI it also pre-fetches the extensions D
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.5.5):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.5.6):
 
 | OS | Asset | How to run |
 |---|---|---|

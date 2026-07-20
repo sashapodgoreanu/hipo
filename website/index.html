@@ -55,10 +55,10 @@
       "name": "Duckle",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Windows, macOS, Linux",
-      "description": "Open-source, local-first ETL/ELT studio built on DuckDB. Build data pipelines visually with 360+ components (345 available today), run them offline at native DuckDB speed, and ship them as a single binary.",
+      "description": "Open-source, local-first ETL/ELT studio built on DuckDB. Build data pipelines visually with 370+ components (356 available today), run them offline at native DuckDB speed, and ship them as a single binary.",
       "url": "https://duckle.org/",
       "downloadUrl": "https://github.com/slothflowlabs/duckle/releases/latest",
-      "softwareVersion": "0.5.5",
+      "softwareVersion": "0.5.6",
       "license": "MIT OR Apache-2.0",
       "isAccessibleForFree": true,
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -78,7 +78,7 @@
     { "@type": "Question", "name": "Is Duckle free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Duckle is open source under MIT or Apache-2.0. There is no per-row, per-connector, or per-seat billing, and nothing to self-host or operate." } },
     { "@type": "Question", "name": "What engine does Duckle run on?", "acceptedAnswer": { "@type": "Answer", "text": "Duckle runs on DuckDB, an embedded columnar engine. Visual pipelines compile to SQL and execute locally at native DuckDB speed, with no external warehouse or server in the loop." } },
     { "@type": "Question", "name": "Does Duckle need the cloud or a server?", "acceptedAnswer": { "@type": "Answer", "text": "No. Duckle is a local-first desktop application that runs fully offline. There is no account and no telemetry, which makes it suitable for air-gapped and compliance-sensitive work." } },
-    { "@type": "Question", "name": "How many components does Duckle have?", "acceptedAnswer": { "@type": "Answer", "text": "Duckle ships 363 components, of which 345 are available today, spanning sources, transforms, sinks, data-quality checks, control-flow nodes, and code runners for databases, warehouses, lakehouses, object storage, streaming, NoSQL, and SaaS APIs." } },
+    { "@type": "Question", "name": "How many components does Duckle have?", "acceptedAnswer": { "@type": "Answer", "text": "Duckle ships 374 components, of which 356 are available today, spanning sources, transforms, sinks, data-quality checks, control-flow nodes, and code runners for databases, warehouses, lakehouses, object storage, streaming, NoSQL, and SaaS APIs." } },
     { "@type": "Question", "name": "Can Duckle run dbt?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Duckle runs dbt on DuckDB with a visual GUI, using a fast build engine by default and falling back to dbt-core when needed, so you can build, test, and schedule dbt projects without leaving the studio." } },
     { "@type": "Question", "name": "Does Duckle have an AI assistant?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Duckie is an on-device AI assistant that generates pipelines from plain English with no API key and no telemetry. Duckle also ships an MCP server so external AI agents can list, generate, validate, and run pipelines." } },
     { "@type": "Question", "name": "Is there an open-source alternative to Fivetran or Airbyte?", "acceptedAnswer": { "@type": "Answer", "text": "Duckle is a free, open-source ETL/ELT tool that covers similar ground to hosted platforms like Fivetran and Airbyte, but runs locally. It moves data across 160+ sources and destinations with no per-row, per-connector, or per-seat billing and nothing to host or operate. Pipelines are built visually or from plain English and compile to readable DuckDB SQL." } },
@@ -91,8 +91,8 @@
 </head>
 <body>
 
-<div class="announce" id="announce" data-v="v0.5.5">
-  Duckle v0.5.5 is out - a Salesforce source and sink with OAuth, Postgres SSL and advanced connection options, geospatial data-quality checks, in-database processing, and bulk column rename and cast.
+<div class="announce" id="announce" data-v="v0.5.6">
+  Duckle v0.5.6 is out - WebSocket source and sink, a geospatial projection toolkit, streaming multi-GB XML, dynamic time offsets in templates, and a scheduler that runs cron in your local time zone.
   <a href="https://github.com/slothflowlabs/duckle/releases/latest" target="_blank" rel="noopener">Read the release notes <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
   <button class="announce-x" id="announceX" type="button" aria-label="Dismiss"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
 </div>
