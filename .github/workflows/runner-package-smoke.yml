@@ -115,6 +115,23 @@ jobs:
           cp "$base/${{ matrix.sidecar }}" _official-runner/
           cp "$base/quack.duckdb_extension" _official-runner/
 
+      - name: Run clean offline package and mismatch smoke
+        shell: bash
+        env:
+          DUCKLE_PACKAGE_SIDECAR: ${{ github.workspace }}/_official-runner/${{ matrix.sidecar }}
+          DUCKLE_PACKAGE_EXTENSION: ${{ github.workspace }}/_official-runner/quack.duckdb_extension
+        run: |
+          set -euo pipefail
+          test -s "$DUCKLE_PACKAGE_SIDECAR"
+          test -s "$DUCKLE_PACKAGE_EXTENSION"
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo test --offline -p duckle-runner --target "${{ matrix.target }}" \
+              --test package_smoke -- --ignored
+          else
+            cargo test --offline -p duckle-runner \
+              --test package_smoke -- --ignored
+          fi
+
       - name: Verify official runner crate builds with bundled DuckDB
         run: cargo check -p duckle-db-runner
 
