@@ -5,7 +5,7 @@ const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 const QUACK_VERSION: &str = "1.5.4";
 const DUCKDB_VERSION: &str = "1.5.4";
 const QUACK_WINDOWS_AMD64_SHA256: &str =
-    "52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895";
+    "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122";
 const QUACK_MACOS_AMD64_SHA256: &str =
     "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
 const QUACK_LINUX_AMD64_SHA256: &str =
