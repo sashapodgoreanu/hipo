@@ -117,13 +117,19 @@ jobs:
 
       - name: Run clean offline package and mismatch smoke
         shell: bash
-        env:
-          DUCKLE_PACKAGE_SIDECAR: ${{ github.workspace }}/_official-runner/${{ matrix.sidecar }}
-          DUCKLE_PACKAGE_EXTENSION: ${{ github.workspace }}/_official-runner/quack.duckdb_extension
         run: |
           set -euo pipefail
-          test -s "$DUCKLE_PACKAGE_SIDECAR"
-          test -s "$DUCKLE_PACKAGE_EXTENSION"
+          sidecar="$PWD/_official-runner/${{ matrix.sidecar }}"
+          extension="$PWD/_official-runner/quack.duckdb_extension"
+          test -s "$sidecar"
+          test -s "$extension"
+          if command -v cygpath >/dev/null 2>&1; then
+            export DUCKLE_PACKAGE_SIDECAR="$(cygpath -w "$sidecar")"
+            export DUCKLE_PACKAGE_EXTENSION="$(cygpath -w "$extension")"
+          else
+            export DUCKLE_PACKAGE_SIDECAR="$sidecar"
+            export DUCKLE_PACKAGE_EXTENSION="$extension"
+          fi
           if [ -n "${{ matrix.target }}" ]; then
             cargo test --offline -p duckle-runner --target "${{ matrix.target }}" \
               --test package_smoke -- --ignored
