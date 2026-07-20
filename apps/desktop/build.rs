@@ -17,7 +17,37 @@ mod legacy {
         target_os: &str,
         target_arch: &str,
     ) -> Result<&'static str, String> {
-        verify_staged_quack_extension(extension, target_os, target_arch)
+        const WINDOWS_AMD64: &str =
+            "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122";
+        const MACOS_AMD64: &str =
+            "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
+        const LINUX_AMD64: &str =
+            "decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e";
+
+        let expected = match (target_os, target_arch) {
+            ("windows", "x86_64") => WINDOWS_AMD64,
+            ("macos", "x86_64") => MACOS_AMD64,
+            ("linux", "x86_64") => LINUX_AMD64,
+            _ => {
+                return Err(format!(
+                    "no verified Quack {} bundle for {}-{}",
+                    QUACK_VERSION, target_os, target_arch
+                ))
+            }
+        };
+        let bytes = std::fs::read(extension)
+            .map_err(|error| format!("read staged {}: {error}", extension.display()))?;
+        let actual = format!(
+            "{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(&bytes)
+        );
+        if actual != expected {
+            return Err(format!(
+                "staged Quack checksum mismatch for {}-{}: expected {}, got {}",
+                target_os, target_arch, expected, actual
+            ));
+        }
+        Ok(expected)
     }
 
     pub fn write_pin_manifest(
