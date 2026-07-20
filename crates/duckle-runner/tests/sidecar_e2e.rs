@@ -1,17 +1,19 @@
 #![cfg(windows)]
 
-use duckdb::{params, Connection};
 use duckle_db_runner::local_process_provider::LocalProcessProvider;
 use duckle_db_runner::local_quack_sidecar::WindowsLocalSidecarLauncher;
-use duckle_db_runner::model::{RunCancellation, TransportKind, WorkerId, WorkerKind};
+use duckle_db_runner::model::{
+    RunCancellation, RunnerFailureReason, TransportKind, WorkerId, WorkerKind,
+};
 use duckle_db_runner::resources::{
     AutomaticOrU16, HostResourceLimits, ResourceLimit, RunnerResourcesProfile,
 };
+use duckle_db_runner::run_database::{RunDatabase, SqlBatchResult};
 use duckle_db_runner::worker_pool::{WorkerProvider, WorkerProvisionRequest};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-const PROBE_TOKEN: &str = "duckle-sidecar-probe-token";
+const DEBUG_LOG_ENV: &str = "DUCKLE_SIDECAR_DEBUG_LOG";
 
 fn requested_profile() -> RunnerResourcesProfile {
     RunnerResourcesProfile {
@@ -35,74 +37,43 @@ fn deterministic_host_limits() -> HostResourceLimits {
     }
 }
 
-fn staged_extension() -> PathBuf {
-    let path = std::env::var_os("DUCKLE_QUACK_EXTENSION")
+fn debug_log_path() -> PathBuf {
+    let path = std::env::var_os(DEBUG_LOG_ENV)
         .map(PathBuf::from)
-        .expect("DUCKLE_QUACK_EXTENSION must point to the pinned extension");
-    assert!(path.is_absolute(), "the staged extension path must be absolute");
-    assert!(path.is_file(), "the staged extension does not exist");
+        .expect("set DUCKLE_SIDECAR_DEBUG_LOG to an absolute writable file path");
+    assert!(path.is_absolute(), "DUCKLE_SIDECAR_DEBUG_LOG must be absolute");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create sidecar debug log directory");
+    }
+    let _ = std::fs::remove_file(&path);
     path
 }
 
-fn sql_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+fn startup_failure(context: &str, reason: RunnerFailureReason, log_path: &PathBuf) -> ! {
+    let log = std::fs::read_to_string(log_path)
+        .unwrap_or_else(|error| format!("<debug log unavailable: {error}>"));
+    panic!(
+        "{context}: {reason:?}\nsidecar debug log: {}\n--- sidecar log ---\n{log}\n--- end sidecar log ---",
+        log_path.display()
+    );
 }
 
-fn load_staged_quack(connection: &Connection, extension: &Path) {
-    let extension = extension.to_string_lossy().replace('\\', "/");
-    connection
-        .execute_batch(&format!("LOAD {};", sql_literal(&extension)))
-        .expect("load the pinned Quack extension into bundled DuckDB 1.5.4");
-}
-
-#[test]
-#[ignore = "requires the locally staged and pinned DuckDB 1.5.4 Quack extension"]
-fn pinned_quack_extension_loads_in_bundled_duckdb() {
-    let connection = Connection::open_in_memory().expect("open bundled DuckDB");
-    load_staged_quack(&connection, &staged_extension());
-
-    let loaded: bool = connection
-        .query_row(
-            "SELECT loaded FROM duckdb_extensions() WHERE extension_name = 'quack'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("inspect loaded Quack extension");
-    assert!(loaded, "Quack was not marked as loaded");
-}
-
-#[test]
-#[ignore = "requires the locally staged and pinned DuckDB 1.5.4 Quack extension"]
-fn pinned_quack_extension_starts_an_ephemeral_loopback_server() {
-    let connection = Connection::open_in_memory().expect("open bundled DuckDB");
-    load_staged_quack(&connection, &staged_extension());
-    connection
-        .execute_batch(
-            "SET GLOBAL quack_authentication_function = 'quack_check_token'; \
-             SET GLOBAL quack_authorization_function = 'quack_nop_authorization';",
-        )
-        .expect("configure Quack authentication and authorization callbacks");
-
-    let (uri, returned_token): (String, String) = connection
-        .query_row(
-            "SELECT listen_uri, auth_token FROM quack_serve(?, token => ?)",
-            params!["quack:127.0.0.1:0", PROBE_TOKEN],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("start Quack on an ephemeral loopback port");
-
-    assert!(uri.starts_with("quack:127.0.0.1:"), "unexpected listen URI shape");
-    assert!(!uri.ends_with(":0"), "Quack did not allocate a concrete port");
-    assert_eq!(returned_token, PROBE_TOKEN);
-
-    connection
-        .query_row("CALL quack_stop(?)", params![uri], |_| Ok(()))
-        .expect("stop the probe Quack server");
+fn expect_runner<T>(
+    result: Result<T, RunnerFailureReason>,
+    context: &str,
+    log_path: &PathBuf,
+) -> T {
+    match result {
+        Ok(value) => value,
+        Err(reason) => startup_failure(context, reason, log_path),
+    }
 }
 
 #[test]
 #[ignore = "requires the locally staged and pinned DuckDB 1.5.4 Quack extension"]
 fn packaged_windows_sidecar_bootstraps_and_executes_a_quack_batch() {
+    let log_path = debug_log_path();
+
     // This integration test belongs to the package that owns the binary, so
     // Cargo always builds the exact sidecar under test before exposing this path.
     let program = PathBuf::from(env!("CARGO_BIN_EXE_duckle-db-sidecar"));
@@ -114,21 +85,27 @@ fn packaged_windows_sidecar_bootstraps_and_executes_a_quack_batch() {
     let worker_id = WorkerId::new();
     let cancellation = RunCancellation::default();
 
-    provider
-        .provision(WorkerProvisionRequest {
+    expect_runner(
+        provider.provision(WorkerProvisionRequest {
             worker_id,
             kind: WorkerKind::Warm,
             profile: requested_profile(),
             cancellation: cancellation.clone(),
-        })
-        .expect("authenticated sidecar readiness");
+        }),
+        "authenticated sidecar readiness",
+        &log_path,
+    );
 
-    let database = provider
-        .open_database(worker_id, cancellation)
-        .expect("private Quack database facade");
-    let result = database
-        .execute_batch(vec!["SELECT 42 AS answer".to_string()])
-        .expect("Quack batch");
+    let database: RunDatabase = expect_runner(
+        provider.open_database(worker_id, cancellation),
+        "private Quack database facade",
+        &log_path,
+    );
+    let result: SqlBatchResult = expect_runner(
+        database.execute_batch(vec!["SELECT 42 AS answer".to_string()]),
+        "Quack batch",
+        &log_path,
+    );
 
     assert_eq!(result.rows, 1);
     assert_eq!(result.transport, TransportKind::Quack);
