@@ -1,3 +1,7 @@
+// build_base.rs is the retained pre-cutover desktop packaging implementation.
+// Its superseded main/embed_db_sidecar entry points are removed by T071; until
+// then they are intentionally compiled only as private compatibility helpers.
+#[allow(dead_code)]
 mod legacy {
     include!("build_base.rs");
 
@@ -155,10 +159,6 @@ fn embed_db_sidecar_pair() {
             println!(
                 "cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}",
                 manifest.display()
-            );
-            println!(
-                "cargo:warning=packaged verified official runner pair from {}",
-                sidecar.parent().unwrap_or(&sidecar).display()
             );
         }
         None => {
