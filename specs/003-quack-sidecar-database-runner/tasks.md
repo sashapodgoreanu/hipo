@@ -85,7 +85,7 @@
 
 **Independent Test**: Verify shared relations, server setup, batches, and 2/4/8 compatible requests without affinity classification or fallback.
 
-- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckdb-engine/src/lib.rs` and `crates/duckle-db-runner/src/run_session.rs`
+- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckle-db-runner/src/run_session.rs`
 - [X] T044 [US2] Add per-run server-setup deduplication and catalog visibility across stateless requests in `crates/duckle-db-runner/src/run_session.rs`
 - [X] T045 [US2] Implement and test affinity-free planning while retaining affinity compatibility until cutover in `crates/duckdb-engine/src/plan/mod.rs`, `crates/duckdb-engine/src/plan/graph.rs`, and `crates/duckdb-engine/src/plan/builders.rs`
 - [X] T046 [US2] Migrate affinity callers to normal run database behind compatibility selection while retaining `AffinitySession` until cutover in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/src/affinity_session.rs`
@@ -136,7 +136,7 @@
 - [X] T070 [US6] Verify permitted stage/attempt/duration/rows/bytes/transport/memory/spill/CPU telemetry, redaction, retention routing, and warm/on-demand distinction in `crates/duckle-db-runner/tests/autoscaler.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
 - [ ] T071 [US6] After CutoverEvidence has all applicable SC pass, named owner/approver, and resolved-or-explicitly-accepted findings, enable official runner and remove CLI, affinity, and compatibility selection in `crates/duckdb-engine/`, `apps/desktop/src/engine_manager.rs`, `crates/duckle-runner/`, `crates/duckle-mcp/`, and `.github/workflows/`
 - [ ] T072 [US6] Remove `spikes/quack-sidecar-phase0-spike/` and retain historical documentation after official runner gates pass
-- [ ] T073 [US6] Preserve readable-but-disabled SlothDB and xf.dbt with no-fallback diagnostics in `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `frontend/src/`
+- [X] T073 [US6] Preserve readable-but-disabled SlothDB and xf.dbt with no-fallback diagnostics in `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `frontend/src/`
 - [ ] T074 [US6] Add clean offline package and mismatch smoke coverage after package staging completes in `.github/workflows/runner-package-smoke.yml`
 
 ---
