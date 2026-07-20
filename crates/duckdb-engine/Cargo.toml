@@ -92,8 +92,8 @@ redis = { version = "0.27", default-features = false }
 serde_yaml = "0.9"
 toml = "0.8"
 # Kafka (and Redpanda) producer + consumer via the pure-Rust rskafka
-# crate (InfluxDB IOx in production). Async-only - wrapped in tokio
-# block_on like mongo + tiberius + scylla. Avoids the C-lib rdkafka
+# crate (InfluxDB IOx in production). Async-only - wrapped in block_on
+# like mongo + tiberius + scylla. Avoids the C-lib rdkafka
 # build dance entirely, at the cost of fewer broker-protocol features
 # (good enough for batch produce + batch consume, no admin client).
 rskafka = "0.5"
@@ -133,7 +133,7 @@ russh-sftp = "2.3"
 # System clipboard reader (src.clipboard). Text-only - image-data is
 # off because we never round-trip images through pipelines. arboard
 # is pure-Rust on Windows and macOS; on Linux it talks to X11/Wayland
-# at runtime (gracefully fails with a clear engine error when there's
+# at runtime (gracefully fails with a clear error when there's
 # no display, e.g. on a headless CI runner).
 arboard = { version = "3", default-features = false }
 # WebAssembly interpreter for code.wasm. wasmi is pure Rust, no JIT,
@@ -244,3 +244,6 @@ flate2 = "1"
 # DynamoDB decoding tests intentionally use decimal payloads such as 3.14159;
 # they validate exact external input rather than approximating the PI constant.
 approx_constant = "allow"
+# Three mock HTTP integration fixtures intentionally consume one request read
+# before returning a canned response; their bounded-loop shell is legacy test code.
+never_loop = "allow"
