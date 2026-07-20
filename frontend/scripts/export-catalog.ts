@@ -9,8 +9,19 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ALL_COMPONENTS } from '../src/workflow-ui/palette-data';
-import { synthesizeManifest, portsForComponent } from '../src/workflow-ui/fields/manifest-synth';
+import { portsForComponent } from '../src/workflow-ui/fields/manifest-synth';
+import { getManifest } from '../src/workflow-ui/fields/component-manifests';
 
+// getManifest, NOT synthesizeManifest. getManifest is `MANIFESTS[id] ??
+// synthesizeManifest(id)`, and it is what the canvas, the properties panel,
+// validation and schema resolution all read. Calling the synthesizer directly
+// skipped the 22 hand-authored manifests and exported the generic fallback for
+// them instead, so the catalog advertised field keys the engine does not read:
+// xf.filter came out as `notes` when the engine reads `predicate`, and xf.sort
+// as `column` when the engine reads `orderBy` / `sortColumn`. Since this
+// catalog is what duckle-mcp serves to AI agents via list_components and
+// get_component_schema, those agents were being handed property names that
+// silently produce a no-op node.
 const components = ALL_COMPONENTS.map((c) => ({
     id: c.id,
     label: c.label,
@@ -18,7 +29,7 @@ const components = ALL_COMPONENTS.map((c) => ({
     availability: c.availability,
     summary: c.summary ?? '',
     ports: portsForComponent(c),
-    manifest: synthesizeManifest(c.id) ?? null,
+    manifest: getManifest(c.id) ?? null,
 }));
 
 const catalog = {
