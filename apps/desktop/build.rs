@@ -72,6 +72,13 @@ const QUACK_LICENSE: &str = "MIT";
 const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
 const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 
+// The desktop runtime historically compared only the extracted binary length
+// before replacing its stable AppData copy. Appending this packaging revision
+// gives the corrected sidecar a distinct length so installations cannot retain
+// an older same-sized executable. Bump only when the staged sidecar contract
+// changes; T071 removes the retained compatibility packaging path entirely.
+const DB_SIDECAR_PACKAGE_REVISION: usize = 1;
+
 fn main() {
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -90,6 +97,19 @@ fn main() {
 fn write_empty(path: &std::path::Path) {
     std::fs::write(path, [])
         .unwrap_or_else(|error| panic!("write empty {}: {error}", path.display()));
+}
+
+fn compress_db_sidecar(source: &std::path::Path, destination: &std::path::Path) {
+    let mut bytes = std::fs::read(source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+    bytes.extend(std::iter::repeat_n(
+        0_u8,
+        DB_SIDECAR_PACKAGE_REVISION,
+    ));
+    let compressed = zstd::encode_all(std::io::Cursor::new(bytes), 19)
+        .unwrap_or_else(|error| panic!("zstd compress {}: {error}", source.display()));
+    std::fs::write(destination, compressed)
+        .unwrap_or_else(|error| panic!("write {}: {error}", destination.display()));
 }
 
 fn embed_db_sidecar_pair() {
@@ -153,7 +173,7 @@ fn embed_db_sidecar_pair() {
         Some((sidecar, extension)) => {
             let checksum = legacy::verify_quack(&extension, &target_os, &target_arch)
                 .unwrap_or_else(|error| panic!("official runner staging rejected: {error}"));
-            legacy::compress(&sidecar, &embedded_sidecar);
+            compress_db_sidecar(&sidecar, &embedded_sidecar);
             legacy::compress(&extension, &embedded_extension);
             let manifest = legacy::write_pin_manifest(&out_dir, checksum);
             println!(
