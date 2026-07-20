@@ -1364,7 +1364,7 @@ pub struct RestSourceSpec {
     /// runner mints a fresh access token per run and injects
     /// `Authorization: Bearer <token>` before the request loop, overriding any
     /// static auth header. None for every other REST source.
-    pub oauth: Option<SalesforceOAuth>,
+    pub oauth: Option<RestOAuth>,
     /// #170: the node's declared output schema, when the user declared one. Used
     /// ONLY to type an EMPTY result set (a REST / SaaS query that matched no
     /// records) so downstream SQL sees the real columns instead of a single
@@ -1467,18 +1467,36 @@ pub enum SalesforceWriteApi {
     Collections,
 }
 
-/// OAuth 2.0 client-credentials config for the Salesforce connectors (#166).
-/// When present on a source/sink spec the engine mints a fresh short-lived
-/// access token per run by POSTing `grant_type=client_credentials` to
-/// `{login_url}/services/oauth2/token`, replacing the pre-minted ~2h Bearer
-/// token users otherwise have to re-paste. `login_url` is the org's My Domain
-/// base (e.g. https://acme.my.salesforce.com); the token response also carries
-/// the `instance_url` the API calls target.
+/// How client credentials are presented to the token endpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OAuthClientAuth {
+    /// `client_id` / `client_secret` as form fields in the POST body. This is
+    /// what Salesforce expects and stays the default.
+    Body,
+    /// HTTP Basic `Authorization` header. Xero's identity service and many
+    /// OIDC providers require this form.
+    Basic,
+}
+
+/// OAuth 2.0 client-credentials config for REST-shaped connectors.
+///
+/// Added for Salesforce (#166) and generalized in #195 to any REST source that
+/// supplies its own token endpoint (e.g. a Xero Custom Connection). When
+/// present on a source/sink spec the engine mints a fresh short-lived access
+/// token per run by POSTing `grant_type=client_credentials` to `token_url`,
+/// replacing a pre-minted Bearer token the user would otherwise re-paste.
+///
+/// `token_url` is the fully resolved endpoint: for Salesforce the builder
+/// derives it as `{loginUrl}/services/oauth2/token`, and that response also
+/// carries the `instance_url` the API calls target.
 #[derive(Debug, Clone)]
-pub struct SalesforceOAuth {
-    pub login_url: String,
+pub struct RestOAuth {
+    pub token_url: String,
     pub client_id: String,
     pub client_secret: String,
+    /// Optional `scope` form field, required by some providers.
+    pub scope: Option<String>,
+    pub client_auth: OAuthClientAuth,
 }
 
 /// snk.salesforce: write upstream rows into a Salesforce object via the REST
@@ -1523,7 +1541,7 @@ pub struct SalesforceSinkSpec {
     /// (#166) instead of using the static Bearer `access_token`. The minted
     /// `instance_url` from the token response overrides `instance_url` when the
     /// latter is empty.
-    pub oauth: Option<SalesforceOAuth>,
+    pub oauth: Option<RestOAuth>,
     /// When set, a directory that receives Data-Loader-style per-record result
     /// files after every run (#166), stamped with the job + run time so runs
     /// accumulate: `{object}_{operation}_{utc}_success.csv` (input columns +
@@ -1582,7 +1600,7 @@ pub struct SalesforceBulkSinkSpec {
     pub fail_on_error: bool,
     /// When set, mint a fresh access token per run via OAuth client-credentials
     /// (#166) instead of using the static Bearer `access_token`.
-    pub oauth: Option<SalesforceOAuth>,
+    pub oauth: Option<RestOAuth>,
     /// When set, a directory receiving the result sets Salesforce returns for
     /// each job, stamped like snk.salesforce's (#166):
     /// `{object}_{operation}_{utc}_success.csv`, `..._error.csv` and - Bulk

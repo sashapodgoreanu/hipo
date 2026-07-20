@@ -1717,7 +1717,7 @@ fn build_stage(
         // durable clientId/clientSecret, so instanceUrl + accessToken are only
         // required in the default Bearer mode. In client-credentials mode the
         // token response supplies both the access token and the instance_url.
-        let oauth = salesforce_oauth_from_props(&props)?;
+        let oauth = rest_oauth_from_props(&props, true)?;
         let instance_url = string_prop(&props, "instanceUrl")
             .map(|s| s.trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty());
@@ -1805,7 +1805,7 @@ fn build_stage(
         // Salesforce Bulk API 2.0 write sink: async job lifecycle for
         // migration-scale loads. Same auth shape as snk.salesforce.
         let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
-        let oauth = salesforce_oauth_from_props(&props)?;
+        let oauth = rest_oauth_from_props(&props, true)?;
         let instance_url = string_prop(&props, "instanceUrl")
             .map(|s| s.trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty());
@@ -3652,13 +3652,13 @@ fn build_stage(
         // #166: src.salesforce OAuth 2.0 client-credentials. When authType selects
         // client-credentials the runner mints a fresh access token per run and
         // injects the Bearer header (push_rest_auth added nothing for this mode),
-        // so users stop pasting a ~2h token. Bearer stays the default; every other
-        // REST alias resolves to None here.
-        let oauth = if component_id == "src.salesforce" {
-            salesforce_oauth_from_props(&props)?
-        } else {
-            None
-        };
+        // so users stop pasting a short-lived token. Bearer stays the default.
+        //
+        // #195 opens the same path to every REST alias: Salesforce keeps deriving
+        // its token endpoint from loginUrl, while any other source (e.g. a Xero
+        // Custom Connection) supplies an explicit tokenUrl. A source that does not
+        // select the client-credentials mode still resolves to None.
+        let oauth = rest_oauth_from_props(&props, component_id == "src.salesforce")?;
         let response_format = if is_soap
             || string_prop(&props, "responseFormat").as_deref() == Some("xml")
         {

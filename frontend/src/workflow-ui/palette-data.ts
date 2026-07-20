@@ -794,7 +794,7 @@ export const PALETTE: Category[] = [
                 components: [
                     src('stripe', 'Stripe', 'available', 'Stripe REST. Bearer auth with the Secret Key (sk_live_... / sk_test_...). Cursor pagination on `data[-1].id` via `starting_after`. responsePath /data.'),
                     src('quickbooks', 'QuickBooks', 'available', 'QuickBooks Online REST. Bearer OAuth token; users assemble the query URL (Intuit\'s API requires SQL-like queries). responsePath /QueryResponse.'),
-                    src('xero', 'Xero', 'available', 'Xero REST. Bearer OAuth token; pass Xero-Tenant-Id as a custom header. responsePath defaults to a top-level resource key (e.g. /Invoices/Invoices).'),
+                    src('xero', 'Xero', 'available', 'Xero REST. Either paste a Bearer OAuth token, or pick OAuth 2.0 Client Credentials and give the token URL (https://identity.xero.com/connect/token) with HTTP Basic client auth so a fresh token is minted per run - that suits a Xero Custom Connection. Pass Xero-Tenant-Id as a custom header. responsePath defaults to a top-level resource key (e.g. /Invoices).'),
                     src('shopify', 'Shopify', 'available', 'Shopify Admin API. Bearer auth via X-Shopify-Access-Token. Link header pagination supported by recent Admin API endpoints. responsePath depends on resource (e.g. /products).'),
                 ],
             },

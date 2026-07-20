@@ -8211,6 +8211,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -8226,6 +8230,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -8445,6 +8523,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -8460,6 +8542,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -8679,6 +8835,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -8694,6 +8854,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -8995,6 +9229,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -9010,6 +9248,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -9229,6 +9541,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -9244,6 +9560,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -9492,6 +9882,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -9507,6 +9901,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -9726,6 +10194,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -9741,6 +10213,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -10942,6 +11488,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -10957,6 +11507,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -40748,6 +41372,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -40763,6 +41391,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -40982,6 +41684,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -40997,6 +41703,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -41216,6 +41996,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -41231,6 +42015,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -41450,6 +42308,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -41465,6 +42327,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -41684,6 +42620,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -41699,6 +42639,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -41918,6 +42932,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -41933,6 +42951,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -42061,7 +43153,7 @@
       "label": "Xero",
       "kind": "source",
       "availability": "available",
-      "summary": "Xero REST. Bearer OAuth token; pass Xero-Tenant-Id as a custom header. responsePath defaults to a top-level resource key (e.g. /Invoices/Invoices).",
+      "summary": "Xero REST. Either paste a Bearer OAuth token, or pick OAuth 2.0 Client Credentials and give the token URL (https://identity.xero.com/connect/token) with HTTP Basic client auth so a fresh token is minted per run - that suits a Xero Custom Connection. Pass Xero-Tenant-Id as a custom header. responsePath defaults to a top-level resource key (e.g. /Invoices).",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -42082,7 +43174,7 @@
         "id": "src.xero",
         "kind": "source",
         "label": "Xero",
-        "description": "Xero REST. Bearer OAuth token; pass Xero-Tenant-Id as a custom header. responsePath defaults to a top-level resource key (e.g. /Invoices/Invoices).",
+        "description": "Xero REST. Either paste a Bearer OAuth token, or pick OAuth 2.0 Client Credentials and give the token URL (https://identity.xero.com/connect/token) with HTTP Basic client auth so a fresh token is minted per run - that suits a Xero Custom Connection. Pass Xero-Tenant-Id as a custom header. responsePath defaults to a top-level resource key (e.g. /Invoices).",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -42152,6 +43244,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -42167,6 +43263,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -42386,6 +43556,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -42401,6 +43575,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -42620,6 +43868,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -42635,6 +43887,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -42854,6 +44180,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -42869,6 +44199,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -43088,6 +44492,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -43103,6 +44511,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -43322,6 +44804,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -43337,6 +44823,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -43556,6 +45116,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -43571,6 +45135,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -43790,6 +45428,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -43805,6 +45447,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -44024,6 +45740,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -44039,6 +45759,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -44258,6 +46052,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -44273,6 +46071,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -44492,6 +46364,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -44507,6 +46383,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -44726,6 +46676,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -44741,6 +46695,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -44960,6 +46988,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -44975,6 +47007,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -45194,6 +47300,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -45209,6 +47319,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -45428,6 +47612,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -45443,6 +47631,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -45662,6 +47924,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -45677,6 +47943,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -45896,6 +48236,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -45911,6 +48255,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -46130,6 +48548,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -46145,6 +48567,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -46364,6 +48860,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -46379,6 +48879,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -46598,6 +49172,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -46613,6 +49191,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },
@@ -46832,6 +49484,10 @@
                   {
                     "label": "API key (header)",
                     "value": "apikey"
+                  },
+                  {
+                    "label": "OAuth 2.0 Client Credentials (mint per run)",
+                    "value": "oauth_client_credentials"
                   }
                 ]
               },
@@ -46847,6 +49503,80 @@
                 "kind": "text",
                 "placeholder": "X-API-Key",
                 "description": "Header name for API key auth (e.g. X-API-Key or X-Redmine-API-Key). Used only when Auth type is API key; leave blank to default to X-API-Key."
+              },
+              {
+                "key": "tokenUrl",
+                "label": "Token URL",
+                "kind": "text",
+                "placeholder": "https://identity.xero.com/connect/token",
+                "description": "OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "secret": true,
+                "placeholder": "${ENV:OAUTH_CLIENT_SECRET}",
+                "description": "Use ${ENV:...} so no secret lands in the pipeline JSON.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "clientAuth",
+                "label": "Client authentication",
+                "kind": "select",
+                "defaultValue": "body",
+                "options": [
+                  {
+                    "label": "Credentials in POST body",
+                    "value": "body"
+                  },
+                  {
+                    "label": "HTTP Basic header",
+                    "value": "basic"
+                  }
+                ],
+                "description": "How the client id/secret reach the token endpoint. Xero requires HTTP Basic.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
+              },
+              {
+                "key": "scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "accounting.transactions",
+                "description": "Optional scope form field, required by some providers.",
+                "visibleWhen": [
+                  {
+                    "key": "authType",
+                    "equals": "oauth_client_credentials"
+                  }
+                ]
               }
             ]
           },

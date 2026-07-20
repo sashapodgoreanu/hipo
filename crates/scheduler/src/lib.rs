@@ -6,7 +6,7 @@
 //! are due, and fires each as a non-blocking spawn that calls into the
 //! shared `DuckdbEngine`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use cron::Schedule as CronSchedule;
 use duckle_duckdb_engine::{
     append_run_record, DuckdbEngine, RunRecord, RunResult,
@@ -44,8 +44,9 @@ fn tick_interval() -> Duration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScheduleKind {
-    /// Standard 5-field cron (minute hour day month weekday) or
-    /// 6-field with seconds. Whatever the `cron` crate accepts.
+    /// Standard 5-field cron (minute hour day month weekday), or 6/7-field
+    /// with a leading seconds field. Evaluated in the machine's local time
+    /// zone (issue #194).
     Cron { expr: String },
     /// Fire every N seconds since last run (or app start).
     Interval { seconds: u64 },
@@ -386,9 +387,11 @@ impl Scheduler {
 /// future time.
 fn claim_next_run(s: &mut Schedule, now: DateTime<Utc>) {
     s.next_run_at = match &s.kind {
-        ScheduleKind::Cron { expr } => CronSchedule::from_str(expr)
-            .ok()
-            .and_then(|sched| sched.after(&now).next()),
+        // Evaluate in local time (see parse_cron) and store the resulting
+        // absolute instant as UTC.
+        ScheduleKind::Cron { expr } => parse_cron(expr)
+            .and_then(|sched| sched.after(&now.with_timezone(&Local)).next())
+            .map(|dt| dt.with_timezone(&Utc)),
         ScheduleKind::Interval { seconds } => {
             Some(now + chrono::Duration::seconds(*seconds as i64))
         }
@@ -402,9 +405,9 @@ fn compute_next_run(s: &mut Schedule) {
         return;
     }
     s.next_run_at = match &s.kind {
-        ScheduleKind::Cron { expr } => CronSchedule::from_str(expr)
-            .ok()
-            .and_then(|sched| sched.upcoming(Utc).next()),
+        ScheduleKind::Cron { expr } => parse_cron(expr)
+            .and_then(|sched| sched.upcoming(Local).next())
+            .map(|dt| dt.with_timezone(&Utc)),
         ScheduleKind::Interval { seconds } => {
             let base = s.last_run_at.unwrap_or_else(Utc::now);
             Some(base + chrono::Duration::seconds(*seconds as i64))
@@ -412,6 +415,29 @@ fn compute_next_run(s: &mut Schedule) {
         // Event-driven - no scheduled next-run time.
         ScheduleKind::FileWatch { .. } => None,
     };
+}
+
+/// The `cron` crate expects a 6- or 7-field expression (seconds first). Accept a
+/// standard 5-field cron ("min hour dom mon dow") by prepending a "0 " seconds
+/// field, and pass 6/7-field expressions through. Without this a hand-edited
+/// 5-field expression parsed to None and the schedule silently never fired.
+/// Mirrors normalize_cron in duckle-runner's serve.rs.
+fn normalize_cron(expr: &str) -> Option<String> {
+    match expr.split_whitespace().count() {
+        5 => Some(format!("0 {}", expr)),
+        6 | 7 => Some(expr.to_string()),
+        _ => None,
+    }
+}
+
+/// Parse a cron expression for schedule evaluation (issue #194).
+///
+/// Cron expressions are evaluated in the machine's LOCAL time zone, so
+/// "0 0 3 * * *" means 3am where the user is, not 3am UTC. This matches how
+/// the UI renders next-run times (toLocaleString) and how the web console has
+/// behaved since #132. The computed instant is still stored as UTC.
+fn parse_cron(expr: &str) -> Option<CronSchedule> {
+    normalize_cron(expr).and_then(|e| CronSchedule::from_str(&e).ok())
 }
 
 fn schedules_path(workspace: &PathBuf) -> PathBuf {
@@ -461,6 +487,91 @@ mod tests {
         compute_next_run(&mut s);
         assert!(s.next_run_at.is_some());
         assert!(s.next_run_at.unwrap() > Utc::now());
+    }
+
+    /// Issue #194: cron must be evaluated in the machine's local time zone,
+    /// not UTC. Asserting on the LOCAL hour (rather than a hardcoded UTC hour)
+    /// keeps this correct on any developer machine and in CI.
+    #[test]
+    fn cron_fires_at_the_local_wall_clock_hour() {
+        use chrono::Timelike;
+        let mut s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            name: "daily 3am".into(),
+            enabled: true,
+            kind: ScheduleKind::Cron {
+                expr: "0 0 3 * * *".into(),
+            },
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        compute_next_run(&mut s);
+        let next = s.next_run_at.expect("next_run_at set").with_timezone(&Local);
+        assert_eq!(next.hour(), 3, "3am cron must land on 3am local, got {}", next);
+        assert_eq!(next.minute(), 0);
+    }
+
+    /// The claim path (used at dispatch to stop a re-fire) must agree with
+    /// compute_next_run, or a schedule fires correctly once and then re-arms
+    /// in the wrong zone.
+    #[test]
+    fn claim_next_run_also_uses_local_time() {
+        use chrono::Timelike;
+        let mut s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            name: "daily 3am".into(),
+            enabled: true,
+            kind: ScheduleKind::Cron {
+                expr: "0 0 3 * * *".into(),
+            },
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        claim_next_run(&mut s, Utc::now());
+        let next = s.next_run_at.expect("next_run_at set").with_timezone(&Local);
+        assert_eq!(next.hour(), 3, "claim must also be local, got {}", next);
+    }
+
+    /// A hand-written 5-field cron used to parse to None, leaving next_run_at
+    /// unset so the schedule silently never fired.
+    #[test]
+    fn five_field_cron_is_accepted_and_scheduled() {
+        use chrono::Timelike;
+        let mut s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            name: "daily 3am, 5-field".into(),
+            enabled: true,
+            kind: ScheduleKind::Cron {
+                expr: "0 3 * * *".into(),
+            },
+            last_run_at: None,
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        compute_next_run(&mut s);
+        let next = s.next_run_at.expect("5-field cron must schedule").with_timezone(&Local);
+        assert_eq!(next.hour(), 3);
+        assert_eq!(next.minute(), 0);
+    }
+
+    #[test]
+    fn normalize_cron_rejects_bad_field_counts() {
+        assert_eq!(normalize_cron("0 3 * * *").as_deref(), Some("0 0 3 * * *"));
+        assert_eq!(normalize_cron("0 0 3 * * *").as_deref(), Some("0 0 3 * * *"));
+        assert!(normalize_cron("* * *").is_none());
+        assert!(normalize_cron("* * * * * * * *").is_none());
+        assert!(normalize_cron("").is_none());
     }
 
     #[test]

@@ -8165,9 +8165,15 @@ pub(crate) fn push_rest_auth(headers: &mut Vec<(String, String)>, props: &JsonVa
 /// Bearer-token path so existing `${ENV:SF_TOKEN}` pipelines are unchanged.
 /// `loginUrl` falls back to `instanceUrl` (a My Domain org serves both the OAuth
 /// token endpoint and the data API from the same host).
-pub(crate) fn salesforce_oauth_from_props(
+/// #195 generalizes this to any REST source. Pass `salesforce = true` to keep
+/// the #166 behaviour, where the token endpoint is derived from `loginUrl`;
+/// otherwise the form supplies an explicit `tokenUrl` (e.g. Xero's
+/// `https://identity.xero.com/connect/token`) and may select HTTP Basic client
+/// authentication via `clientAuth`.
+pub(crate) fn rest_oauth_from_props(
     props: &JsonValue,
-) -> Result<Option<SalesforceOAuth>, EngineError> {
+    salesforce: bool,
+) -> Result<Option<RestOAuth>, EngineError> {
     let mode = string_prop(props, "authMode")
         .or_else(|| string_prop(props, "authType"))
         .unwrap_or_else(|| "bearer".into());
@@ -8178,29 +8184,53 @@ pub(crate) fn salesforce_oauth_from_props(
     if !is_client_credentials {
         return Ok(None);
     }
+    let who = if salesforce { "salesforce" } else { "rest" };
     let client_id = string_prop(props, "clientId")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| EngineError::Config(
-            "salesforce: clientId required for OAuth client-credentials auth".into(),
-        ))?;
+        .ok_or_else(|| EngineError::Config(format!(
+            "{}: clientId required for OAuth client-credentials auth", who,
+        )))?;
     let client_secret = string_prop(props, "clientSecret")
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| EngineError::Config(
-            "salesforce: clientSecret required for OAuth client-credentials auth".into(),
-        ))?;
-    let login_url = string_prop(props, "loginUrl")
-        .filter(|s| !s.is_empty())
-        .or_else(|| string_prop(props, "instanceUrl").filter(|s| !s.is_empty()))
-        .map(|s| s.trim_end_matches('/').to_string())
-        .ok_or_else(|| EngineError::Config(
-            "salesforce: loginUrl required for OAuth client-credentials auth \
-             (e.g. https://acme.my.salesforce.com)"
-                .into(),
-        ))?;
-    Ok(Some(SalesforceOAuth {
-        login_url,
+        .ok_or_else(|| EngineError::Config(format!(
+            "{}: clientSecret required for OAuth client-credentials auth", who,
+        )))?;
+    let (token_url, client_auth) = if salesforce {
+        // A My Domain org serves both the OAuth token endpoint and the data
+        // API from the same host, so instanceUrl is an accepted fallback.
+        let login_url = string_prop(props, "loginUrl")
+            .filter(|s| !s.is_empty())
+            .or_else(|| string_prop(props, "instanceUrl").filter(|s| !s.is_empty()))
+            .map(|s| s.trim_end_matches('/').to_string())
+            .ok_or_else(|| EngineError::Config(
+                "salesforce: loginUrl required for OAuth client-credentials auth \
+                 (e.g. https://acme.my.salesforce.com)"
+                    .into(),
+            ))?;
+        (
+            format!("{}/services/oauth2/token", login_url),
+            OAuthClientAuth::Body,
+        )
+    } else {
+        let token_url = string_prop(props, "tokenUrl")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| EngineError::Config(
+                "rest: tokenUrl required for OAuth client-credentials auth \
+                 (e.g. https://identity.xero.com/connect/token)"
+                    .into(),
+            ))?;
+        let client_auth = match string_prop(props, "clientAuth").as_deref() {
+            Some("basic") => OAuthClientAuth::Basic,
+            _ => OAuthClientAuth::Body,
+        };
+        (token_url, client_auth)
+    };
+    Ok(Some(RestOAuth {
+        token_url,
         client_id,
         client_secret,
+        scope: string_prop(props, "scope").filter(|s| !s.is_empty()),
+        client_auth,
     }))
 }
 
@@ -8872,5 +8902,101 @@ mod geo_projection_tests {
         assert!(build_geo_create(&one_input(), &json!({"source": "xy", "yColumn": "lat"})).is_err());
         assert!(build_geo_create(&one_input(), &json!({"source": "wkt"})).is_err());
         assert!(build_geo_create(&one_input(), &json!({"source": "nope"})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod rest_oauth_tests {
+    use super::rest_oauth_from_props;
+    use crate::plan::OAuthClientAuth;
+    use serde_json::json;
+
+    /// #166 contract: Salesforce derives its token endpoint from loginUrl and
+    /// sends credentials in the POST body. This must not drift when the OAuth
+    /// path was generalized in #195 - it is a shipped, live-verified connector.
+    #[test]
+    fn salesforce_derives_token_url_from_login_url() {
+        let p = json!({
+            "authMode": "clientCredentials",
+            "clientId": "cid",
+            "clientSecret": "secret",
+            "loginUrl": "https://acme.my.salesforce.com",
+        });
+        let o = rest_oauth_from_props(&p, true).unwrap().expect("oauth built");
+        assert_eq!(o.token_url, "https://acme.my.salesforce.com/services/oauth2/token");
+        assert_eq!(o.client_auth, OAuthClientAuth::Body);
+        assert_eq!(o.scope, None);
+        assert_eq!(o.client_id, "cid");
+        assert_eq!(o.client_secret, "secret");
+    }
+
+    #[test]
+    fn salesforce_trailing_slash_does_not_double_up() {
+        let p = json!({
+            "authMode": "clientCredentials",
+            "clientId": "cid", "clientSecret": "s",
+            "loginUrl": "https://acme.my.salesforce.com/",
+        });
+        let o = rest_oauth_from_props(&p, true).unwrap().unwrap();
+        assert_eq!(o.token_url, "https://acme.my.salesforce.com/services/oauth2/token");
+    }
+
+    #[test]
+    fn salesforce_falls_back_to_instance_url() {
+        let p = json!({
+            "authMode": "clientCredentials",
+            "clientId": "cid", "clientSecret": "s",
+            "instanceUrl": "https://acme.my.salesforce.com",
+        });
+        let o = rest_oauth_from_props(&p, true).unwrap().unwrap();
+        assert_eq!(o.token_url, "https://acme.my.salesforce.com/services/oauth2/token");
+    }
+
+    /// #195: a non-Salesforce REST source supplies its own token endpoint.
+    #[test]
+    fn generic_rest_source_uses_explicit_token_url() {
+        let p = json!({
+            "authType": "clientCredentials",
+            "clientId": "cid", "clientSecret": "s",
+            "tokenUrl": "https://identity.xero.com/connect/token",
+            "clientAuth": "basic",
+            "scope": "accounting.transactions",
+        });
+        let o = rest_oauth_from_props(&p, false).unwrap().unwrap();
+        assert_eq!(o.token_url, "https://identity.xero.com/connect/token");
+        assert_eq!(o.client_auth, OAuthClientAuth::Basic);
+        assert_eq!(o.scope.as_deref(), Some("accounting.transactions"));
+    }
+
+    #[test]
+    fn generic_defaults_to_body_client_auth() {
+        let p = json!({
+            "authType": "oauth",
+            "clientId": "cid", "clientSecret": "s",
+            "tokenUrl": "https://example.com/token",
+        });
+        let o = rest_oauth_from_props(&p, false).unwrap().unwrap();
+        assert_eq!(o.client_auth, OAuthClientAuth::Body);
+    }
+
+    #[test]
+    fn generic_without_token_url_is_a_config_error() {
+        let p = json!({
+            "authType": "clientCredentials",
+            "clientId": "cid", "clientSecret": "s",
+        });
+        let err = rest_oauth_from_props(&p, false).unwrap_err().to_string();
+        assert!(err.contains("tokenUrl"), "expected tokenUrl error, got: {}", err);
+    }
+
+    /// The default Bearer path must stay untouched so existing ${ENV:TOKEN}
+    /// pipelines keep working on every REST alias.
+    #[test]
+    fn bearer_mode_resolves_to_none_for_both_shapes() {
+        let p = json!({ "authType": "bearer", "authToken": "tok" });
+        assert!(rest_oauth_from_props(&p, true).unwrap().is_none());
+        assert!(rest_oauth_from_props(&p, false).unwrap().is_none());
+        let empty = json!({});
+        assert!(rest_oauth_from_props(&empty, false).unwrap().is_none());
     }
 }

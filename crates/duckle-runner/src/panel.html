@@ -257,8 +257,15 @@ function relFuture(iso){
   const t=new Date(iso).getTime(); if(isNaN(t)) return iso;
   const d=(t-Date.now())/1000;
   if(d<=0) return 'due';
-  if(d<60) return 'in <1m'; if(d<3600) return 'in '+Math.round(d/60)+'m';
-  if(d<86400) return 'in '+Math.round(d/3600)+'h'; if(d<604800) return 'in '+Math.round(d/86400)+'d';
+  if(d<60) return 'in <1m';
+  // Keep the minutes remainder so a next-run time can be checked against the
+  // cron expression that produced it (issue #194): "in 1h 5m", not a truncated
+  // "in 1h". Round to whole minutes first, then split into h/m, so a 1h 5m gap
+  // does not read as "1h 4m" once a few ms have elapsed and 59m 59s rolls to
+  // "in 1h" rather than "in 60m". Compact units keep the Schedules column narrow.
+  if(d<86400){ const tm=Math.round(d/60), h=Math.floor(tm/60), m=tm%60;
+    return h===0?('in '+m+'m'):(m>0?('in '+h+'h '+m+'m'):('in '+h+'h')); }
+  if(d<604800) return 'in '+Math.floor(d/86400)+'d';
   try{return new Date(iso).toLocaleDateString();}catch(e){return iso;}
 }
 function toast(msg, kind){ const el=document.createElement('div'); el.className='toast';

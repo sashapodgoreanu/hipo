@@ -2658,6 +2658,9 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                               { label: 'None', value: 'none' },
                               { label: 'Bearer token', value: 'bearer' },
                               { label: 'API key (header)', value: 'apikey' },
+                              // #195: any REST alias can mint a token per run
+                              // once it supplies its own token endpoint.
+                              { label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'oauth_client_credentials' },
                           ],
                     // visibleWhen stays Salesforce-only for now: on other API
                     // sources these fields keep rendering unconditionally.
@@ -2688,7 +2691,28 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                           { key: 'clientId', label: 'Client ID', kind: 'text' as const, placeholder: 'Connected app consumer key', visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'oauth_client_credentials' }] },
                           { key: 'clientSecret', label: 'Client secret', kind: 'text' as const, secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authType', equals: 'oauth_client_credentials' }] },
                       ]
-                    : []),
+                    : [
+                          // #195: generic client-credentials for any REST alias
+                          // (e.g. a Xero Custom Connection). Unlike Salesforce,
+                          // the token endpoint is not derivable, so it is asked
+                          // for outright.
+                          { key: 'tokenUrl', label: 'Token URL', kind: 'text' as const, placeholder: 'https://identity.xero.com/connect/token', description: 'OAuth 2.0 token endpoint. A fresh access token is minted per run, so no expiring token has to be pasted.', visibleWhen: [{ key: 'authType', equals: 'oauth_client_credentials' }] },
+                          { key: 'clientId', label: 'Client ID', kind: 'text' as const, visibleWhen: [{ key: 'authType', equals: 'oauth_client_credentials' }] },
+                          { key: 'clientSecret', label: 'Client secret', kind: 'text' as const, secret: true, placeholder: '${ENV:OAUTH_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [{ key: 'authType', equals: 'oauth_client_credentials' }] },
+                          {
+                              key: 'clientAuth',
+                              label: 'Client authentication',
+                              kind: 'select' as const,
+                              defaultValue: 'body',
+                              options: [
+                                  { label: 'Credentials in POST body', value: 'body' },
+                                  { label: 'HTTP Basic header', value: 'basic' },
+                              ],
+                              description: 'How the client id/secret reach the token endpoint. Xero requires HTTP Basic.',
+                              visibleWhen: [{ key: 'authType', equals: 'oauth_client_credentials' }],
+                          },
+                          { key: 'scope', label: 'Scope', kind: 'text' as const, placeholder: 'accounting.transactions', description: 'Optional scope form field, required by some providers.', visibleWhen: [{ key: 'authType', equals: 'oauth_client_credentials' }] },
+                      ]),
             ],
         },
         {

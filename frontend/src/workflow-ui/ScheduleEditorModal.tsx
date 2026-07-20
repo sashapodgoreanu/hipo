@@ -626,13 +626,28 @@ function formatTime(iso: string): string {
         const delta = d.getTime() - now;
         const abs = Math.abs(delta);
         if (abs < 60_000) return delta > 0 ? 'in <1 min' : 'just now';
+        // Countdowns keep the minutes remainder so a next-run time can be
+        // checked against the cron expression that produced it (issue #194):
+        // "in 1 h 5 min", not a truncated "in 1 h". Round to the nearest whole
+        // minute FIRST, then split into h/m: rounding the total (rather than
+        // flooring) keeps a 1 h 5 min gap reading as "in 1 h 5 min" instead of
+        // "1 h 4 min" once a few ms have elapsed, and deriving hours from that
+        // total drops the old over-report where 1 h 50 min showed as "in 2 h".
+        // Past times keep their existing wording.
+        if (delta > 0 && abs < 86_400_000) {
+            const totalMin = Math.round(abs / 60_000);
+            const h = Math.floor(totalMin / 60);
+            const m = totalMin % 60;
+            if (h === 0) return `in ${m} min`;
+            return m > 0 ? `in ${h} h ${m} min` : `in ${h} h`;
+        }
         if (abs < 3_600_000) {
             const m = Math.round(abs / 60_000);
-            return delta > 0 ? `in ${m} min` : `${m} min ago`;
+            return `${m} min ago`;
         }
         if (abs < 86_400_000) {
             const h = Math.round(abs / 3_600_000);
-            return delta > 0 ? `in ${h} h` : `${h} h ago`;
+            return `${h} h ago`;
         }
         return d.toLocaleString();
     } catch {

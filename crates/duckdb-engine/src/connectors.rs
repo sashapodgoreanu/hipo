@@ -40,29 +40,38 @@ pub(crate) fn render_text_template(template: &str, row: &serde_json::Value) -> S
 /// otherwise re-paste, and because source and sink each mint from their own
 /// connection, org-to-org migration (read Org A, write Org B) works out of the
 /// box.
-pub(crate) fn mint_salesforce_token(
-    login_url: &str,
-    client_id: &str,
-    client_secret: &str,
-) -> Result<(String, String), EngineError> {
-    let url = format!(
-        "{}/services/oauth2/token",
-        login_url.trim_end_matches('/')
-    );
-    let resp = crate::tls::http_agent()
+/// #195 generalizes this beyond Salesforce: the endpoint comes from the spec's
+/// `token_url` and credentials go either in the POST body (Salesforce, the
+/// default) or as an HTTP Basic header (Xero). For Salesforce the request is
+/// unchanged: the same three form fields in the same order to the same URL.
+pub(crate) fn mint_oauth_token(o: &plan::RestOAuth) -> Result<(String, String), EngineError> {
+    let url = o.token_url.trim_end_matches('/').to_string();
+    let mut req = crate::tls::http_agent()
         .post(&url)
-        .set("Accept", "application/json")
-        .send_form(&[
-            ("grant_type", "client_credentials"),
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-        ]);
+        .set("Accept", "application/json");
+    let mut form: Vec<(&str, &str)> = vec![("grant_type", "client_credentials")];
+    match o.client_auth {
+        plan::OAuthClientAuth::Body => {
+            form.push(("client_id", &o.client_id));
+            form.push(("client_secret", &o.client_secret));
+        }
+        plan::OAuthClientAuth::Basic => {
+            use base64::engine::general_purpose::STANDARD as B64;
+            use base64::Engine as _;
+            let creds = B64.encode(format!("{}:{}", o.client_id, o.client_secret));
+            req = req.set("Authorization", &format!("Basic {}", creds));
+        }
+    }
+    if let Some(s) = &o.scope {
+        form.push(("scope", s));
+    }
+    let resp = req.send_form(&form);
     let txt = match resp {
         Ok(r) => r.into_string().unwrap_or_default(),
         Err(ureq::Error::Status(code, r)) => {
             let b = r.into_string().unwrap_or_default();
             return Err(EngineError::Query(format!(
-                "salesforce OAuth: token endpoint HTTP {} from {}: {}",
+                "OAuth: token endpoint HTTP {} from {}: {}",
                 code,
                 url,
                 b.chars().take(300).collect::<String>()
@@ -70,14 +79,14 @@ pub(crate) fn mint_salesforce_token(
         }
         Err(e) => {
             return Err(EngineError::Query(format!(
-                "salesforce OAuth: token endpoint transport to {}: {}",
+                "OAuth: token endpoint transport to {}: {}",
                 url, e
             )));
         }
     };
     let v: JsonValue = serde_json::from_str(&txt).map_err(|e| {
         EngineError::Query(format!(
-            "salesforce OAuth: token endpoint returned non-JSON ({}): {}",
+            "OAuth: token endpoint returned non-JSON ({}): {}",
             e,
             txt.chars().take(200).collect::<String>()
         ))
@@ -89,7 +98,7 @@ pub(crate) fn mint_salesforce_token(
         .to_string();
     if access.is_empty() {
         return Err(EngineError::Query(format!(
-            "salesforce OAuth: token endpoint response missing access_token: {}",
+            "OAuth: token endpoint response missing access_token: {}",
             txt.chars().take(200).collect::<String>()
         )));
     }
@@ -444,7 +453,7 @@ impl DuckdbEngine {
         let (access_token, instance_url) = match &spec.oauth {
             Some(o) => {
                 let (tok, minted_instance) =
-                    mint_salesforce_token(&o.login_url, &o.client_id, &o.client_secret)?;
+                    mint_oauth_token(o)?;
                 let instance = if !minted_instance.is_empty() {
                     minted_instance
                 } else if !spec.instance_url.is_empty() {
@@ -674,7 +683,7 @@ impl DuckdbEngine {
         let (access_token, instance_url) = match &spec.oauth {
             Some(o) => {
                 let (tok, minted_instance) =
-                    mint_salesforce_token(&o.login_url, &o.client_id, &o.client_secret)?;
+                    mint_oauth_token(o)?;
                 let instance = if !minted_instance.is_empty() {
                     minted_instance
                 } else if !spec.instance_url.is_empty() {
@@ -8426,7 +8435,7 @@ impl DuckdbEngine {
         let mut eff_headers = spec.headers.clone();
         if let Some(o) = &spec.oauth {
             let (token, _instance) =
-                mint_salesforce_token(&o.login_url, &o.client_id, &o.client_secret)?;
+                mint_oauth_token(o)?;
             eff_headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
             eff_headers.push(("Authorization".into(), format!("Bearer {}", token)));
         }
