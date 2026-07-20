@@ -17,9 +17,9 @@ import {
 import {
     PALETTE,
     TOTAL_COMPONENT_COUNT,
-    AVAILABLE_COUNT,
     type ComponentDef,
 } from './palette-data';
+import { legacyComponentDisplay } from '../legacy-disabled';
 import ComponentIcon from './ComponentIcon';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -32,8 +32,26 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
     saas: <Cloud size={13} />,
 };
 
+const DISPLAY_PALETTE = PALETTE.map(category => ({
+    ...category,
+    groups: category.groups.map(group => ({
+        ...group,
+        components: group.components.map(legacyComponentDisplay),
+    })),
+}));
+const DISPLAY_AVAILABLE_COUNT = DISPLAY_PALETTE.reduce(
+    (categoryTotal, category) =>
+        categoryTotal +
+        category.groups.reduce(
+            (groupTotal, group) =>
+                groupTotal + group.components.filter(component => component.availability === 'available').length,
+            0,
+        ),
+    0,
+);
+
 const DEFAULT_EXPANDED = new Set<string>();
-const ALL_CATEGORY_IDS = PALETTE.map(c => c.id);
+const ALL_CATEGORY_IDS = DISPLAY_PALETTE.map(c => c.id);
 
 // Map palette top-level category IDs to i18n keys under "palette.*".
 const CAT_LABEL_KEY: Record<string, string> = {
@@ -101,8 +119,8 @@ export default function Palette() {
     const q = query.trim().toLowerCase();
 
     const filtered = useMemo(() => {
-        if (!q) return PALETTE;
-        return PALETTE.map(cat => ({
+        if (!q) return DISPLAY_PALETTE;
+        return DISPLAY_PALETTE.map(cat => ({
             ...cat,
             groups: cat.groups
                 .map(g => ({
@@ -158,7 +176,7 @@ export default function Palette() {
                 </div>
                 <div className="palette-stats">
                     <span>
-                        <b>{AVAILABLE_COUNT}</b> {t('palette.available')}
+                        <b>{DISPLAY_AVAILABLE_COUNT}</b> {t('palette.available')}
                     </span>
                     <span className="palette-stats-sep">·</span>
                     <span>
