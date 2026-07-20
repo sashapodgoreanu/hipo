@@ -21,10 +21,10 @@ fn cutover_template_is_parseable_but_cannot_approve_production() {
         "benchmark_evidence",
         "bundle_evidence",
         "bundle_identity",
-        "SC-001",
-        "SC-009",
-        "SC-010",
-        "SC-011",
+        "SC-001:evidence",
+        "SC-009:evidence",
+        "SC-010:evidence",
+        "SC-011:evidence",
         "finding:benchmark-thresholds",
     ] {
         assert!(
@@ -34,4 +34,10 @@ fn cutover_template_is_parseable_but_cannot_approve_production() {
             "missing expected fail-closed diagnostic {required_rejection}: {missing_or_failed:?}"
         );
     }
+
+    let empty_criterion_evidence = missing_or_failed
+        .iter()
+        .filter(|item| item.starts_with("SC-") && item.ends_with(":evidence"))
+        .count();
+    assert_eq!(empty_criterion_evidence, 11);
 }
