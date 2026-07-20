@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 //! Packaged local database sidecar entrypoint.
 //!
 //! The Quack extension is embedded only after build-time checksum validation.
@@ -10,6 +12,30 @@ const EMBEDDED_QUACK_EXTENSION: &[u8] =
     include_bytes!(env!("DUCKLE_EMBEDDED_QUACK_EXTENSION"));
 const DUCKDB_VERSION: &str = env!("DUCKLE_RUNNER_DUCKDB_VERSION");
 const QUACK_EXTENSION_FILE: &str = env!("DUCKLE_QUACK_EXTENSION_FILE");
+
+fn write_failure_marker(code: &str) {
+    use std::io::Write;
+
+    let Some(path) = std::env::current_exe()
+        .ok()
+        .map(|executable| executable.with_extension("log"))
+    else {
+        return;
+    };
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        // Only stable stage identifiers are persisted. Never write command-line
+        // arguments, endpoints, paths, SQL, credentials, PIDs or raw errors.
+        let _ = writeln!(file, "{timestamp_ms} {code}");
+    }
+}
 
 fn duckdb_home() -> Option<PathBuf> {
     #[cfg(windows)]
@@ -80,10 +106,15 @@ fn stage_embedded_extension() -> Result<PathBuf, String> {
 
 #[cfg(windows)]
 fn run() -> Result<(), String> {
-    let _extension = stage_embedded_extension()?;
+    let _extension = stage_embedded_extension().map_err(|reason| {
+        write_failure_marker("sidecar.extension_stage_failed");
+        reason
+    })?;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    duckle_db_runner::local_quack_sidecar::run_windows_sidecar(&args)
-        .map_err(|_| "runner_unavailable".to_string())
+    duckle_db_runner::local_quack_sidecar::run_windows_sidecar(&args).map_err(|_| {
+        write_failure_marker("sidecar.bootstrap_or_quack_failed");
+        "runner_unavailable".to_string()
+    })
 }
 
 #[cfg(not(windows))]
@@ -91,7 +122,11 @@ fn run() -> Result<(), String> {
     // Packaging exists for all approved targets, while process-launch support
     // remains gated until the platform-specific containment implementation is
     // selected. Never fall back to a CLI or network install.
-    let _extension = stage_embedded_extension()?;
+    let _extension = stage_embedded_extension().map_err(|reason| {
+        write_failure_marker("sidecar.extension_stage_failed");
+        reason
+    })?;
+    write_failure_marker("sidecar.platform_unavailable");
     Err("runner_unavailable".to_string())
 }
 
@@ -116,5 +151,17 @@ mod tests {
         assert!(text.contains("extensions"));
         assert!(text.contains("v1.5.4"));
         assert!(text.ends_with(QUACK_EXTENSION_FILE));
+    }
+
+    #[test]
+    fn failure_marker_codes_are_static_and_non_sensitive() {
+        for code in [
+            "sidecar.extension_stage_failed",
+            "sidecar.bootstrap_or_quack_failed",
+            "sidecar.platform_unavailable",
+        ] {
+            assert!(code.starts_with("sidecar."));
+            assert!(!code.contains(['\\', '/', ':', '=', ' ']));
+        }
     }
 }
