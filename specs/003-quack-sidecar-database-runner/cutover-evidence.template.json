@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "",
+  "technicalOwner": "",
+  "releaseApprover": "",
+  "successCriteria": {
+    "SC-001": { "status": "fail", "evidenceId": "" },
+    "SC-002": { "status": "fail", "evidenceId": "" },
+    "SC-003": { "status": "fail", "evidenceId": "" },
+    "SC-004": { "status": "fail", "evidenceId": "" },
+    "SC-005": { "status": "fail", "evidenceId": "" },
+    "SC-006": { "status": "fail", "evidenceId": "" },
+    "SC-007": { "status": "fail", "evidenceId": "" },
+    "SC-008": { "status": "fail", "evidenceId": "" },
+    "SC-009": { "status": "fail", "evidenceId": "" },
+    "SC-010": { "status": "fail", "evidenceId": "" },
+    "SC-011": { "status": "fail", "evidenceId": "" }
+  },
+  "findings": {
+    "benchmark-thresholds": "open"
+  },
+  "bundleEvidenceId": null,
+  "benchmarkEvidenceId": null,
+  "bundle": null
+}
