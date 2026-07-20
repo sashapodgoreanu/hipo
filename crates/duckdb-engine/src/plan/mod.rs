@@ -133,6 +133,9 @@ pub enum RuntimeSpec {
     /// snk.salesforce.bulk: write rows into a Salesforce object via Bulk API
     /// 2.0's async job lifecycle. See SalesforceBulkSinkSpec.
     SalesforceBulkSink(SalesforceBulkSinkSpec),
+    /// src.salesforce.bulk: read a SOQL result set via a Bulk API 2.0
+    /// query job. See SalesforceBulkSourceSpec.
+    SalesforceBulkSource(SalesforceBulkSourceSpec),
     SnowflakeSource(SnowflakeSourceSpec),
     DatabricksSource(DatabricksSourceSpec),
     RestSource(RestSourceSpec),
@@ -1011,6 +1014,7 @@ fn build_stage(
     let mut databricks_sink: Option<DatabricksSinkSpec> = None;
     let mut salesforce_sink: Option<SalesforceSinkSpec> = None;
     let mut salesforce_bulk_sink: Option<SalesforceBulkSinkSpec> = None;
+    let mut salesforce_bulk_source: Option<SalesforceBulkSourceSpec> = None;
     let mut snowflake_source: Option<SnowflakeSourceSpec> = None;
     let mut databricks_source: Option<DatabricksSourceSpec> = None;
     let mut rest_source: Option<RestSourceSpec> = None;
@@ -1891,6 +1895,83 @@ fn build_stage(
             results_path: string_prop(&props, "resultsPath").filter(|s| !s.is_empty()),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "src.salesforce.bulk" {
+        // Salesforce Bulk API 2.0 query source: async job lifecycle for
+        // migration-scale reads. Auth mirrors snk.salesforce.bulk (sink-shaped
+        // keys), NOT the REST-form src.salesforce.
+        let oauth = rest_oauth_from_props(&props, true)?;
+        let instance_url = string_prop(&props, "instanceUrl")
+            .map(|s| s.trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty());
+        let access_token = string_prop(&props, "accessToken").filter(|s| !s.is_empty());
+        if oauth.is_none() {
+            if instance_url.is_none() {
+                return Err(EngineError::Config(format!(
+                    "{}: instanceUrl required (e.g. https://acme.my.salesforce.com)",
+                    component_id
+                )));
+            }
+            if access_token.is_none() {
+                return Err(EngineError::Config(format!(
+                    "{}: accessToken required (Bearer OAuth token; use ${{ENV:SF_TOKEN}}), \
+                     or set Auth mode to OAuth Client Credentials",
+                    component_id
+                )));
+            }
+        }
+        let instance_url = instance_url.unwrap_or_default();
+        let access_token = access_token.unwrap_or_default();
+        let query = string_prop(&props, "query")
+            .or_else(|| string_prop(&props, "soql"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!(
+                "{}: query required (a SOQL SELECT, e.g. SELECT Id, Name FROM Account)",
+                component_id
+            )))?;
+        // Case-sensitive on the wire: "queryAll", not "queryall".
+        let operation = match string_prop(&props, "operation")
+            .unwrap_or_else(|| "query".into())
+            .to_lowercase()
+            .as_str()
+        {
+            "query" => "query".to_string(),
+            "queryall" => "queryAll".to_string(),
+            other => {
+                return Err(EngineError::Config(format!(
+                    "{}: operation must be query|queryAll (got '{}')",
+                    component_id, other
+                )))
+            }
+        };
+        let poll_interval_secs = props
+            .get("pollIntervalSecs")
+            .and_then(|v| v.as_u64())
+            .filter(|n| *n > 0)
+            .unwrap_or(5);
+        let timeout_secs = props
+            .get("timeoutSecs")
+            .and_then(|v| v.as_u64())
+            .filter(|n| *n > 0)
+            .unwrap_or(3600);
+        salesforce_bulk_source = Some(SalesforceBulkSourceSpec {
+            node_id: node.id.clone(),
+            instance_url,
+            api_version: string_prop(&props, "apiVersion")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "v60.0".into()),
+            access_token,
+            query,
+            operation,
+            poll_interval_secs,
+            timeout_secs,
+            max_records: props
+                .get("maxRecords")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0),
+            oauth,
+            declared_schema: node.data.schema.clone(),
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "snk.elastic" || component_id == "snk.opensearch" {
         // Elasticsearch / OpenSearch bulk API:
         //   POST {host}/{index}/_bulk
@@ -4523,6 +4604,7 @@ fn build_stage(
         .or_else(|| databricks_sink.map(RuntimeSpec::DatabricksSink))
         .or_else(|| salesforce_sink.map(RuntimeSpec::SalesforceSink))
         .or_else(|| salesforce_bulk_sink.map(RuntimeSpec::SalesforceBulkSink))
+        .or_else(|| salesforce_bulk_source.map(RuntimeSpec::SalesforceBulkSource))
         .or_else(|| snowflake_source.map(RuntimeSpec::SnowflakeSource))
         .or_else(|| databricks_source.map(RuntimeSpec::DatabricksSource))
         .or_else(|| rest_source.map(RuntimeSpec::RestSource))

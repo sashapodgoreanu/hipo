@@ -1611,6 +1611,47 @@ pub struct SalesforceBulkSinkSpec {
     pub results_path: Option<String>,
 }
 
+/// src.salesforce.bulk: read a SOQL result set via a Bulk API 2.0 query job -
+/// the migration-scale read, where src.salesforce (the REST query endpoint,
+/// ~2000 records per page) would mean thousands of paginated round-trips.
+/// The async lifecycle mirrors the Bulk sink's: create query job -> poll to
+/// JobComplete -> walk the paged CSV result sets to a temp file -> DuckDB
+/// read_csv materializes it, so a multi-GB result never lands in memory.
+///
+/// Auth is identical to snk.salesforce.bulk (sink-shaped keys: authMode /
+/// instanceUrl / accessToken, or `oauth` client credentials minted per run).
+#[derive(Debug, Clone)]
+pub struct SalesforceBulkSourceSpec {
+    pub node_id: String,
+    /// Org base URL, e.g. https://acme.my.salesforce.com. No trailing slash.
+    pub instance_url: String,
+    /// REST API version segment, e.g. "v60.0".
+    pub api_version: String,
+    /// Bearer OAuth access token.
+    pub access_token: String,
+    /// The SOQL statement. Bulk 2.0 queries don't support GROUP BY / OFFSET /
+    /// TYPEOF / aggregates / parent-to-child subqueries; compound fields must
+    /// be queried by component. Salesforce rejects those at job creation.
+    pub query: String,
+    /// "query" (non-deleted rows) | "queryAll" (includes deleted/archived).
+    pub operation: String,
+    /// Seconds between job-status polls.
+    pub poll_interval_secs: u64,
+    /// Abort the query job and fail the run after this many seconds.
+    pub timeout_secs: u64,
+    /// Optional page size for result fetches (the `maxRecords` query param);
+    /// None lets the server pick. Pages are walked via the Sforce-Locator
+    /// header either way, so this only tunes round-trip granularity.
+    pub max_records: Option<u64>,
+    /// When set, mint a fresh access token per run via OAuth client-credentials
+    /// (#166) instead of using the static Bearer `access_token`.
+    pub oauth: Option<RestOAuth>,
+    /// The node's declared schema. A 0-record query materializes as a typed
+    /// empty relation from these columns (the #170 contract); with rows they
+    /// pin the output columns/types instead of leaving both to CSV inference.
+    pub declared_schema: Option<Vec<duckle_metadata::Column>>,
+}
+
 /// snk.execsource "Execute in Source" (#115 in-database processing v1b): run a
 /// statement (typically CREATE TABLE ... AS SELECT) directly on the attached
 /// remote server via the scanner extension's passthrough (postgres_execute /

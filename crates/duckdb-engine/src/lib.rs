@@ -60,7 +60,7 @@ use plan::{
     PubSubSourceSpec, QdrantSourceSpec, QvdSinkSpec, QvdSourceSpec, RabbitSinkSpec,
     RabbitSourceSpec, RedisSinkSpec,
     RedisSourceSpec, RestPagination, RestResponseFormat, RestSourceSpec, RuntimeSpec, ShellSpec,
-    SalesforceBulkSinkSpec, SalesforceSinkSpec, SftpSinkSpec, SftpSourceSpec, SnowflakeAuth,
+    SalesforceBulkSinkSpec, SalesforceBulkSourceSpec, SalesforceSinkSpec, SftpSinkSpec, SftpSourceSpec, SnowflakeAuth,
     SnowflakeSinkSpec,
     SnowflakeSourceSpec,
     SqlServerSinkSpec,
@@ -1374,6 +1374,9 @@ impl DuckdbEngine {
                     }
                     Some(RuntimeSpec::SalesforceBulkSink(spec)) => {
                         self.run_salesforce_bulk_sink(&db_path, &secret_prefix, spec)
+                    }
+                    Some(RuntimeSpec::SalesforceBulkSource(spec)) => {
+                        self.run_salesforce_bulk_source(&db_path, spec)
                     }
                     // Snowflake / Databricks sources: POST SELECT, parse the
                     // response, materialize as node_id via read_json_auto.

@@ -12339,3 +12339,328 @@ fn snk_salesforce_bulk_failed_records_inline_first_errors() {
         err
     );
 }
+
+// ---- src.salesforce.bulk (Bulk API 2.0 query source) -----------------------
+
+struct BulkQueryMock {
+    job_state: &'static str,
+    /// One entry per result page: (csv body, Sforce-Locator value returned
+    /// WITH that page, Sforce-NumberOfRecords). The last page's locator is the
+    /// literal string "null", exactly as the real API signals it.
+    pages: Vec<(&'static str, &'static str, u64)>,
+}
+
+fn sf_bulk_query_mock_server(cfg: BulkQueryMock) -> (u16, std::sync::mpsc::Receiver<Vec<u8>>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf bulk query mock");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(64) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_millis(250)))
+                .ok();
+            stream.set_nodelay(true).ok();
+            let mut buf = Vec::with_capacity(8192);
+            let mut chunk = [0u8; 4096];
+            for _ in 0..16 {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let head = String::from_utf8_lossy(&buf);
+            let line = head.lines().next().unwrap_or("").to_string();
+            let method = line.split(' ').next().unwrap_or("");
+            let path = line.split(' ').nth(1).unwrap_or("");
+            let _ = tx.send(buf.clone());
+
+            // (status, content-type, extra headers, body)
+            let (status, ctype, extra, body): (&str, &str, String, String) = if path
+                .contains("oauth2/token")
+            {
+                (
+                    "200 OK",
+                    "application/json",
+                    String::new(),
+                    format!(
+                        r#"{{"access_token":"minted-abc","instance_url":"http://127.0.0.1:{}"}}"#,
+                        port
+                    ),
+                )
+            } else if method == "POST" && path.ends_with("/jobs/query") {
+                (
+                    "200 OK",
+                    "application/json",
+                    String::new(),
+                    r#"{"id":"QJOB1","state":"UploadComplete"}"#.to_string(),
+                )
+            } else if method == "GET" && path.contains("/results") {
+                // Page selection: no locator param -> page 0; locator=P{n} -> page n.
+                let idx = path
+                    .split("locator=P")
+                    .nth(1)
+                    .and_then(|s| s.split('&').next().unwrap_or("").parse::<usize>().ok())
+                    .unwrap_or(0);
+                match cfg.pages.get(idx) {
+                    Some((csv, locator, nrecords)) => {
+                        // The next page's locator is P{idx+1} unless this page
+                        // declared the terminal "null".
+                        let loc = if *locator == "null" {
+                            "null".to_string()
+                        } else {
+                            format!("P{}", idx + 1)
+                        };
+                        (
+                            "200 OK",
+                            "text/csv",
+                            format!(
+                                "Sforce-Locator: {}\r\nSforce-NumberOfRecords: {}\r\n",
+                                loc, nrecords
+                            ),
+                            (*csv).to_string(),
+                        )
+                    }
+                    None => ("404 Not Found", "text/csv", String::new(), String::new()),
+                }
+            } else if method == "PATCH" {
+                (
+                    "200 OK",
+                    "application/json",
+                    String::new(),
+                    r#"{"id":"QJOB1","state":"Aborted"}"#.to_string(),
+                )
+            } else if method == "GET" {
+                (
+                    "200 OK",
+                    "application/json",
+                    String::new(),
+                    format!(
+                        r#"{{"id":"QJOB1","state":"{}","numberRecordsProcessed":0,"numberRecordsFailed":0,"errorMessage":"MALFORMED_QUERY: mock says no"}}"#,
+                        cfg.job_state
+                    ),
+                )
+            } else {
+                (
+                    "404 Not Found",
+                    "application/json",
+                    String::new(),
+                    String::new(),
+                )
+            };
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                ctype,
+                extra,
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    (port, rx)
+}
+
+#[test]
+fn src_salesforce_bulk_walks_locator_pages_in_order() {
+    let engine = engine_or_skip!();
+    // Two pages: the runner must keep page 1's header, strip page 2's, and
+    // stop on the LITERAL "null" locator - yielding all 3 rows in order.
+    let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
+        job_state: "JobComplete",
+        pages: vec![
+            ("Id,Name\n001A,Acme\n001B,Globex\n", "P1", 2),
+            ("Id,Name\n001C,Initech\n", "null", 1),
+        ],
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out.csv").to_string_lossy().replace('\\', "/");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "q",
+                "src.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "query": "SELECT Id, Name FROM Account",
+                    "pollIntervalSecs": 1,
+                    "timeoutSecs": 30
+                }),
+            ),
+            node("f", "snk.csv", json!({ "path": out, "mode": "overwrite", "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "q", "f")]),
+    ));
+    assert_eq!(r.status, "ok", "run failed: {:?}", r.error);
+    let written = std::fs::read_to_string(tmp.path().join("out.csv")).unwrap();
+    let lines: Vec<&str> = written.lines().collect();
+    assert_eq!(lines.len(), 4, "header + 3 rows, got: {}", written);
+    assert!(
+        lines[0].contains("Id") && lines[0].contains("Name"),
+        "{}",
+        written
+    );
+    assert!(
+        lines[1].contains("Acme") && lines[3].contains("Initech"),
+        "pages must land in order: {}",
+        written
+    );
+}
+
+#[test]
+fn src_salesforce_bulk_zero_records_yields_typed_empty_relation() {
+    let engine = engine_or_skip!();
+    // The #170 contract: 0 records + a declared schema = a typed empty
+    // relation downstream SQL can bind, landing as a header-only csv.
+    let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
+        job_state: "JobComplete",
+        pages: vec![("Id,Name\n", "null", 0)],
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("empty.csv").to_string_lossy().replace('\\', "/");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let src = json!({
+        "id": "q",
+        "position": { "x": 0, "y": 0 },
+        "data": {
+            "label": "q",
+            "componentId": "src.salesforce.bulk",
+            "properties": {
+                "instanceUrl": instance,
+                "accessToken": "tok-123",
+                "query": "SELECT Id, Name FROM Account WHERE Name = 'nope'",
+                "pollIntervalSecs": 1,
+                "timeoutSecs": 30
+            },
+            "schema": [
+                { "name": "Id", "type": "string", "nullable": true },
+                { "name": "Name", "type": "string", "nullable": true }
+            ]
+        }
+    });
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            src,
+            node("sql", "code.sql", json!({ "sql": "SELECT Id, Name FROM input" })),
+            node("f", "snk.csv", json!({ "path": out, "mode": "overwrite", "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "q", "sql"), main_edge("e2", "sql", "f")]),
+    ));
+    assert_eq!(
+        r.status, "ok",
+        "typed empty must flow through SQL: {:?}",
+        r.error
+    );
+    let written = std::fs::read_to_string(tmp.path().join("empty.csv")).unwrap();
+    let lines: Vec<&str> = written.lines().collect();
+    assert_eq!(lines.len(), 1, "header-only csv expected, got: {}", written);
+    assert!(
+        lines[0].contains("Id") && lines[0].contains("Name"),
+        "{}",
+        written
+    );
+}
+
+#[test]
+fn src_salesforce_bulk_failed_job_surfaces_error() {
+    let engine = engine_or_skip!();
+    let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
+        job_state: "Failed",
+        pages: vec![],
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("x.csv").to_string_lossy().replace('\\', "/");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "q",
+                "src.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "query": "SELECT Id FROM Account GROUP BY Id",
+                    "pollIntervalSecs": 1,
+                    "timeoutSecs": 30
+                }),
+            ),
+            node("f", "snk.csv", json!({ "path": out, "mode": "overwrite", "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "q", "f")]),
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("QJOB1") && err.contains("Failed") && err.contains("MALFORMED_QUERY"),
+        "error should name the job, state and API message, got: {}",
+        err
+    );
+}
+
+#[test]
+fn src_salesforce_bulk_poll_timeout_aborts_job() {
+    use std::time::Duration;
+    let engine = engine_or_skip!();
+    let (port, rx) = sf_bulk_query_mock_server(BulkQueryMock {
+        job_state: "InProgress",
+        pages: vec![],
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("x.csv").to_string_lossy().replace('\\', "/");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "q",
+                "src.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "query": "SELECT Id FROM Account",
+                    "pollIntervalSecs": 1,
+                    "timeoutSecs": 1
+                }),
+            ),
+            node("f", "snk.csv", json!({ "path": out, "mode": "overwrite", "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "q", "f")]),
+    ));
+    assert_eq!(r.status, "error", "a timed-out query poll must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("did not finish within 1s") && err.contains("QJOB1"),
+        "error should name the job and timeout, got: {}",
+        err
+    );
+    let mut last_patch_body = String::new();
+    while let Ok(req) = rx.recv_timeout(Duration::from_millis(500)) {
+        let raw = String::from_utf8_lossy(&req).to_string();
+        if raw.starts_with("PATCH ") {
+            last_patch_body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        }
+    }
+    assert!(
+        last_patch_body.contains("Aborted"),
+        "expected a final PATCH {{state: Aborted}}, got body: {}",
+        last_patch_body
+    );
+}
