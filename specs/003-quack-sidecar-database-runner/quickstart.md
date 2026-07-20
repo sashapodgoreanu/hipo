@@ -115,6 +115,8 @@ Se non emerge un crossover stabile, registrare esplicitamente il risultato e man
 
 ### 6. Evidenza di cutover
 
+Partire da `cutover-evidence.template.json`. Il template è volutamente parseabile ma **rifiutato**: tutti i criteri sono `fail`, owner/approver ed evidenze sono vuoti, il bundle è assente e il finding benchmark è `open`. Non usarlo come manifest di release senza aver sostituito ogni placeholder con evidenza congelata.
+
 Registrare in questa sezione gli identificativi immutabili, non log o percorsi locali.
 
 | Criterio | Stato | Evidence ID | Nota |
