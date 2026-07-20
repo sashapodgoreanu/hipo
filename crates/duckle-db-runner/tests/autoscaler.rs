@@ -1,6 +1,10 @@
 use duckle_db_runner::autoscaler::{ElasticAutoscaler, ScaleAction, AUTOSCALE_INTERVAL_MILLIS};
 use duckle_db_runner::demand::{DemandObservation, DEMAND_WINDOW_MILLIS};
-use duckle_db_runner::events::{ScaleDirection, ScaleReason, ScaleTelemetry};
+use duckle_db_runner::events::{
+    RunnerEvent, RunnerEventKind, ScaleDirection, ScaleReason, ScaleTelemetry,
+    TelemetryRetention,
+};
+use duckle_db_runner::model::{RunId, WorkerId, WorkerKind};
 
 fn observation(active_runs: u32, peak_5m: u32) -> DemandObservation {
     DemandObservation {
@@ -107,7 +111,63 @@ fn autoscale_telemetry_has_only_safe_capacity_demand_peak_reason_and_outcome_fie
     ] {
         assert!(object.contains_key(key), "missing telemetry field {key}");
     }
-    for forbidden in ["endpoint", "port", "pid", "path", "token", "secret", "sql", "capability"] {
+    for forbidden in [
+        "endpoint",
+        "port",
+        "pid",
+        "path",
+        "token",
+        "secret",
+        "sql",
+        "capability",
+    ] {
         assert!(!object.contains_key(forbidden), "telemetry leaked {forbidden}");
     }
+}
+
+#[test]
+fn warm_capacity_and_on_demand_lifecycle_are_distinct_and_ephemeral() {
+    let run_id = RunId::new();
+    let warm = RunnerEvent::lifecycle(
+        1,
+        RunnerEventKind::LeaseGranted,
+        Some(run_id),
+        Some(WorkerId::new()),
+        None,
+        Some(WorkerKind::Warm),
+    );
+    let on_demand = RunnerEvent::lifecycle(
+        2,
+        RunnerEventKind::LeaseGranted,
+        Some(run_id),
+        Some(WorkerId::new()),
+        None,
+        Some(WorkerKind::OnDemand),
+    );
+
+    assert_eq!(warm.worker_kind, Some(WorkerKind::Warm));
+    assert_eq!(on_demand.worker_kind, Some(WorkerKind::OnDemand));
+    assert_eq!(warm.retention, TelemetryRetention::Ephemeral);
+    assert_eq!(on_demand.retention, TelemetryRetention::Ephemeral);
+    assert!(!warm.retained_for_history());
+    assert!(!on_demand.retained_for_history());
+
+    let scale = ScaleTelemetry {
+        reason: ScaleReason::PeriodicTick,
+        direction: ScaleDirection::Hold,
+        outcome: ScaleDirection::Hold,
+        active_demand: 4,
+        peak_5m: 4,
+        base_capacity: 3,
+        current_warm_capacity: 3,
+        starting_warm: 0,
+        ready_warm: 2,
+        leased_warm: 1,
+        target_warm_capacity: 5,
+        provisioned: 0,
+        terminated_ready: 0,
+    };
+    assert_eq!(scale.current_warm_capacity, 3);
+    assert_eq!(scale.ready_warm + scale.leased_warm + scale.starting_warm, 3);
+    assert_eq!(scale.active_demand, 4, "on-demand contributes to demand, not warm capacity");
 }
