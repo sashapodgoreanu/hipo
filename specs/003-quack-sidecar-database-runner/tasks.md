@@ -4,18 +4,18 @@
 
 **Tests**: Required for baseline parity, security, lifecycle, autoscaling, IPC/UI, benchmark, and offline-package gates.
 
-**Quality review**: Resolve or explicitly accept the relevant findings in `checklists/runner-quality.md` before completing a cutover gate.
+***Quality review**: Resolve or explicitly accept the relevant findings in `checklists/runner-quality.md` before completing a cutover gate.
 
-**Organization**: US4 comes first because every run must acquire a worker from its controller.
+***Organization**: US4 comes first because every run must acquire a worker from its controller.
 
 ## Phase 1: Setup and migration baseline
 
-- [X] T001 Align controller-only acquisition, no budget/queue, five-minute peak, 20% headroom, and cutover rules in `docs/architecture/adr-quack-sidecar-runner.md`
+ - [X] T001 Align controller-only acquisition, no budget/queue, five-minute peak, 20% headroom, and cutover rules in `docs/architecture/adr-quack-sidecar-runner.md`
 - [X] T002 Align Feature 003 intent with final pool, profile, and cutover rules in `docs/feature-intents/003-quack-sidecar-database-runner.md`
 - [X] T003 Rename retained PoC to `spikes/quack-sidecar-phase0-spike/` and update its repository references
 - [X] T004 Raise workspace MSRV and CI checks to Rust 1.88, the effective workspace floor required by the existing lockfile, in `Cargo.toml`, `rust-toolchain.toml`, and `.github/workflows/`
 - [X] T005 Create and workspace-register official runner crate in `crates/duckle-db-runner/Cargo.toml`, `crates/duckle-db-runner/src/lib.rs`, and `Cargo.toml`
-- [X] T006 [P] Create and baseline SQL/runtime/source/transform/sink/preview/partial parity fixtures in `crates/duckdb-engine/tests/quack_runner_parity.rs`
+- [X] T006 [P] Create and baseline SQL/runtime/source/transform/sink/preview/partial fixtures in `crates/duckdb-engine/tests/quack_runner_parity.rs`
 - [X] T007 [P] Create bundled-runner Windows/macOS/Linux smoke workflow in `.github/workflows/runner-package-smoke.yml`
 
 ---
@@ -78,7 +78,6 @@
 - [X] T040 [US1] Create one desktop controller per open workspace with per-run cancellation ownership in `apps/desktop/src/engine_manager.rs` and `apps/desktop/src/lib.rs`
 - [X] T041 [P] [US1] Add isolation, SQL batch, runtime/materialization, preview, and partial integration tests in `crates/duckdb-engine/tests/quack_runner_parity.rs`
 - [X] T042 [P] [US1] Add regression that each normal run emits one controller acquire, cannot directly spawn, and preserves compatibility routing before cutover in `crates/duckdb-engine/tests/quack_runner_parity.rs`
-
 ---
 
 ## Phase 6: User Story 2 - Catalog sharing and concurrency without affinity (Priority: P1)
@@ -90,7 +89,6 @@
 - [X] T045 [US2] Implement and test affinity-free planning while retaining affinity compatibility until cutover in `crates/duckdb-engine/src/plan/mod.rs`, `crates/duckdb-engine/src/plan/graph.rs`, and `crates/duckdb-engine/src/plan/builders.rs`
 - [X] T046 [US2] Migrate affinity callers to normal run database behind compatibility selection while retaining `AffinitySession` until cutover in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/src/affinity_session.rs`
 - [X] T047 [P] [US2] Replace affinity tests with catalog-sharing and 2/4/8 concurrency tests in `crates/duckdb-engine/src/plan/tests.rs` and `crates/duckdb-engine/tests/execution.rs`
-
 ---
 
 ## Phase 7: User Story 3 - Deterministic cancellation, crash, and cleanup (Priority: P1)
@@ -102,7 +100,6 @@
 - [X] T050 [US3] Replace desktop single-current-run state with concurrent run-to-session ownership in `apps/desktop/src/lib.rs`
 - [X] T051 [US3] Run sweeper and parent-death containment from desktop/headless startup in `apps/desktop/src/lib.rs` and `crates/duckle-runner/src/main.rs`
 - [X] T052 [P] [US3] Add cancellation/crash/orphan integration tests for scan, join, spill, transfer, and runtime in `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
-
 ---
 
 ## Phase 8: User Story 5 - Secret and capability protection (Priority: P1)
@@ -114,7 +111,6 @@
 - [X] T055 [US5] Verify no Tauri capability or CSP scope expands in `apps/desktop/capabilities/` and `apps/desktop/tauri.conf.json`
 - [X] T056 [P] [US5] Add secret-canary redaction tests for argv, env, files, IPC, events, history, errors, and logs in `crates/duckle-db-runner/tests/security_redaction.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
 - [X] T057 [P] [US5] Add credential and external-runtime isolation tests in `crates/duckle-db-runner/tests/local_process_provider.rs`
-
 ---
 
 ## Phase 9: User Story 6 - Offline distribution and complete cutover (Priority: P1)
@@ -130,7 +126,7 @@
 - [X] T064 [US6] Apply and verify effective memory, CPU, spill, and temporary-space profile before worker readiness in `crates/duckle-db-runner/src/local_process_provider.rs` and `crates/duckle-db-runner/src/run_session.rs`
 - [X] T065 [US6] Add bounded-spill, disk-full/quota, readiness-rejection, current/peak-metric, invalid-profile, and runner-unavailable integration coverage in `crates/duckle-db-runner/tests/run_session.rs`
 - [X] T066 [US6] Add selection and correctness coverage for SQL remote, Quack transfer, and Parquet decision table in `crates/duckdb-engine/tests/quack_runner_parity.rs`
-- [ ] T067 [US6] **Manuale post-implementazione (owner)**: dopo il completamento integrale della feature, congelare il manifest di cutover ed eseguire manualmente la comparazione tra il precedente compilato CLI e il sidecar ufficiale (hardware/build/dataset/seed/warm-up/ripetizioni/soglie, baseline CLI e crossover 1/2/4/8). Non implementare harness o benchmark automatici in questa feature; registrare i risultati in `specs/003-quack-sidecar-database-runner/quickstart.md` e CutoverEvidence.
+- [ ] T067 [US6] **Manuale post-implementazione (owner)**: dopo il completamento integrale della feature, congelare il manifesto di cutover ed eseguire manualmente la comparazione tra il precedente compilato CLI e il sidecar officiale (hardware/build/dataset/seed/warm-up/ripetizioni/soglie, baseline CLI e crossover 1/2/4/8). Non implementare harness o benchmark automatici in questa feature; registrare i risultati in `specs/003-quack-sidecar-database-runner/quickstart.md` e CutoverEvidence.
 - [X] T068 [US6] Inventory and route inspect, drift, and branch/diff through WorkerPoolControl and RunDatabase in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/tests/quack_runner_parity.rs`
 - [X] T069 [US6] Verify requested/effective profile consistency for desktop, headless, scheduler, and MCP in `apps/desktop/src/lib.rs`, `crates/duckle-runner/src/main.rs`, `crates/scheduler/src/lib.rs`, and `crates/duckle-mcp/src/tools.rs`
 - [X] T070 [US6] Verify permitted stage/attempt/duration/rows/bytes/transport/memory/spill/CPU telemetry, redaction, retention routing, and warm/on-demand distinction in `crates/duckle-db-runner/tests/autoscaler.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
@@ -138,7 +134,6 @@
 - [ ] T072 [US6] Remove `spikes/quack-sidecar-phase0-spike/` and retain historical documentation after official runner gates pass
 - [X] T073 [US6] Preserve readable-but-disabled SlothDB and xf.dbt with no-fallback diagnostics in `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `frontend/src/`
 - [X] T074 [US6] Add clean offline package and mismatch smoke coverage after package staging completes in `.github/workflows/runner-package-smoke.yml`
-
 ---
 
 ## Phase 10: Polish and final gates
@@ -147,9 +142,8 @@
 - [X] T076 [P] Assert autoscale telemetry has capacity, demand, peak, target, reason, and outcome without sensitive fields in `crates/duckle-db-runner/tests/autoscaler.rs`
 - [ ] T077 Record immutable CutoverEvidence results: parity, threshold-gap, benchmark, owner/approver, and finding resolution or explicit acceptance with motivation in `specs/003-quack-sidecar-database-runner/quickstart.md`
 - [ ] T078 Run formatting, clippy, and workspace tests from `Cargo.toml`
-- [ ] T079 Run frontend install, lint, and build from `frontend/package.json`
+- [X] T079 Run frontend install, lint, and build from `frontend/package.json`
 - [ ] T080 Scan and resolve final production references to CLI, affinity, and Phase 0 spike in `crates/`, `apps/`, `frontend/`, `.github/`, and `docs/`
-
 ---
 
 ## Dependencies and execution order
@@ -172,7 +166,7 @@ All story gates -> US6 gate evidence (T062â€“T070) -> production cutover (T071â€
 
 - T001/T002, T006/T007, and each non-overlapping `[P]` task can run in parallel.
 - T023/T024 can proceed after pool implementation; T033-T035 after profile implementation.
-- US2, US3, and non-overlapping US5 work can run in parallel after US1 is stable.
+ - US2, US3, and non-overlapping US5 work can run in parallel after US1 is stable.
 - T074 can be prepared with packaging but executed only after T058-T073.
 
 ## Implementation strategy
