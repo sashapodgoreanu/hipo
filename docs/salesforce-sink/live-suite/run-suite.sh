@@ -23,6 +23,8 @@
 #   b2  bulk UPSERT   by External_ID__c; sf__Created true+false in results
 #   b5  bulk FAILURE  bogus Id, no resultsPath -> sf__Error inlined in run error
 #   b3  bulk DELETE   retrieved Ids -> org clean (b4 = the BULK-* retrieve)
+#   q1  bulk QUERY    src.salesforce.bulk async query job -> csv (4 rows)
+#   q2  bulk QUERY    same query on the clean org -> typed empty (#170)
 #
 # Suite records carry External_ID__c = SUITE-* / BULK-* and the delete steps +
 # final cleanup remove them, so repeat runs start clean.
@@ -181,6 +183,18 @@ else
 fi
 assert_file "b2d bulk upsert overwrote BULK-101" out/bulk_retrieved.csv 'Bulk Upsert Overwrite A'
 
+# q1 while the BULK-* records exist: src.salesforce.bulk runs the SOQL as an
+# async query job and walks the paged CSV result sets (Sforce-Locator).
+rm -f out/bulk_query.csv
+out=$(run_pipe q1_bulk_query.json)
+check "q1 bulk query source -> csv" ok "$out"
+q_lines=$(( $( [ -f out/bulk_query.csv ] && wc -l < out/bulk_query.csv || echo 0 ) ))
+if [ "$q_lines" -eq 5 ] && grep -q 'Bulk Upsert New' out/bulk_query.csv; then
+  results+=("PASS  q1b bulk query: header + 4 rows incl. the upserted one"); ((pass++))
+else
+  results+=("FAIL  q1b bulk query: header + 4 rows incl. the upserted one (got $q_lines lines)"); ((fail++))
+fi
+
 # b5 BEFORE the delete: failed records must surface IN the run error (sampled
 # sf__Error) even with no resultsPath configured on the node.
 out=$(run_pipe b5_bulk_badid.json)
@@ -197,6 +211,18 @@ for attempt in 1 2 3; do
 done
 if [ -n "$bclean" ]; then results+=("PASS  b3b org clean after bulk delete"); ((pass++));
 else results+=("FAIL  b3b org clean after bulk delete"); ((fail++)); fi
+
+# q2: the same bulk query on the now-clean org - 0 records + the declared
+# schema must land as a typed empty relation (#170) and a header-only csv.
+rm -f out/bulk_query.csv
+out=$(run_pipe q1_bulk_query.json)
+check "q2 bulk query on 0 records (typed empty)" ok "$out"
+q2_lines=$(( $( [ -f out/bulk_query.csv ] && wc -l < out/bulk_query.csv || echo 0 ) ))
+if [ "$q2_lines" -eq 1 ]; then
+  results+=("PASS  q2b typed-empty csv is header-only"); ((pass++))
+else
+  results+=("FAIL  q2b typed-empty csv is header-only (got $q2_lines lines)"); ((fail++))
+fi
 
 # Final cleanup: t4 upserted SUITE-301 after s6's delete; remove whatever
 # SUITE-* and BULK-* remains so repeat runs start clean.
