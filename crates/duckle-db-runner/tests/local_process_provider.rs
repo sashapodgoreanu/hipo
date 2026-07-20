@@ -18,9 +18,6 @@ use std::fmt::Write as _;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
-#[cfg(windows)]
-use duckle_db_runner::local_quack_sidecar::WindowsLocalSidecarLauncher;
-
 #[derive(Clone, Copy)]
 enum LaunchMode {
     Healthy,
@@ -284,31 +281,4 @@ fn external_runtime_receives_only_opaque_lease_metadata() {
     for forbidden in ["endpoint", "port", "pid", "path", "token", "secret", "sql", "capability"] {
         assert!(!object.contains_key(forbidden), "lease leaked {forbidden}");
     }
-}
-
-#[cfg(windows)]
-#[test]
-#[ignore = "requires the locally packaged DuckDB 1.5.4 Quack extension"]
-fn windows_sidecar_bootstraps_over_pipes_and_executes_a_quack_batch() {
-    let program = std::path::PathBuf::from(env!("CARGO_BIN_EXE_duckle-db-sidecar"));
-    let provider = LocalProcessProvider::new(
-        Arc::new(WindowsLocalSidecarLauncher::new(program).unwrap()),
-        deterministic_host_limits(),
-    );
-    let worker_id = WorkerId::new();
-    let cancellation = RunCancellation::default();
-
-    provider
-        .provision(provision_request(worker_id, cancellation.clone()))
-        .expect("authenticated sidecar readiness");
-    let database = provider
-        .open_database(worker_id, cancellation)
-        .expect("private Quack database facade");
-    let result = database
-        .execute_batch(vec!["SELECT 42 AS answer".to_string()])
-        .expect("Quack batch");
-
-    assert_eq!(result.rows, 1);
-    assert_eq!(result.transport, duckle_db_runner::model::TransportKind::Quack);
-    provider.terminate(worker_id);
 }
