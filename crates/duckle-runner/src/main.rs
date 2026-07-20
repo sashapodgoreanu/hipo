@@ -33,6 +33,25 @@ duckle-runner - run a Duckle pipeline headlessly
 
 USAGE:
     duckle-runner --pipeline <file.json> [options]
+    duckle-runner validate [<file.json> ...] [--json]
+
+EXIT CODES (stable, safe to gate CI on):
+    0    success
+    1    the work ran and reported failure (a pipeline failed, or a
+         validated pipeline did not compile). A real finding.
+    2    the runner could not start the work: bad usage, unreadable
+         file, missing engine. Not a finding about your data.
+
+VALIDATE:
+    Compiles pipelines to SQL without opening a source or writing a
+    sink, so it needs no DuckDB binary, no credentials and no network.
+    With no path it checks every .json under ./pipelines.
+
+    It catches: malformed JSON, unknown or preview-only components,
+    missing wiring (a transform with no input), and anything that fails
+    to compile.
+    It does NOT yet catch every missing required property value, so a
+    clean validate is not proof that a run will succeed.
 
 OPTIONS:
     --pipeline <path>    Pipeline JSON to execute (required)
@@ -705,6 +724,105 @@ fn collect_input_fingerprints(doc: &PipelineDoc) -> Vec<manifest::InputFingerpri
 /// Run one side of a `review --data` comparison sink-safely: every sink node is
 /// removed before execution, so sources are read and transforms run but no
 /// destination is ever written. Returns each surviving node's row count.
+/// `validate` - compile every pipeline without touching a source or a sink.
+///
+/// This is the CI gate: it needs no DuckDB binary, no credentials and no
+/// network, because compiling only turns the graph into SQL. Exits 0 when all
+/// pipelines compile, 1 when any fails to compile (a real finding, distinct
+/// from the runner being misused), and 2 for a usage error.
+fn run_validate() -> ExitCode {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut json_out = false;
+    let mut it = std::env::args().skip(2); // skip the exe and the "validate" verb
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--json" => json_out = true,
+            "--pipeline" => match it.next() {
+                Some(p) => paths.push(PathBuf::from(p)),
+                None => {
+                    eprintln!("duckle-runner validate: --pipeline needs a path");
+                    return ExitCode::from(2);
+                }
+            },
+            other if other.starts_with('-') => {
+                eprintln!("duckle-runner validate: unknown flag {other}");
+                return ExitCode::from(2);
+            }
+            other => paths.push(PathBuf::from(other)),
+        }
+    }
+    // No explicit paths: validate every pipeline in ./pipelines, which is the
+    // workspace layout the editor writes.
+    if paths.is_empty() {
+        let dir = PathBuf::from("pipelines");
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("json") {
+                    paths.push(p);
+                }
+            }
+            paths.sort();
+        }
+        if paths.is_empty() {
+            eprintln!(
+                "duckle-runner validate: no pipeline given and no .json files under ./pipelines"
+            );
+            return ExitCode::from(2);
+        }
+    }
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut failed = 0usize;
+    for path in &paths {
+        let label = path.display().to_string();
+        let outcome = std::fs::read_to_string(path)
+            .map_err(|e| format!("read: {e}"))
+            .and_then(|text| {
+                serde_json::from_str::<PipelineDoc>(&text).map_err(|e| format!("parse: {e}"))
+            })
+            .and_then(|doc| {
+                duckle_duckdb_engine::compile_pipeline_sql(&doc)
+                    .map(|stages| stages.len())
+                    .map_err(|e| e.to_string())
+            });
+        match outcome {
+            Ok(stages) => {
+                if json_out {
+                    results.push(serde_json::json!({ "pipeline": label, "ok": true, "stages": stages }));
+                } else {
+                    println!("ok    {label}  ({stages} stages)");
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                if json_out {
+                    results.push(serde_json::json!({ "pipeline": label, "ok": false, "error": e }));
+                } else {
+                    println!("FAIL  {label}");
+                    println!("      {e}");
+                }
+            }
+        }
+    }
+    if json_out {
+        let doc = serde_json::json!({
+            "ok": failed == 0,
+            "checked": paths.len(),
+            "failed": failed,
+            "results": results,
+        });
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+    } else {
+        println!(
+            "\n{} pipeline(s) checked, {} failed",
+            paths.len(),
+            failed
+        );
+    }
+    ExitCode::from(if failed == 0 { 0 } else { 1 })
+}
+
 fn run_side_for_review(
     path: &Path,
     workspace: &Path,
@@ -1041,6 +1159,11 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         };
+    }
+    // `validate` -> compile-only CI gate. No engine binary, no credentials,
+    // no network: it never opens a source or writes a sink.
+    if std::env::args().nth(1).as_deref() == Some("validate") {
+        return run_validate();
     }
     // `serve` -> the web management console (HTTP server + embedded panel).
     if std::env::args().nth(1).as_deref() == Some("serve") {
