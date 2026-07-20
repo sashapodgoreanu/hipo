@@ -43,7 +43,7 @@ jobs:
           - os: ubuntu-latest
             repository_platform: linux_amd64
             target: ''
-            sha256: decb78a4d953ff9cc65b300cf2c8d3f3d8f4732851205684565c922113bc2b9e
+            sha256: decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e
             sidecar: duckle-db-sidecar
           - os: macos-14
             repository_platform: osx_amd64
