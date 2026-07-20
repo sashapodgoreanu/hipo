@@ -119,7 +119,7 @@ class Pipeline:
         """
         if not columns:
             raise DuckleError("derive() needs at least one column")
-        cols = [{"name": k, "expr": v} for k, v in columns.items()]
+        cols = [{"name": k, "expr": _expr_src(v)} for k, v in columns.items()]
         return self._add("transform", "xf.pyexpr", {"columns": cols}, "Derive")
 
     def where(self, expr):
@@ -129,7 +129,7 @@ class Pipeline:
         """
         return self._add(
             "transform", "xf.filter",
-            {"predicate": {"mode": "raw", "rawSql": _compile_expr(expr)}},
+            {"predicate": {"mode": "python", "expr": _expr_src(expr)}},
             "Filter",
         )
 
@@ -200,6 +200,32 @@ class Pipeline:
             raise DuckleError("; ".join(problems) or "pipeline did not compile")
         return self
 
+    def sql(self):
+        """Return the compiled SQL, one entry per stage.
+
+        The whole point of compiling to SQL is that the result is readable.
+        This runs the compiler only: no source is opened and no sink written.
+        """
+        out = self._invoke(["validate", "--json", "--sql", "{pipeline}"])
+        try:
+            report = json.loads(out)
+        except ValueError:
+            raise DuckleError(out.strip() or "could not compile")
+        results = report.get("results") or []
+        if not results or not results[0].get("ok"):
+            problems = [r.get("error", "?") for r in results if not r.get("ok")]
+            raise DuckleError("; ".join(problems) or "pipeline did not compile")
+        return results[0].get("sql", [])
+
+    def explain(self):
+        """Print the compiled SQL."""
+        for stage in self.sql():
+            name = stage.get("name") or stage.get("node_id") or "stage"
+            text = (stage.get("sql") or "").strip()
+            if text:
+                print("-- {}\n{}\n".format(name, text))
+        return self
+
     def run(self, quiet=False):
         """Execute the pipeline. Rows are moved by DuckDB, never by Python."""
         out = self._invoke(["--pipeline", "{pipeline}"], check=True)
@@ -229,14 +255,20 @@ class Pipeline:
         return combined
 
 
-def _compile_expr(expr):
-    """Pass a Python expression through to the engine's compiler.
+def _expr_src(expr):
+    """Accept either a string or a `col`-built Expr and return source text.
 
-    The translation itself lives in the engine (Rust) so the canvas, the CLI
-    and this API cannot drift from one another. Here the expression is simply
-    carried; the engine compiles and, if it cannot, reports which construct
-    was the problem.
+    Both spell the same thing. The translation to SQL lives in the engine
+    (Rust) so the canvas, the CLI and this API cannot drift apart; here the
+    expression is only carried.
     """
+    from .expr import Expr
+    if isinstance(expr, Expr):
+        return str(expr)
+    if not isinstance(expr, str):
+        raise DuckleError(
+            "expected a string or a col expression, got {}".format(type(expr).__name__)
+        )
     return expr
 
 

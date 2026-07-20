@@ -754,10 +754,15 @@ fn collect_input_fingerprints(doc: &PipelineDoc) -> Vec<manifest::InputFingerpri
 fn run_validate() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut json_out = false;
+    let mut with_sql = false;
     let mut it = std::env::args().skip(2); // skip the exe and the "validate" verb
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--json" => json_out = true,
+            // Emit the compiled SQL per stage. This is the whole point of a
+            // compile-to-SQL engine being inspectable: you can read exactly
+            // what will run before it runs.
+            "--sql" => with_sql = true,
             "--pipeline" => match it.next() {
                 Some(p) => paths.push(PathBuf::from(p)),
                 None => {
@@ -803,16 +808,45 @@ fn run_validate() -> ExitCode {
                 serde_json::from_str::<PipelineDoc>(&text).map_err(|e| format!("parse: {e}"))
             })
             .and_then(|doc| {
-                duckle_duckdb_engine::compile_pipeline_sql(&doc)
-                    .map(|stages| stages.len())
-                    .map_err(|e| e.to_string())
+                duckle_duckdb_engine::compile_pipeline_sql(&doc).map_err(|e| e.to_string())
             });
         match outcome {
             Ok(stages) => {
+                let n = stages.len();
                 if json_out {
-                    results.push(serde_json::json!({ "pipeline": label, "ok": true, "stages": stages }));
+                    let mut entry = serde_json::json!({
+                        "pipeline": label, "ok": true, "stages": n
+                    });
+                    if with_sql {
+                        entry["sql"] =
+                            serde_json::to_value(&stages).unwrap_or_else(|_| serde_json::json!([]));
+                    }
+                    results.push(entry);
                 } else {
-                    println!("ok    {label}  ({stages} stages)");
+                    println!("ok    {label}  ({n} stages)");
+                    if with_sql {
+                        for s in &stages {
+                            match serde_json::to_value(s) {
+                                Ok(v) => {
+                                    let sql = v
+                                        .get("sql")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                        .trim()
+                                        .to_string();
+                                    let name = v
+                                        .get("name")
+                                        .or_else(|| v.get("node_id"))
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("stage");
+                                    if !sql.is_empty() {
+                                        println!("      -- {name}\n      {sql}");
+                                    }
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => {

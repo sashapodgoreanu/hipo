@@ -468,7 +468,7 @@ pub(crate) fn build_filter(inputs: &NodeInputs, props: &JsonValue) -> Result<Str
     let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
     // The predicate is usually a structured object carrying compiled
     // `sql`; it may also be a raw string (legacy / raw-SQL mode).
-    let predicate = filter_predicate_sql(props.get("predicate"))
+    let predicate = filter_predicate_sql_checked(props.get("predicate"))?
         .or_else(|| {
             props
                 .get("filterSql")
@@ -488,6 +488,37 @@ pub(crate) fn build_filter(inputs: &NodeInputs, props: &JsonValue) -> Result<Str
 /// Extract the effective SQL from a filter predicate value, which may be
 /// a plain string or the structured FilterPredicate object the visual
 /// builder writes ({ mode, conditions, rawSql, sql }).
+///
+/// `mode: "python"` compiles a Python expression through the same compiler
+/// `xf.pyexpr` uses. Without it, a Python predicate would be spliced in as raw
+/// SQL and only appear to work: `a and b` and `x in (1, 2)` happen to be
+/// spelled the same in both languages, but `x is None`, a conditional
+/// expression or an f-string would emit invalid SQL, and an unquoted column
+/// named after a SQL keyword would break. Returns Err so the failure names the
+/// offending construct instead of surfacing as a DuckDB parse error.
+pub(crate) fn filter_predicate_sql_checked(
+    v: Option<&JsonValue>,
+) -> Result<Option<String>, String> {
+    if let Some(JsonValue::Object(o)) = v {
+        if o.get("mode").and_then(JsonValue::as_str) == Some("python") {
+            let src = o
+                .get("expr")
+                .or_else(|| o.get("rawSql"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if src.is_empty() {
+                return Ok(None);
+            }
+            return crate::pyexpr::compile(&src)
+                .map(Some)
+                .map_err(|e| format!("filter expression: {}", e));
+        }
+    }
+    Ok(filter_predicate_sql(v))
+}
+
 pub(crate) fn filter_predicate_sql(v: Option<&JsonValue>) -> Option<String> {
     match v {
         Some(JsonValue::String(s)) => Some(s.clone()),

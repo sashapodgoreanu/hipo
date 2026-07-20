@@ -13,6 +13,7 @@ the interpreter, and the Python expressions above are compiled to vectorized
 SQL before the run starts.
 """
 
+from .expr import Expr, col, lit, when  # noqa: F401
 from .api import (  # noqa: F401
     DuckleError,
     Pipeline,
@@ -27,5 +28,6 @@ from .api import (  # noqa: F401
 __version__ = "0.5.7"
 __all__ = [
     "Pipeline", "DuckleError", "from_json",
+    "col", "lit", "when", "Expr",
     "read_csv", "read_parquet", "read_json", "read_postgres", "read_duckdb",
 ]
