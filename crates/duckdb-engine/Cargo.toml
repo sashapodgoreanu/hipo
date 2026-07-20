@@ -239,3 +239,8 @@ wat = "1"
 # (Content-Encoding: gzip), reproducing the real SQL API partition
 # format that GitHub #24 was choking on.
 flate2 = "1"
+
+[lints.clippy]
+# DynamoDB decoding tests intentionally use decimal payloads such as 3.14159;
+# they validate exact external input rather than approximating the PI constant.
+approx_constant = "allow"
