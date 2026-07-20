@@ -4,6 +4,9 @@
 //! module. This wrapper owns the DuckDB/Quack pair metadata, performs offline
 //! checksum verification, and provides the real lazy per-workspace controller.
 
+// The base module still contains the pre-cutover controller stub. The real
+// controller below shadows it; T071 removes the retained compatibility stub.
+#[allow(dead_code)]
 #[path = "engine_manager_base.rs"]
 mod base;
 pub use base::*;
@@ -14,34 +17,51 @@ use duckle_db_runner::cutover::{
 use duckle_db_runner::model::{
     RunCancellation, RunId, RunnerFailureReason, WorkerLease,
 };
+use duckle_db_runner::resources::RunnerResourcesProfile;
+#[cfg(any(windows, test))]
+use duckle_db_runner::resources::HostResourceLimits;
+#[cfg(test)]
 use duckle_db_runner::resources::{
-    resolve_workspace_runner_resources, HostResourceLimits, RunnerResourcesProfile,
-    WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
+    resolve_workspace_runner_resources, WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
 };
 use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
 #[cfg(windows)]
 use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_duckdb_engine::OfficialRunnerController;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(test)]
+use serde::Serialize;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
+#[cfg(windows)]
+use std::sync::OnceLock;
 
+#[cfg(test)]
 pub const QUACK_VERSION: &str = DUCKDB_VERSION;
+#[cfg(test)]
 pub const QUACK_LICENSE: &str = "MIT";
+#[cfg(test)]
 pub const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
+#[cfg(test)]
 pub const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 pub const SLOTHDB_DISABLED_DIAGNOSTIC: &str =
     "engine_disabled: SlothDB is temporarily disabled during the sidecar runner migration; no fallback engine will be selected";
 
+#[cfg(test)]
 const QUACK_WINDOWS_AMD64_SHA256: &str =
     "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122";
+#[cfg(test)]
 const QUACK_MACOS_AMD64_SHA256: &str =
     "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
+#[cfg(test)]
 const QUACK_LINUX_AMD64_SHA256: &str =
     "decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e";
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OfficialRunnerPin {
@@ -56,6 +76,7 @@ pub struct OfficialRunnerPin {
 /// Return the only approved DuckDB/Quack pair for a supported release target.
 /// Unsupported targets stay unavailable rather than downloading an unpinned
 /// extension at build or run time.
+#[cfg(test)]
 pub fn official_runner_pin_for(os: &str, arch: &str) -> Option<OfficialRunnerPin> {
     let quack_sha256 = match (os, arch) {
         ("windows", "x86_64") => QUACK_WINDOWS_AMD64_SHA256,
@@ -75,6 +96,7 @@ pub fn official_runner_pin_for(os: &str, arch: &str) -> Option<OfficialRunnerPin
 
 /// Verify an already staged Quack extension entirely offline. This function
 /// never installs, downloads, or accepts a provider-supplied checksum.
+#[cfg(test)]
 pub fn verify_offline_quack_extension(
     path: &Path,
     os: &str,
@@ -140,6 +162,7 @@ impl DesktopRunnerController {
         }
     }
 
+    #[cfg(test)]
     pub fn resources_for_workspace(
         &self,
         workspace: &Path,
@@ -247,6 +270,7 @@ impl DesktopRunnerController {
         }
     }
 
+    #[cfg(test)]
     pub fn legacy_disabled_diagnostic(&self) -> Option<&'static str> {
         self.legacy_engine_disabled
             .lock()
@@ -414,6 +438,7 @@ fn pool_failure(error: PoolError) -> RunnerFailureReason {
     }
 }
 
+#[cfg(windows)]
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
