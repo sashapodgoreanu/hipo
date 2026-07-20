@@ -180,7 +180,7 @@ fn embed_runner_linux() {
     }
 
     println!(
-        "cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER_LINUX_X64={}",
+        "cargo:rustc-env=DUCKLE_EMBEDDED_RUNNER_LINUX={}",
         destination.display()
     );
     println!("cargo:rerun-if-changed={}", staged.display());
