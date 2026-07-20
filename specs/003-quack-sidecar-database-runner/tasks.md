@@ -85,7 +85,7 @@
 
 **Independent Test**: Verify shared relations, server setup, batches, and 2/4/8 compatible requests without affinity classification or fallback.
 
-- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckle-db-runner/src/run_session.rs`
+- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckdb-engine/src/lib.rs` and `crates/duckle-db-runner/src/run_session.rs`
 - [X] T044 [US2] Add per-run server-setup deduplication and catalog visibility across stateless requests in `crates/duckle-db-runner/src/run_session.rs`
 - [X] T045 [US2] Implement and test affinity-free planning while retaining affinity compatibility until cutover in `crates/duckdb-engine/src/plan/mod.rs`, `crates/duckdb-engine/src/plan/graph.rs`, and `crates/duckdb-engine/src/plan/builders.rs`
 - [X] T046 [US2] Migrate affinity callers to normal run database behind compatibility selection while retaining `AffinitySession` until cutover in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/src/affinity_session.rs`
@@ -133,7 +133,7 @@
 - [ ] T067 [US6] **Manuale post-implementazione (owner)**: dopo il completamento integrale della feature, congelare il manifest di cutover ed eseguire manualmente la comparazione tra il precedente compilato CLI e il sidecar ufficiale (hardware/build/dataset/seed/warm-up/ripetizioni/soglie, baseline CLI e crossover 1/2/4/8). Non implementare harness o benchmark automatici in questa feature; registrare i risultati in `specs/003-quack-sidecar-database-runner/quickstart.md` e CutoverEvidence.
 - [X] T068 [US6] Inventory and route inspect, drift, and branch/diff through WorkerPoolControl and RunDatabase in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/tests/quack_runner_parity.rs`
 - [X] T069 [US6] Verify requested/effective profile consistency for desktop, headless, scheduler, and MCP in `apps/desktop/src/lib.rs`, `crates/duckle-runner/src/main.rs`, `crates/scheduler/src/lib.rs`, and `crates/duckle-mcp/src/tools.rs`
-- [ ] T070 [US6] Verify permitted stage/attempt/duration/rows/bytes/transport/memory/spill/CPU telemetry, redaction, retention routing, and warm/on-demand distinction in `crates/duckle-db-runner/tests/autoscaler.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
+- [X] T070 [US6] Verify permitted stage/attempt/duration/rows/bytes/transport/memory/spill/CPU telemetry, redaction, retention routing, and warm/on-demand distinction in `crates/duckle-db-runner/tests/autoscaler.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
 - [ ] T071 [US6] After CutoverEvidence has all applicable SC pass, named owner/approver, and resolved-or-explicitly-accepted findings, enable official runner and remove CLI, affinity, and compatibility selection in `crates/duckdb-engine/`, `apps/desktop/src/engine_manager.rs`, `crates/duckle-runner/`, `crates/duckle-mcp/`, and `.github/workflows/`
 - [ ] T072 [US6] Remove `spikes/quack-sidecar-phase0-spike/` and retain historical documentation after official runner gates pass
 - [ ] T073 [US6] Preserve readable-but-disabled SlothDB and xf.dbt with no-fallback diagnostics in `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `frontend/src/`
