@@ -65,7 +65,7 @@ pub const QUACK_BUNDLES: [QuackBundleEntry; 3] = [
         platform: BundlePlatform::WindowsAmd64,
         duckdb_version: DUCKDB_VERSION,
         quack_version: QUACK_EXTENSION_VERSION,
-        sha256: "52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895",
+        sha256: "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122",
         license: QUACK_LICENSE,
         provenance: QUACK_PROVENANCE,
     },
