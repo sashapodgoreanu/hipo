@@ -43,7 +43,7 @@ jobs:
           - os: ubuntu-latest
             repository_platform: linux_amd64
             target: ''
-            sha256: decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e
+            sha256: decb78a4d953ff9cc65b300cf2c8d3f3d8f4732851205684565c922113bc2b9e
             sidecar: duckle-db-sidecar
           - os: macos-14
             repository_platform: osx_amd64
@@ -76,25 +76,47 @@ jobs:
 
           platform = os.environ['QUACK_PLATFORM']
           expected = os.environ['QUACK_SHA256']
-          base = f'https://extensions.duckdb.org/v1.5.4/{platform}/quack.duckdb_extension'
+          repositories = (
+              'https://extensions.duckdb.org',
+              'https://nightly-extensions.duckdb.org',
+          )
           last_error = None
           payload = None
-          for url in (base + '.gz', base):
-              try:
-                  with urllib.request.urlopen(url) as response:
-                      downloaded = response.read()
-                  payload = gzip.decompress(downloaded) if url.endswith('.gz') else downloaded
-                  if hashlib.sha256(payload).hexdigest() == expected:
-                      break
-                  payload = None
-                  last_error = RuntimeError(f'checksum mismatch from {url}')
-              except Exception as error:
-                  last_error = error
+          source = None
+
+          for repository in repositories:
+              base = f'{repository}/v1.5.4/{platform}/quack.duckdb_extension'
+              for url in (base + '.gz', base):
+                  try:
+                      request = urllib.request.Request(
+                          url,
+                          headers={
+                              'User-Agent': 'duckle-runner-package-smoke/1.0',
+                              'Accept': 'application/octet-stream,*/*',
+                          },
+                      )
+                      with urllib.request.urlopen(request) as response:
+                          downloaded = response.read()
+                      candidate = gzip.decompress(downloaded) if url.endswith('.gz') else downloaded
+                      actual = hashlib.sha256(candidate).hexdigest()
+                      if actual == expected:
+                          payload = candidate
+                          source = url
+                          break
+                      last_error = RuntimeError(
+                          f'checksum mismatch from {url}: expected {expected}, got {actual}'
+                      )
+                  except Exception as error:
+                      last_error = error
+              if payload is not None:
+                  break
+
           if payload is None:
               raise SystemExit(f'could not stage verified Quack extension: {last_error}')
+
           path = pathlib.Path('crates/duckle-runner/bin/quack.duckdb_extension')
           path.write_bytes(payload)
-          print(f'verified {path} ({len(payload)} bytes)')
+          print(f'verified {path} ({len(payload)} bytes) from {source}')
           PY
 
       - name: Build packaged headless runner and database sidecar
