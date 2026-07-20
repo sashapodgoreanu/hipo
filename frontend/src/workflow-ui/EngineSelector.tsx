@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
+import { SLOTHDB_DISABLED_DIAGNOSTIC } from '../legacy-disabled';
 
 export type EngineId = 'duckdb' | 'slothdb' | 'native';
 
@@ -25,10 +26,10 @@ const ENGINES: EngineMeta[] = [
     {
         id: 'slothdb',
         label: 'SlothDB',
-        description: 'Temporarily unavailable during the sidecar runner migration.',
+        description: SLOTHDB_DISABLED_DIAGNOSTIC,
         dot: '#3d8bff',
         disabled: true,
-        disabledLabel: 'Temporarily disabled',
+        disabledLabel: 'Disabled · no fallback',
     },
     {
         id: 'native',
