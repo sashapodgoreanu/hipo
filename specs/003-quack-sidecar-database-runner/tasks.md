@@ -137,7 +137,7 @@
 - [ ] T071 [US6] After CutoverEvidence has all applicable SC pass, named owner/approver, and resolved-or-explicitly-accepted findings, enable official runner and remove CLI, affinity, and compatibility selection in `crates/duckdb-engine/`, `apps/desktop/src/engine_manager.rs`, `crates/duckle-runner/`, `crates/duckle-mcp/`, and `.github/workflows/`
 - [ ] T072 [US6] Remove `spikes/quack-sidecar-phase0-spike/` and retain historical documentation after official runner gates pass
 - [X] T073 [US6] Preserve readable-but-disabled SlothDB and xf.dbt with no-fallback diagnostics in `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `frontend/src/`
-- [ ] T074 [US6] Add clean offline package and mismatch smoke coverage after package staging completes in `.github/workflows/runner-package-smoke.yml`
+- [X] T074 [US6] Add clean offline package and mismatch smoke coverage after package staging completes in `.github/workflows/runner-package-smoke.yml`
 
 ---
 
