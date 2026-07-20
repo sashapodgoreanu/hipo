@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 const REMOTE_ALIAS: &str = "duckle_runner_remote";
 const DEBUG_LOG_ENV: &str = "DUCKLE_SIDECAR_DEBUG_LOG";
+const QUACK_BIND_ATTEMPTS: usize = 8;
 
 fn debug_log(message: &str) {
     use std::io::Write;
@@ -281,16 +282,7 @@ fn run_windows_sidecar_from_bootstrap(
         })?;
     debug_log("child.quack.authentication.ok");
     let token = bootstrap_token(bootstrap);
-    let (uri, _url, returned_token): (String, String, String) = connection
-        .query_row(
-            "CALL quack_serve(?, token => ?)",
-            params!["quack:127.0.0.1:0", token],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|error| {
-            debug_log(&format!("child.quack.serve.error={error}"));
-            RunnerFailureReason::RunnerUnavailable
-        })?;
+    let (uri, _url, returned_token) = serve_quack_on_free_loopback_port(&connection, &token)?;
     debug_log("child.quack.serve.ok");
     if returned_token != token {
         debug_log("child.quack.serve.token_mismatch");
@@ -316,6 +308,40 @@ fn run_windows_sidecar_from_bootstrap(
         std::thread::park_timeout(std::time::Duration::from_secs(60));
         let _ = &cleanup;
     }
+}
+
+#[cfg(windows)]
+fn serve_quack_on_free_loopback_port(
+    connection: &Connection,
+    token: &str,
+) -> Result<(String, String, String), RunnerFailureReason> {
+    for attempt in 1..=QUACK_BIND_ATTEMPTS {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+            debug_log(&format!("child.quack.port.allocate.error={error}"));
+            RunnerFailureReason::RunnerUnavailable
+        })?;
+        let port = listener.local_addr().map_err(|error| {
+            debug_log(&format!("child.quack.port.inspect.error={error}"));
+            RunnerFailureReason::RunnerUnavailable
+        })?.port();
+        drop(listener);
+
+        let bind_uri = format!("quack:127.0.0.1:{port}");
+        debug_log(&format!("child.quack.serve.attempt={attempt}"));
+        match connection.query_row(
+            "CALL quack_serve(?, token => ?)",
+            params![bind_uri, token],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ) {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                debug_log(&format!("child.quack.serve.attempt_error={error}"));
+            }
+        }
+    }
+
+    debug_log("child.quack.serve.exhausted");
+    Err(RunnerFailureReason::RunnerUnavailable)
 }
 
 #[cfg(windows)]
