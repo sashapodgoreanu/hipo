@@ -14,6 +14,27 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const REMOTE_ALIAS: &str = "duckle_runner_remote";
+const DEBUG_LOG_ENV: &str = "DUCKLE_SIDECAR_DEBUG_LOG";
+
+fn debug_log(message: &str) {
+    use std::io::Write;
+
+    let Some(path) = std::env::var_os(DEBUG_LOG_ENV).map(PathBuf::from) else {
+        return;
+    };
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{timestamp_ms} pid={} {message}", std::process::id());
+        let _ = file.flush();
+    }
+}
 
 /// Starts the packaged `duckle-db-sidecar` executable on Windows.
 ///
@@ -29,6 +50,7 @@ pub struct WindowsLocalSidecarLauncher {
 impl WindowsLocalSidecarLauncher {
     pub fn new(program: PathBuf) -> Result<Self, RunnerFailureReason> {
         if !program.is_absolute() {
+            debug_log("parent.launch.program_not_absolute");
             return Err(RunnerFailureReason::RunnerUnavailable);
         }
         Ok(Self { program })
@@ -41,23 +63,36 @@ impl LocalSidecarLauncher for WindowsLocalSidecarLauncher {
         &self,
         request: LocalSidecarLaunch,
     ) -> Result<LaunchedLocalSidecar, RunnerFailureReason> {
+        debug_log("parent.launch.start");
         if request.cancellation.is_cancelled() {
+            debug_log("parent.launch.cancelled_before_spawn");
             return Err(RunnerFailureReason::Cancelled);
         }
-        let mut process = crate::windows_bootstrap::spawn_sidecar(&self.program, &[])
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-        if process.send_bootstrap(&request.bootstrap).is_err() {
+        let mut process = match crate::windows_bootstrap::spawn_sidecar(&self.program, &[]) {
+            Ok(process) => process,
+            Err(error) => {
+                debug_log(&format!("parent.launch.spawn.error={error}"));
+                return Err(RunnerFailureReason::RunnerUnavailable);
+            }
+        };
+        debug_log("parent.launch.spawn.ok");
+        if let Err(error) = process.send_bootstrap(&request.bootstrap) {
+            debug_log(&format!("parent.bootstrap.write.error={error}"));
             let _ = process.terminate_tree();
             return Err(RunnerFailureReason::RunnerUnavailable);
         }
+        debug_log("parent.bootstrap.write.ok");
         let readiness = match read_authenticated_readiness(process.control_reader(), &request.bootstrap) {
             Ok(readiness) => readiness,
-            Err(_) => {
+            Err(error) => {
+                debug_log(&format!("parent.readiness.read.error={error}"));
                 let _ = process.terminate_tree();
                 return Err(RunnerFailureReason::RunnerUnavailable);
             }
         };
+        debug_log("parent.readiness.read.ok");
         if request.cancellation.is_cancelled() {
+            debug_log("parent.launch.cancelled_after_readiness");
             let _ = process.terminate_tree();
             return Err(RunnerFailureReason::Cancelled);
         }
@@ -88,17 +123,27 @@ impl WindowsManagedSidecar {
         &self,
         cancellation: RunCancellation,
     ) -> Result<RunDatabase, RunnerFailureReason> {
+        debug_log("parent.database.open.start");
         if cancellation.is_cancelled() {
+            debug_log("parent.database.open.cancelled");
             return Err(RunnerFailureReason::Cancelled);
         }
-        let connection = Connection::open_in_memory().map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-        connection
-            .execute_batch("LOAD quack;")
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+        let connection = Connection::open_in_memory().map_err(|error| {
+            debug_log(&format!("parent.database.open.error={error}"));
+            RunnerFailureReason::RunnerUnavailable
+        })?;
+        connection.execute_batch("LOAD quack;").map_err(|error| {
+            debug_log(&format!("parent.quack.load.error={error}"));
+            RunnerFailureReason::RunnerUnavailable
+        })?;
+        debug_log("parent.quack.load.ok");
         if let Some(threads) = self.profile.cpu_threads {
             connection
                 .execute_batch(&format!("SET threads = {threads};"))
-                .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+                .map_err(|error| {
+                    debug_log(&format!("parent.profile.threads.error={error}"));
+                    RunnerFailureReason::RunnerUnavailable
+                })?;
         }
         let uri = format!("quack:{}", self.readiness_endpoint);
         connection
@@ -106,14 +151,27 @@ impl WindowsManagedSidecar {
                 "CREATE TEMPORARY SECRET duckle_runner_quack_credentials (TYPE quack, SCOPE ?, TOKEN ?)",
                 params![uri, bootstrap_token(&self.bootstrap)],
             )
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+            .map_err(|error| {
+                debug_log(&format!("parent.quack.secret.error={error}"));
+                RunnerFailureReason::RunnerUnavailable
+            })?;
+        debug_log("parent.quack.secret.ok");
         connection
             .execute_batch(&format!(
                 "ATTACH {} AS {REMOTE_ALIAS} (TYPE quack);",
                 sql_literal(&uri)
             ))
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-        let transport = QuackTransport::from_attached_connection(connection, REMOTE_ALIAS.into())?;
+            .map_err(|error| {
+                debug_log(&format!("parent.quack.attach.error={error}"));
+                RunnerFailureReason::RunnerUnavailable
+            })?;
+        debug_log("parent.quack.attach.ok");
+        let transport = QuackTransport::from_attached_connection(connection, REMOTE_ALIAS.into())
+            .map_err(|reason| {
+                debug_log(&format!("parent.quack.transport.error={reason:?}"));
+                reason
+            })?;
+        debug_log("parent.database.open.ok");
         Ok(RunDatabase::new(Arc::new(transport), cancellation))
     }
 }
@@ -130,6 +188,7 @@ impl ManagedSidecar for WindowsManagedSidecar {
         if profile == &self.profile {
             Ok(())
         } else {
+            debug_log("parent.profile.apply.mismatch");
             Err(RunnerFailureReason::ConfigurationApplyFailed)
         }
     }
@@ -145,6 +204,7 @@ impl ManagedSidecar for WindowsManagedSidecar {
         if profile == &self.profile {
             Ok(())
         } else {
+            debug_log("parent.profile.verify.mismatch");
             Err(RunnerFailureReason::ConfigurationApplyFailed)
         }
     }
@@ -157,6 +217,7 @@ impl ManagedSidecar for WindowsManagedSidecar {
     }
 
     fn terminate(mut self: Box<Self>) {
+        debug_log("parent.sidecar.terminate");
         let _ = self.process.terminate_tree();
     }
 }
@@ -166,13 +227,18 @@ impl ManagedSidecar for WindowsManagedSidecar {
 /// settings and the one-shot credential arrive in the authenticated payload.
 #[cfg(windows)]
 pub fn run_windows_sidecar(args: &[std::ffi::OsString]) -> Result<(), RunnerFailureReason> {
+    debug_log("child.bootstrap.start");
     let bootstrap_handle = inherited_handle(args, "--duckle-bootstrap-read-handle")?;
     let control_handle = inherited_handle(args, "--duckle-control-write-handle")?;
+    debug_log("child.bootstrap.handles.ok");
     let (mut bootstrap_reader, control_writer) = unsafe {
         crate::windows_bootstrap::take_child_pipes(bootstrap_handle, control_handle)
     };
-    let bootstrap = crate::bootstrap::read_bootstrap(&mut bootstrap_reader)
-        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+    let bootstrap = crate::bootstrap::read_bootstrap(&mut bootstrap_reader).map_err(|error| {
+        debug_log(&format!("child.bootstrap.read.error={error}"));
+        RunnerFailureReason::RunnerUnavailable
+    })?;
+    debug_log("child.bootstrap.read.ok");
     run_windows_sidecar_from_bootstrap(&bootstrap, control_writer)
 }
 
@@ -183,19 +249,37 @@ fn run_windows_sidecar_from_bootstrap(
 ) -> Result<(), RunnerFailureReason> {
     let profile = bootstrap.effective_profile();
     let temp_directory = std::env::temp_dir().join(format!("duckle-db-runner-{}", bootstrap.worker_id()));
-    std::fs::create_dir_all(&temp_directory).map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+    std::fs::create_dir_all(&temp_directory).map_err(|error| {
+        debug_log(&format!("child.temp_directory.create.error={error}"));
+        RunnerFailureReason::RunnerUnavailable
+    })?;
+    debug_log("child.temp_directory.create.ok");
     let cleanup = TempDirectoryGuard(temp_directory.clone());
-    let connection = Connection::open_in_memory().map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-    apply_and_verify_profile(&connection, profile, &temp_directory)?;
-    connection
-        .execute_batch("LOAD quack;")
-        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+    let connection = Connection::open_in_memory().map_err(|error| {
+        debug_log(&format!("child.database.open.error={error}"));
+        RunnerFailureReason::RunnerUnavailable
+    })?;
+    debug_log("child.database.open.ok");
+    apply_and_verify_profile(&connection, profile, &temp_directory).map_err(|reason| {
+        debug_log(&format!("child.profile.apply.error={reason:?}"));
+        reason
+    })?;
+    debug_log("child.profile.apply.ok");
+    connection.execute_batch("LOAD quack;").map_err(|error| {
+        debug_log(&format!("child.quack.load.error={error}"));
+        RunnerFailureReason::RunnerUnavailable
+    })?;
+    debug_log("child.quack.load.ok");
     connection
         .execute_batch(
             "SET GLOBAL quack_authentication_function = 'quack_check_token'; \
              SET GLOBAL quack_authorization_function = 'quack_nop_authorization';",
         )
-        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+        .map_err(|error| {
+            debug_log(&format!("child.quack.authentication.error={error}"));
+            RunnerFailureReason::RunnerUnavailable
+        })?;
+    debug_log("child.quack.authentication.ok");
     let token = bootstrap_token(bootstrap);
     let (uri, _url, returned_token): (String, String, String) = connection
         .query_row(
@@ -203,16 +287,27 @@ fn run_windows_sidecar_from_bootstrap(
             params!["quack:127.0.0.1:0", token],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+        .map_err(|error| {
+            debug_log(&format!("child.quack.serve.error={error}"));
+            RunnerFailureReason::RunnerUnavailable
+        })?;
+    debug_log("child.quack.serve.ok");
     if returned_token != token {
+        debug_log("child.quack.serve.token_mismatch");
         return Err(RunnerFailureReason::RunnerUnavailable);
     }
     let endpoint = uri
         .strip_prefix("quack:")
         .and_then(|value| value.parse::<std::net::SocketAddr>().ok())
-        .ok_or(RunnerFailureReason::RunnerUnavailable)?;
-    write_authenticated_readiness(&mut control_writer, bootstrap, endpoint)
-        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+        .ok_or_else(|| {
+            debug_log("child.quack.serve.endpoint_invalid");
+            RunnerFailureReason::RunnerUnavailable
+        })?;
+    write_authenticated_readiness(&mut control_writer, bootstrap, endpoint).map_err(|error| {
+        debug_log(&format!("child.readiness.write.error={error}"));
+        RunnerFailureReason::RunnerUnavailable
+    })?;
+    debug_log("child.readiness.write.ok");
     drop(control_writer);
 
     // The embedded connection owns Quack's listener. The parent Job Object
@@ -229,30 +324,43 @@ fn apply_and_verify_profile(
     profile: &ResolvedRunnerResources,
     temp_directory: &Path,
 ) -> Result<(), RunnerFailureReason> {
-    profile
-        .validate()
-        .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+    profile.validate().map_err(|error| {
+        debug_log(&format!("child.profile.validate.error={error}"));
+        RunnerFailureReason::ConfigurationApplyFailed
+    })?;
     if let Some(memory_bytes) = profile.memory_bytes {
         connection
             .execute_batch(&format!("SET memory_limit = '{}B';", memory_bytes))
-            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+            .map_err(|error| {
+                debug_log(&format!("child.profile.memory.error={error}"));
+                RunnerFailureReason::ConfigurationApplyFailed
+            })?;
     }
     if let Some(cpu_threads) = profile.cpu_threads {
         connection
             .execute_batch(&format!("SET threads = {cpu_threads};"))
-            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+            .map_err(|error| {
+                debug_log(&format!("child.profile.threads.error={error}"));
+                RunnerFailureReason::ConfigurationApplyFailed
+            })?;
     }
     if let Some(spill_bytes) = profile.spill_bytes {
         connection
             .execute_batch(&format!("SET max_temp_directory_size = '{}B';", spill_bytes))
-            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+            .map_err(|error| {
+                debug_log(&format!("child.profile.spill.error={error}"));
+                RunnerFailureReason::ConfigurationApplyFailed
+            })?;
     }
     connection
         .execute_batch(&format!(
             "SET temp_directory = {}; SET preserve_insertion_order = false;",
             sql_literal(&temp_directory.to_string_lossy())
         ))
-        .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+        .map_err(|error| {
+            debug_log(&format!("child.profile.temp_directory.error={error}"));
+            RunnerFailureReason::ConfigurationApplyFailed
+        })?;
 
     verify_temporary_directory(temp_directory)?;
     verify_duckdb_profile(connection, profile, temp_directory)
@@ -267,25 +375,31 @@ fn verify_duckdb_profile(
     if let Some(expected) = profile.memory_bytes {
         let actual = setting_value(connection, "memory_limit")?;
         if !setting_bytes_match(&actual, expected) {
+            debug_log(&format!("child.profile.memory_mismatch expected={expected} actual={actual}"));
             return Err(RunnerFailureReason::ConfigurationApplyFailed);
         }
     }
     if let Some(expected) = profile.cpu_threads {
-        let actual = setting_value(connection, "threads")?
-            .parse::<u16>()
-            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+        let actual_text = setting_value(connection, "threads")?;
+        let actual = actual_text.parse::<u16>().map_err(|error| {
+            debug_log(&format!("child.profile.threads_parse.error={error}"));
+            RunnerFailureReason::ConfigurationApplyFailed
+        })?;
         if actual != expected {
+            debug_log(&format!("child.profile.threads_mismatch expected={expected} actual={actual}"));
             return Err(RunnerFailureReason::ConfigurationApplyFailed);
         }
     }
     if let Some(expected) = profile.spill_bytes {
         let actual = setting_value(connection, "max_temp_directory_size")?;
         if !setting_bytes_match(&actual, expected) {
+            debug_log(&format!("child.profile.spill_mismatch expected={expected} actual={actual}"));
             return Err(RunnerFailureReason::ConfigurationApplyFailed);
         }
     }
     let actual_temp = setting_value(connection, "temp_directory")?;
     if PathBuf::from(actual_temp) != temp_directory {
+        debug_log("child.profile.temp_directory_mismatch");
         return Err(RunnerFailureReason::ConfigurationApplyFailed);
     }
     Ok(())
@@ -299,7 +413,10 @@ fn setting_value(connection: &Connection, name: &str) -> Result<String, RunnerFa
             params![name],
             |row| row.get(0),
         )
-        .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)
+        .map_err(|error| {
+            debug_log(&format!("child.profile.setting_read.error name={name} error={error}"));
+            RunnerFailureReason::ConfigurationApplyFailed
+        })
 }
 
 #[cfg(windows)]
@@ -307,6 +424,7 @@ fn verify_temporary_directory(temp_directory: &Path) -> Result<(), RunnerFailure
     use std::io::Write;
 
     if !temp_directory.is_dir() {
+        debug_log("child.temp_directory.verify.not_directory");
         return Err(RunnerFailureReason::ConfigurationApplyFailed);
     }
     let probe = temp_directory.join(format!(".duckle-resource-probe-{}", std::process::id()));
@@ -315,10 +433,16 @@ fn verify_temporary_directory(temp_directory: &Path) -> Result<(), RunnerFailure
             .create_new(true)
             .write(true)
             .open(&probe)
-            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)?;
+            .map_err(|error| {
+                debug_log(&format!("child.temp_directory.probe_open.error={error}"));
+                RunnerFailureReason::ConfigurationApplyFailed
+            })?;
         file.write_all(b"duckle")
             .and_then(|_| file.sync_all())
-            .map_err(|_| RunnerFailureReason::ConfigurationApplyFailed)
+            .map_err(|error| {
+                debug_log(&format!("child.temp_directory.probe_write.error={error}"));
+                RunnerFailureReason::ConfigurationApplyFailed
+            })
     })();
     let _ = std::fs::remove_file(&probe);
     result
@@ -372,9 +496,13 @@ fn inherited_handle(args: &[std::ffi::OsString], flag: &str) -> Result<usize, Ru
             return values
                 .next()
                 .and_then(|value| value.parse::<usize>().ok())
-                .ok_or(RunnerFailureReason::RunnerUnavailable);
+                .ok_or_else(|| {
+                    debug_log("child.bootstrap.handle_value_invalid");
+                    RunnerFailureReason::RunnerUnavailable
+                });
         }
     }
+    debug_log("child.bootstrap.handle_flag_missing");
     Err(RunnerFailureReason::RunnerUnavailable)
 }
 
