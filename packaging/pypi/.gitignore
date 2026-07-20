@@ -1,0 +1,7 @@
+dist/
+build/
+*.egg-info/
+__pycache__/
+# The runner binary is staged in at build time, never committed.
+duckle/duckle-runner
+duckle/duckle-runner.exe

@@ -106,6 +106,27 @@ impl Args {
     }
 }
 
+/// Render the usage text under the name the binary was actually invoked as.
+///
+/// The same executable ships as `duckle-runner` (embedded in the desktop app,
+/// and as a release asset) and as `duckle` (both the pip wheel and
+/// scripts/install.sh place it under that name). Help that always said
+/// "duckle-runner" would tell a pip user to type a command they do not have.
+fn usage_for_invocation() -> String {
+    let prog = std::env::args()
+        .next()
+        .map(std::path::PathBuf::from)
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    // Only swap for a name we recognise, so an oddly renamed copy still shows
+    // the canonical help rather than something confusing.
+    if prog == "duckle" {
+        USAGE.replace("duckle-runner", "duckle")
+    } else {
+        USAGE.to_string()
+    }
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut pipeline = None;
     let mut workspace = None;
@@ -159,7 +180,7 @@ fn parse_args() -> Result<Args, String> {
                 verify_manifest = Some(PathBuf::from(take("--verify-manifest")?))
             }
             "-h" | "--help" => {
-                println!("{USAGE}");
+                println!("{}", usage_for_invocation());
                 std::process::exit(0);
             }
             // Allow a bare pipeline path as the first positional argument.
