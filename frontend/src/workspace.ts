@@ -362,6 +362,34 @@ export async function saveRepository(
     }
 }
 
+/**
+ * Drop cached preview rows before a pipeline is written to disk.
+ *
+ * `sampleRows` holds real rows read from a real source during a preview. The
+ * engine never reads them to run a pipeline - the bundle exporter already
+ * strips them for exactly this reason (see build.rs) - but that only covered
+ * the exported bundle, so the workspace file itself kept live source data
+ * indefinitely, and the in-app Git panel then offers to commit it.
+ *
+ * `schema` is deliberately kept: it is column metadata, not row content, and
+ * the planner does read it.
+ */
+export function stripPreviewRows<T>(pipeline: T): T {
+    const doc = pipeline as unknown as { nodes?: unknown[] };
+    if (!doc || typeof doc !== 'object' || !Array.isArray(doc.nodes)) return pipeline;
+    let stripped = false;
+    const nodes = doc.nodes.map((entry) => {
+        const node = entry as { data?: Record<string, unknown> };
+        if (!node || typeof node !== 'object' || !node.data || !('sampleRows' in node.data)) {
+            return entry;
+        }
+        stripped = true;
+        const { sampleRows: _previewRows, ...rest } = node.data;
+        return { ...(entry as object), data: rest };
+    });
+    return stripped ? ({ ...(pipeline as object), nodes } as T) : pipeline;
+}
+
 export async function savePipelineFile(
     path: string,
     pipelineId: string,
@@ -371,7 +399,7 @@ export async function savePipelineFile(
     try {
         const dir = joinPath(path, PIPELINES_DIR);
         await ensureDir(dir);
-        await writeJson(joinPath(dir, `${pipelineId}.json`), pipeline);
+        await writeJson(joinPath(dir, `${pipelineId}.json`), stripPreviewRows(pipeline));
         return true;
     } catch (err) {
         console.error('savePipelineFile failed', err);
@@ -391,8 +419,15 @@ export async function saveItemPayload(
     try {
         const folder = joinPath(path, dir);
         await ensureDir(folder);
+        // 'pipeline' maps to the same directory savePipelineFile writes, so this
+        // is a second door onto the same file and needs the same preview-row
+        // stripping, or a pipeline saved through here keeps live source rows.
         const toWrite =
-            itemType === 'connection' ? await encryptConnectionPayload(path, payload) : payload;
+            itemType === 'connection'
+                ? await encryptConnectionPayload(path, payload)
+                : itemType === 'pipeline'
+                  ? stripPreviewRows(payload)
+                  : payload;
         await writeJson(joinPath(folder, `${itemId}.json`), toWrite);
         return true;
     } catch (err) {
