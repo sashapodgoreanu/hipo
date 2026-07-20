@@ -241,6 +241,7 @@ pub(crate) fn build_view_sql(
         "xf.intersect" => build_setop(inputs, "INTERSECT"),
         "xf.except" => build_setop(inputs, "EXCEPT"),
         "xf.addcol" | "xf.coalesce" => build_addcol(inputs, props),
+        "xf.pyexpr" => build_pyexpr(inputs, props),
         "xf.rownum" | "xf.rank" | "xf.denserank" | "xf.lead" | "xf.lag" | "xf.first"
         | "xf.last" | "xf.ntile" => build_window(inputs, props, component_id),
         "xf.pivot" => build_pivot(inputs, props),
@@ -3267,6 +3268,44 @@ pub(crate) fn num_prop(props: &JsonValue, key: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// xf.pyexpr: derive columns from Python expressions, compiled to SQL.
+///
+/// Each entry in `columns` is `{ name, expr }` where `expr` is a Python
+/// expression over the upstream columns. The expression is translated to
+/// DuckDB SQL here, at plan time, so the run itself is ordinary vectorized
+/// SQL with no interpreter in the data path. An expression that cannot be
+/// translated is rejected by name rather than silently routed through
+/// something slower.
+pub(crate) fn build_pyexpr(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let upstream = inputs.main().ok_or_else(|| missing_input_msg("xf.pyexpr"))?;
+    let columns = props
+        .get("columns")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if columns.is_empty() {
+        return Err("Python Expression needs at least one output column".into());
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(columns.len());
+    for col in &columns {
+        let name = string_prop(col, "name")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| "Python Expression: every column needs a name".to_string())?;
+        let expr = string_prop(col, "expr")
+            .or_else(|| string_prop(col, "expression"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| format!("Python Expression: column '{}' has no expression", name))?;
+        let sql = crate::pyexpr::compile(&expr)
+            .map_err(|e| format!("Python Expression for column '{}': {}", name, e))?;
+        parts.push(format!("{} AS {}", sql, quote_ident(&name)));
+    }
+    Ok(format!(
+        "SELECT *, {} FROM {}",
+        parts.join(", "),
+        quote_ident(upstream)
+    ))
 }
 
 pub(crate) fn build_addcol(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {

@@ -30,6 +30,7 @@ pub mod history;
 pub mod lineage;
 pub mod gizmosql;
 pub mod plan;
+pub mod pyexpr;
 pub mod drift;
 pub mod qvd;
 pub mod review;
