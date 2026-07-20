@@ -11,18 +11,18 @@ pub use base::*;
 use duckle_db_runner::cutover::{
     configured_entry_point_class, packaged_cutover_gate, CutoverGate, EntryPointClass,
 };
-#[cfg(windows)]
-use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
+use duckle_db_runner::model::{
+    RunCancellation, RunId, RunnerFailureReason, WorkerLease,
+};
 use duckle_db_runner::resources::{
     resolve_workspace_runner_resources, HostResourceLimits, RunnerResourcesProfile,
     WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
 };
-#[cfg(windows)]
 use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
 #[cfg(windows)]
 use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_duckdb_engine::OfficialRunnerController;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,8 @@ pub const QUACK_VERSION: &str = DUCKDB_VERSION;
 pub const QUACK_LICENSE: &str = "MIT";
 pub const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
 pub const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
+pub const SLOTHDB_DISABLED_DIAGNOSTIC: &str =
+    "engine_disabled: SlothDB is temporarily disabled during the sidecar runner migration; no fallback engine will be selected";
 
 const QUACK_WINDOWS_AMD64_SHA256: &str =
     "52d20e78a0498c721fb0764e94d8e5b287fded3d8fcf6e95365cb03e5905b895";
@@ -89,6 +91,31 @@ pub fn verify_offline_quack_extension(
     Ok(pin)
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct WorkspaceEngineMetadata {
+    engine: Option<String>,
+}
+
+/// Read the persisted workspace engine without rewriting it. SlothDB remains a
+/// valid stored value, but execution receives an explicit no-fallback diagnostic.
+pub fn workspace_engine_diagnostic(workspace: &Path) -> Result<Option<&'static str>, String> {
+    let path = workspace.join("duckle.json");
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("workspace_engine_read_failed".to_string()),
+    };
+    let metadata: WorkspaceEngineMetadata = serde_json::from_slice(&bytes)
+        .map_err(|_| "workspace_engine_parse_failed".to_string())?;
+    Ok(metadata
+        .engine
+        .as_deref()
+        .map(str::trim)
+        .filter(|engine| engine.eq_ignore_ascii_case("slothdb"))
+        .map(|_| SLOTHDB_DISABLED_DIAGNOSTIC))
+}
+
 #[derive(Default)]
 struct DesktopControllerState {
     #[cfg(windows)]
@@ -101,6 +128,7 @@ struct DesktopControllerState {
 pub struct DesktopRunnerController {
     state: Mutex<DesktopControllerState>,
     sidecar_path: Option<PathBuf>,
+    legacy_engine_disabled: Mutex<bool>,
 }
 
 impl DesktopRunnerController {
@@ -108,6 +136,7 @@ impl DesktopRunnerController {
         Self {
             state: Mutex::new(DesktopControllerState::default()),
             sidecar_path,
+            legacy_engine_disabled: Mutex::new(false),
         }
     }
 
@@ -123,6 +152,14 @@ impl DesktopRunnerController {
         workspace: &Path,
         profile: &RunnerResourcesProfile,
     ) -> Option<Arc<dyn OfficialRunnerController>> {
+        let legacy_disabled = workspace_engine_diagnostic(workspace).ok().flatten().is_some();
+        *self.legacy_engine_disabled.lock().ok()? = legacy_disabled;
+        if legacy_disabled {
+            // This controller exists solely to prevent the production compatibility
+            // selector from falling through to DuckDB CLI for a SlothDB workspace.
+            return Some(Arc::new(DisabledLegacyEngineController));
+        }
+
         profile.validate().ok()?;
         let sidecar_path = self.sidecar_path.as_ref()?.clone();
 
@@ -196,7 +233,61 @@ impl DesktopRunnerController {
     }
 
     pub fn cutover_gate(&self) -> CutoverGate {
-        packaged_cutover_gate()
+        if self
+            .legacy_engine_disabled
+            .lock()
+            .map(|disabled| *disabled)
+            .unwrap_or(true)
+        {
+            // Force the engine onto the rejecting controller. Compatibility is a
+            // DuckDB fallback and is therefore forbidden for persisted SlothDB.
+            CutoverGate::Approved
+        } else {
+            packaged_cutover_gate()
+        }
+    }
+
+    pub fn legacy_disabled_diagnostic(&self) -> Option<&'static str> {
+        self.legacy_engine_disabled
+            .lock()
+            .ok()
+            .filter(|disabled| **disabled)
+            .map(|_| SLOTHDB_DISABLED_DIAGNOSTIC)
+    }
+}
+
+struct DisabledLegacyEngineController;
+
+impl OfficialRunnerController for DisabledLegacyEngineController {
+    fn acquire(
+        &self,
+        _run_id: RunId,
+        _attempt: u32,
+        _cancellation: RunCancellation,
+        _now_millis: u64,
+    ) -> Result<WorkerLease, RunnerFailureReason> {
+        Err(RunnerFailureReason::RunnerUnavailable)
+    }
+
+    fn release(&self, _lease: WorkerLease, _now_millis: u64) {}
+
+    fn execute_batch(
+        &self,
+        _lease: &WorkerLease,
+        _statements: Vec<String>,
+        _cancellation: RunCancellation,
+    ) -> Result<SqlBatchResult, RunnerFailureReason> {
+        Err(RunnerFailureReason::RunnerUnavailable)
+    }
+
+    fn preview_relation(
+        &self,
+        _lease: &WorkerLease,
+        _sql: &str,
+        _limit: u32,
+        _cancellation: RunCancellation,
+    ) -> Result<PreviewResult, RunnerFailureReason> {
+        Err(RunnerFailureReason::RunnerUnavailable)
     }
 }
 
@@ -383,6 +474,46 @@ mod runner_pin_tests {
             crate::app_settings::load_runner_resources(workspace.path()),
             status.requested
         );
+    }
+
+    #[test]
+    fn persisted_slothdb_is_readable_but_forces_a_no_fallback_controller() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("duckle.json"),
+            r#"{"version":2,"engine":"slothdb"}"#,
+        )
+        .unwrap();
+        let original = std::fs::read_to_string(workspace.path().join("duckle.json")).unwrap();
+        let controller = DesktopRunnerController::new(None);
+        let official = controller
+            .controller_for_workspace(workspace.path(), &RunnerResourcesProfile::default())
+            .expect("disabled workspace receives a rejecting controller without a sidecar");
+
+        assert_eq!(controller.cutover_gate(), CutoverGate::Approved);
+        assert_eq!(
+            controller.legacy_disabled_diagnostic(),
+            Some(SLOTHDB_DISABLED_DIAGNOSTIC)
+        );
+        assert_eq!(
+            official.acquire(RunId::new(), 1, RunCancellation::default(), 0),
+            Err(RunnerFailureReason::RunnerUnavailable)
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("duckle.json")).unwrap(),
+            original,
+            "compatibility diagnostics must not rewrite the persisted engine"
+        );
+    }
+
+    #[test]
+    fn slothdb_install_is_rejected_before_download_or_fallback() {
+        let app_data = tempfile::tempdir().unwrap();
+        let error = install(app_data.path(), "slothdb", |_| {})
+            .expect_err("SlothDB install remains disabled");
+        assert!(error.contains("engine_disabled"), "{error}");
+        assert!(error.contains("SlothDB"), "{error}");
+        assert!(!app_data.path().join("engines").join("slothdb").exists());
     }
 
     #[cfg(windows)]
