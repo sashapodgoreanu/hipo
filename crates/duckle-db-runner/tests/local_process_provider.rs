@@ -145,6 +145,17 @@ fn requested_profile() -> RunnerResourcesProfile {
     }
 }
 
+fn deterministic_host_limits() -> HostResourceLimits {
+    HostResourceLimits {
+        memory_bytes: Some(1_000_000_000),
+        memory_cap_bytes: Some(600_000_000),
+        cpu_threads: Some(12),
+        cpu_thread_cap: Some(4),
+        spill_bytes: Some(2_000_000_000),
+        spill_cap_bytes: Some(1_000_000_000),
+    }
+}
+
 fn provider(mode: LaunchMode) -> (LocalProcessProvider, Arc<Mutex<LaunchState>>) {
     let state = Arc::new(Mutex::new(LaunchState::default()));
     let provider = LocalProcessProvider::new(
@@ -152,14 +163,7 @@ fn provider(mode: LaunchMode) -> (LocalProcessProvider, Arc<Mutex<LaunchState>>)
             mode,
             state: state.clone(),
         }),
-        HostResourceLimits {
-            memory_bytes: Some(1_000_000_000),
-            memory_cap_bytes: Some(600_000_000),
-            cpu_threads: Some(12),
-            cpu_thread_cap: Some(4),
-            spill_bytes: Some(2_000_000_000),
-            spill_cap_bytes: Some(1_000_000_000),
-        },
+        deterministic_host_limits(),
     );
     (provider, state)
 }
@@ -289,7 +293,7 @@ fn windows_sidecar_bootstraps_over_pipes_and_executes_a_quack_batch() {
     let program = std::path::PathBuf::from(env!("CARGO_BIN_EXE_duckle-db-sidecar"));
     let provider = LocalProcessProvider::new(
         Arc::new(WindowsLocalSidecarLauncher::new(program).unwrap()),
-        HostResourceLimits::default(),
+        deterministic_host_limits(),
     );
     let worker_id = WorkerId::new();
     let cancellation = RunCancellation::default();
