@@ -1,51 +1,112 @@
 //! Engine installation manager and packaged Quack runner ownership.
 //!
-//! The existing optional-tool installation implementation remains isolated in
-//! the base module. DuckDB execution itself is packaged with the application;
-//! it is never downloaded as a CLI and is never selected at runtime.
+//! Pipeline execution uses the packaged database sidecar. The downloaded DuckDB
+//! CLI remains the product's extension provisioner: the Setup UI installs the
+//! extensions Duckle needs, including Quack, into DuckDB's shared user cache.
 
 #[allow(dead_code)]
 #[path = "engine_manager_base.rs"]
 mod base;
 pub use base::*;
 
-/// Present the packaged DuckDB/Quack pair as the required installed engine.
-/// Optional tools such as llama.cpp continue to use the legacy installer.
+/// Report the real DuckDB CLI installation state. The packaged sidecar is not
+/// enough by itself: the setup is complete only when the CLI-managed Quack
+/// extension can actually be loaded from the local DuckDB cache.
 pub fn status(app_data: &Path) -> Vec<EngineStatus> {
     let mut statuses = base::status(app_data);
-    statuses.retain(|status| status.id != "duckdb");
-    statuses.insert(
-        0,
-        EngineStatus {
-            id: "duckdb".into(),
-            name: "DuckDB / Quack".into(),
-            description: "Packaged database runner".into(),
-            required: true,
-            installed: true,
-            version: Some(DUCKDB_VERSION.into()),
-            target_version: DUCKDB_VERSION.into(),
-            outdated: false,
-            path: None,
-            available: true,
-        },
-    );
+    if let Some(duckdb) = statuses.iter_mut().find(|status| status.id == "duckdb") {
+        duckdb.name = "DuckDB / Quack".into();
+        duckdb.description = "DuckDB CLI and extensions for the packaged database runner".into();
+        if duckdb.installed {
+            let quack_ready = quack_is_loadable(&base::duckdb_path(app_data));
+            duckdb.installed = quack_ready;
+            if !quack_ready {
+                duckdb.description =
+                    "DuckDB is installed, but the Quack extension still needs installation".into();
+            }
+        }
+    }
     statuses
 }
 
-/// DuckDB is part of the application package. A stale frontend request to
-/// install it completes locally and never downloads or executes a CLI binary.
+/// Install DuckDB through the existing UI flow, then install Quack exactly like
+/// the other DuckDB extensions. Quack is not pinned or hashed by Duckle: the CLI
+/// selects the available extension and DuckDB decides whether it can be loaded.
 pub fn install<F: FnMut(InstallProgress)>(
     app_data: &Path,
     engine_id: &str,
     mut on_progress: F,
 ) -> Result<String, String> {
-    if engine_id == "duckdb" {
-        let packaged = app_data.join("engines").join("db-sidecar");
-        let path = packaged.to_string_lossy().to_string();
-        on_progress(InstallProgress::Done { path: path.clone() });
-        return Ok(path);
+    if engine_id != "duckdb" {
+        return base::install(app_data, engine_id, on_progress);
     }
-    base::install(app_data, engine_id, on_progress)
+
+    // base::install emits Done after installing its standard extension set.
+    // Hold that final event until Quack has also been installed successfully.
+    let path = base::install(app_data, engine_id, |progress| match progress {
+        InstallProgress::Done { .. } => {}
+        other => on_progress(other),
+    })?;
+
+    on_progress(InstallProgress::InstallingExtension {
+        name: "quack".into(),
+        index: 1,
+        total: 1,
+    });
+    install_quack(&base::duckdb_path(app_data))?;
+    on_progress(InstallProgress::Done { path: path.clone() });
+    Ok(path)
+}
+
+fn duckdb_extension_command(bin: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command.arg("-no-init");
+    command
+}
+
+fn quack_is_loadable(bin: &Path) -> bool {
+    if !bin.is_file() {
+        return false;
+    }
+    duckdb_extension_command(bin)
+        .arg(":memory:")
+        .arg("-bail")
+        .arg("-c")
+        // The status probe must not silently contact a repository. It answers
+        // only whether the extension previously installed by Setup can load.
+        .arg("SET autoinstall_known_extensions = false; LOAD quack;")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn install_quack(bin: &Path) -> Result<(), String> {
+    let output = duckdb_extension_command(bin)
+        .arg(":memory:")
+        .arg("-bail")
+        .arg("-c")
+        .arg("INSTALL quack; LOAD quack;")
+        .output()
+        .map_err(|error| format!("could not start DuckDB to install Quack: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "DuckDB could not install or load the Quack extension".into()
+    };
+    Err(detail)
 }
 
 use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
@@ -68,10 +129,6 @@ use duckle_db_runner::sidecar_diagnostics::{
 use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_duckdb_engine::OfficialRunnerController;
 use serde::Deserialize;
-#[cfg(test)]
-use serde::Serialize;
-#[cfg(test)]
-use sha2::{Digest, Sha256};
 #[cfg(windows)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -79,73 +136,8 @@ use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use std::sync::OnceLock;
 
-#[cfg(test)]
-pub const QUACK_VERSION: &str = DUCKDB_VERSION;
-#[cfg(test)]
-pub const QUACK_LICENSE: &str = "MIT";
-#[cfg(test)]
-pub const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
-#[cfg(test)]
-pub const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 pub const SLOTHDB_DISABLED_DIAGNOSTIC: &str =
     "engine_disabled: SlothDB is temporarily disabled during the sidecar runner migration; no fallback engine will be selected";
-
-#[cfg(test)]
-const QUACK_WINDOWS_AMD64_SHA256: &str =
-    "3274bac6becc0f750497726a73f9ae858606cec7ec1a935d83a5b84ee0402122";
-#[cfg(test)]
-const QUACK_MACOS_AMD64_SHA256: &str =
-    "85a48992d0b940f7cf1c55bbe4efd02f46c9724b67e238a990df3f3244d8e970";
-#[cfg(test)]
-const QUACK_LINUX_AMD64_SHA256: &str =
-    "decb78a4d953ff9cc65c300cf2c8d3f3d8f4732851205684565c922113bc2b9e";
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OfficialRunnerPin {
-    pub duckdb_version: &'static str,
-    pub quack_version: &'static str,
-    pub quack_sha256: &'static str,
-    pub license: &'static str,
-    pub provenance: &'static str,
-    pub extension_file: &'static str,
-}
-
-#[cfg(test)]
-pub fn official_runner_pin_for(os: &str, arch: &str) -> Option<OfficialRunnerPin> {
-    let quack_sha256 = match (os, arch) {
-        ("windows", "x86_64") => QUACK_WINDOWS_AMD64_SHA256,
-        ("macos", "x86_64") => QUACK_MACOS_AMD64_SHA256,
-        ("linux", "x86_64") => QUACK_LINUX_AMD64_SHA256,
-        _ => return None,
-    };
-    Some(OfficialRunnerPin {
-        duckdb_version: DUCKDB_VERSION,
-        quack_version: QUACK_VERSION,
-        quack_sha256,
-        license: QUACK_LICENSE,
-        provenance: QUACK_PROVENANCE,
-        extension_file: QUACK_EXTENSION_FILE,
-    })
-}
-
-#[cfg(test)]
-pub fn verify_offline_quack_extension(
-    path: &Path,
-    os: &str,
-    arch: &str,
-) -> Result<OfficialRunnerPin, String> {
-    let pin = official_runner_pin_for(os, arch)
-        .ok_or_else(|| format!("runner.unsupported_target:{os}-{arch}"))?;
-    let bytes = std::fs::read(path)
-        .map_err(|_| "runner.extension_read_failed".to_string())?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if actual != pin.quack_sha256 {
-        return Err("runner.extension_checksum_mismatch".to_string());
-    }
-    Ok(pin)
-}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -321,14 +313,10 @@ impl DesktopRunnerController {
         Ok(())
     }
 
-    /// Fixed compatibility adapter for the old engine API. This is not a
-    /// configuration point: every desktop build selects the packaged Quack route.
     pub fn entry_point_class(&self) -> EntryPointClass {
         EntryPointClass::Production
     }
 
-    /// Fixed compatibility adapter for the old engine API. There is no runtime
-    /// evidence gate or fallback selection anymore.
     pub fn cutover_gate(&self) -> CutoverGate {
         CutoverGate::Approved
     }
@@ -541,41 +529,18 @@ fn now_millis() -> u64 {
 }
 
 #[cfg(test)]
-mod runner_pin_tests {
+mod tests {
     use super::*;
     use duckle_db_runner::resources::{AutomaticOrU16, ResourceLimit};
 
     #[test]
-    fn official_runner_pin_is_atomic_and_records_provenance() {
-        let pin = official_runner_pin_for("windows", "x86_64").unwrap();
-        assert_eq!(pin.duckdb_version, "1.5.4");
-        assert_eq!(pin.quack_version, pin.duckdb_version);
-        assert_eq!(pin.license, "MIT");
-        assert_eq!(pin.provenance, "duckdb/duckdb-quack");
-        assert_eq!(pin.extension_file, "quack.duckdb_extension");
-        assert_eq!(pin.quack_sha256.len(), 64);
-        assert!(official_runner_pin_for("windows", "aarch64").is_none());
-    }
-
-    #[test]
-    fn packaged_database_runner_is_reported_installed() {
+    fn missing_cli_is_reported_as_not_installed() {
         let app_data = tempfile::tempdir().unwrap();
         let statuses = status(app_data.path());
         let runner = statuses.iter().find(|status| status.id == "duckdb").unwrap();
-        assert!(runner.installed);
+        assert!(!runner.installed);
         assert!(runner.required);
         assert_eq!(runner.name, "DuckDB / Quack");
-    }
-
-    #[test]
-    fn offline_verification_rejects_unpinned_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let extension = dir.path().join(QUACK_EXTENSION_FILE);
-        std::fs::write(&extension, b"not-the-pinned-extension").unwrap();
-        assert_eq!(
-            verify_offline_quack_extension(&extension, "windows", "x86_64"),
-            Err("runner.extension_checksum_mismatch".to_string())
-        );
     }
 
     #[test]
