@@ -34,6 +34,12 @@
           "beginsPattern": "vite v.*ready in",
           "endsPattern": "Local:.*http://localhost:5173"
         }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "duckle-vite",
+        "clear": false
       }
     },
     {
@@ -47,7 +53,26 @@
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$rustc",
-      "group": "build"
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "duckle-build",
+        "clear": true
+      }
+    },
+    {
+      "label": "Duckle: prepare F5 debug",
+      "dependsOn": [
+        "tauri: build desktop debug",
+        "tauri: frontend dev server"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
     },
     {
       "label": "frontend: export MCP component catalog",
