@@ -1,14 +1,12 @@
-//! Headless ownership boundary for the database runner.
+//! Headless ownership boundary for the packaged Quack runner.
 //!
 //! CLI, management-console, and web entry points share one controller per
-//! workspace. There is no backend selector: every run is assigned through
-//! WorkerPoolControl and the packaged Quack sidecar.
+//! workspace. There is no runtime backend selector: every run is assigned
+//! through WorkerPoolControl and the packaged sidecar.
 
 use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 #[cfg(windows)]
-use duckle_db_runner::model::{
-    RunCancellation, RunId, RunnerFailureReason, WorkerLease,
-};
+use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 use duckle_db_runner::resources::{
     resolve_workspace_runner_resources, HostResourceLimits, RunnerResourcesProfile,
     WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
@@ -26,9 +24,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(windows)]
 static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<HeadlessController>>>> = OnceLock::new();
 
-/// Build a headless engine using the single controller owned by this workspace
-/// process. No DuckDB executable path or runtime backend selector is accepted.
-pub(crate) fn engine_for_workspace(workspace: &Path) -> DuckdbEngine {
+/// Build a headless engine using the single controller owned by this workspace.
+/// The retained path argument is ignored while callers are cleaned up; it can no
+/// longer select a binary or alter the runtime route.
+pub(crate) fn engine_for_workspace(_retired_duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
     let base = DuckdbEngine::new(PathBuf::new());
     let resources = workspace_resources(workspace);
     if let Err(error) = &resources {
@@ -41,8 +40,8 @@ pub(crate) fn engine_for_workspace(workspace: &Path) -> DuckdbEngine {
         .map(|controller| base.with_official_runner_controller(controller))
         .unwrap_or(base);
 
-    // Transitional engine API: the selector is fixed to the only route and no
-    // longer reads build classes, environment variables, or evidence.
+    // Fixed internal adapter for the old engine API. select_runner() has one
+    // possible result, so neither environment nor evidence can change routing.
     engine.with_runner_selection(EntryPointClass::Production, &CutoverGate::Approved)
 }
 
@@ -105,16 +104,19 @@ fn sidecar_name() -> &'static str {
     }
 }
 
-/// The packaged sidecar must be adjacent to the headless runner. Runtime
-/// environment overrides are intentionally unsupported.
+/// Only packaged locations are considered. Runtime environment overrides are
+/// deliberately unsupported.
 fn resolve_sidecar_path() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let directory = executable.parent()?;
-    let mut candidates = vec![directory.join(sidecar_name())];
-    if let Some(engines) = directory.parent() {
-        candidates.push(engines.join("db-sidecar").join(sidecar_name()));
-    }
-    candidates.into_iter().find_map(absolute_existing_file)
+    [
+        directory.join(sidecar_name()),
+        directory
+            .parent()
+            .map(|engines| engines.join("db-sidecar").join(sidecar_name()))?,
+    ]
+    .into_iter()
+    .find_map(absolute_existing_file)
 }
 
 fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
@@ -268,7 +270,7 @@ mod tests {
 
     #[test]
     fn headless_engine_has_only_the_quack_route() {
-        let engine = engine_for_workspace(Path::new("."));
+        let engine = engine_for_workspace(PathBuf::new(), Path::new("."));
         assert_eq!(engine.execution_route(), ExecutionRoute::OfficialRunner);
     }
 
