@@ -1035,7 +1035,11 @@ impl DuckdbEngine {
                 sep = '&';
             }
             if let Some(loc) = &locator {
-                url.push_str(&format!("{}locator={}", sep, loc));
+                // Percent-encode: the locator is an opaque server-generated
+                // token echoed back verbatim, so a '+' would decode as a space
+                // and an '&' would start a new parameter. Matches how the REST
+                // cursor and Weaviate's `after` token are handled in this file.
+                url.push_str(&format!("{}locator={}", sep, urlencode_simple(loc)));
             }
             let resp = crate::tls::http_agent()
                 .get(&url)
