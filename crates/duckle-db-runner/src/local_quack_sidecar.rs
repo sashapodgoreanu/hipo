@@ -7,9 +7,6 @@
 use crate::bootstrap::{
     read_authenticated_readiness, write_authenticated_readiness, BootstrapMessage,
 };
-use crate::bundle::{
-    bundle_for, packaged_extension_path, verify_staged_bundle, BundlePlatform,
-};
 use crate::local_process_provider::{
     LaunchedLocalSidecar, LocalSidecarLaunch, LocalSidecarLauncher, ManagedSidecar,
 };
@@ -24,32 +21,54 @@ use std::sync::Arc;
 const REMOTE_ALIAS: &str = "duckle_runner_remote";
 const QUACK_BIND_ATTEMPTS: usize = 8;
 
-#[cfg(windows)]
-fn verified_packaged_extension(program: &Path) -> Result<PathBuf, RunnerFailureReason> {
-    let platform = BundlePlatform::current().ok_or(RunnerFailureReason::RunnerUnavailable)?;
-    let path = packaged_extension_path(program, platform)?;
-    let expected = bundle_for(platform).ok_or(RunnerFailureReason::RunnerUnavailable)?;
-    verify_staged_bundle(&path, expected)?;
-    Ok(path)
+fn cli_extension_repository() -> Result<PathBuf, RunnerFailureReason> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+
+    home.map(PathBuf::from)
+        .map(|home| home.join(".duckdb").join("extensions"))
+        .ok_or(RunnerFailureReason::RunnerUnavailable)
 }
 
-fn quack_load_sql(path: &Path) -> String {
-    // Forward slashes avoid any ambiguity around Windows backslashes inside a
-    // SQL string literal. DuckDB accepts them on Windows paths.
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    format!("LOAD {};", sql_literal(&normalized))
+fn sidecar_extension_directory(program: &Path) -> Result<PathBuf, RunnerFailureReason> {
+    program
+        .parent()
+        .map(|directory| directory.join("installed-extensions"))
+        .ok_or(RunnerFailureReason::RunnerUnavailable)
 }
 
-#[cfg(windows)]
-fn load_packaged_quack(
+fn extension_repository_sql(program: &Path) -> Result<String, RunnerFailureReason> {
+    let repository = cli_extension_repository()?;
+    let installed = sidecar_extension_directory(program)?;
+    let repository = repository.to_string_lossy().replace('\\', "/");
+    let installed = installed.to_string_lossy().replace('\\', "/");
+
+    Ok(format!(
+        "SET custom_extension_repository = {repository}; \
+         SET autoinstall_extension_repository = {repository}; \
+         SET extension_directory = {installed}; \
+         SET autoinstall_known_extensions = true; \
+         SET autoload_known_extensions = true;",
+        repository = sql_literal(&repository),
+        installed = sql_literal(&installed),
+    ))
+}
+
+fn install_and_load_quack(
     connection: &Connection,
-    extension: &Path,
+    program: &Path,
 ) -> Result<(), RunnerFailureReason> {
-    let platform = BundlePlatform::current().ok_or(RunnerFailureReason::RunnerUnavailable)?;
-    let expected = bundle_for(platform).ok_or(RunnerFailureReason::RunnerUnavailable)?;
-    verify_staged_bundle(extension, expected)?;
+    let installed = sidecar_extension_directory(program)?;
+    std::fs::create_dir_all(&installed).map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     connection
-        .execute_batch(&quack_load_sql(extension))
+        .execute_batch(&extension_repository_sql(program)?)
+        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+    // No application-level Quack version/hash gate. The CLI installation flow
+    // chooses the extension and DuckDB itself accepts or rejects it at LOAD.
+    connection
+        .execute_batch("INSTALL quack; LOAD quack;")
         .map_err(|_| RunnerFailureReason::RunnerUnavailable)
 }
 
@@ -172,20 +191,13 @@ impl WindowsManagedSidecar {
             }
         };
 
-        let extension = verified_packaged_extension(&self.program).map_err(|reason| {
+        if install_and_load_quack(&connection, &self.program).is_err() {
             append_sidecar_diagnostic(
                 &self.program,
                 SidecarDiagnosticCode::ClientQuackLoadFailed,
             );
-            reason
-        })?;
-        load_packaged_quack(&connection, &extension).map_err(|reason| {
-            append_sidecar_diagnostic(
-                &self.program,
-                SidecarDiagnosticCode::ClientQuackLoadFailed,
-            );
-            reason
-        })?;
+            return Err(RunnerFailureReason::RunnerUnavailable);
+        }
 
         if let Some(threads) = self.profile.cpu_threads {
             if connection
@@ -254,9 +266,6 @@ impl ManagedSidecar for WindowsManagedSidecar {
         &mut self,
         profile: &ResolvedRunnerResources,
     ) -> Result<(), RunnerFailureReason> {
-        // Quack has no authenticated reconfiguration control protocol. An
-        // idle worker carrying another profile must be replaced rather than
-        // being silently relabelled with settings it has not applied.
         if profile == &self.profile {
             Ok(())
         } else {
@@ -268,10 +277,6 @@ impl ManagedSidecar for WindowsManagedSidecar {
         &mut self,
         profile: &ResolvedRunnerResources,
     ) -> Result<(), RunnerFailureReason> {
-        // The child queried DuckDB's effective settings and verified its private
-        // temporary directory before authenticating readiness. The parent then
-        // authenticates that exact resolved profile; accepting any other value
-        // here would silently relabel the managed process.
         if profile == &self.profile {
             Ok(())
         } else {
@@ -295,10 +300,7 @@ impl ManagedSidecar for WindowsManagedSidecar {
 /// It intentionally accepts only inherited handle numbers; all resource
 /// settings and the one-shot credential arrive in the authenticated payload.
 #[cfg(windows)]
-pub fn run_windows_sidecar(
-    args: &[std::ffi::OsString],
-    quack_extension: &Path,
-) -> Result<(), RunnerFailureReason> {
+pub fn run_windows_sidecar(args: &[std::ffi::OsString]) -> Result<(), RunnerFailureReason> {
     let bootstrap_handle = inherited_handle(args, "--duckle-bootstrap-read-handle")?;
     let control_handle = inherited_handle(args, "--duckle-control-write-handle")?;
     let (mut bootstrap_reader, control_writer) = unsafe {
@@ -306,14 +308,13 @@ pub fn run_windows_sidecar(
     };
     let bootstrap = crate::bootstrap::read_bootstrap(&mut bootstrap_reader)
         .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-    run_windows_sidecar_from_bootstrap(&bootstrap, control_writer, quack_extension)
+    run_windows_sidecar_from_bootstrap(&bootstrap, control_writer)
 }
 
 #[cfg(windows)]
 fn run_windows_sidecar_from_bootstrap(
     bootstrap: &BootstrapMessage,
     mut control_writer: std::fs::File,
-    quack_extension: &Path,
 ) -> Result<(), RunnerFailureReason> {
     let profile = bootstrap.effective_profile();
     let temp_directory =
@@ -325,7 +326,8 @@ fn run_windows_sidecar_from_bootstrap(
     let connection =
         Connection::open_in_memory().map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     apply_and_verify_profile(&connection, profile, &temp_directory)?;
-    load_packaged_quack(&connection, quack_extension)?;
+    let program = std::env::current_exe().map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+    install_and_load_quack(&connection, &program)?;
     connection
         .execute_batch(
             "SET GLOBAL quack_authentication_function = 'quack_check_token'; \
@@ -347,8 +349,6 @@ fn run_windows_sidecar_from_bootstrap(
         .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     drop(control_writer);
 
-    // The embedded connection owns Quack's listener. The parent Job Object
-    // terminates this process on cancellation, crash, or parent shutdown.
     loop {
         std::thread::park_timeout(std::time::Duration::from_secs(60));
         let _ = &cleanup;
@@ -597,14 +597,21 @@ mod tests {
     }
 
     #[test]
-    fn packaged_quack_load_uses_an_explicit_normalized_path() {
-        let sql = quack_load_sql(Path::new(
-            r"C:\Users\tester\AppData\Roaming\io.duckle.app\engines\db-sidecar\extensions\v1.5.4\windows_amd64\quack.duckdb_extension",
-        ));
-        assert_eq!(
-            sql,
-            "LOAD 'C:/Users/tester/AppData/Roaming/io.duckle.app/engines/db-sidecar/extensions/v1.5.4/windows_amd64/quack.duckdb_extension';"
-        );
+    fn extension_repository_uses_cli_cache_and_private_install_directory() {
+        let old = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
+        let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        std::env::set_var(key, r"C:\Users\tester");
+        let sql = extension_repository_sql(Path::new(
+            r"C:\Users\tester\AppData\Roaming\io.duckle.app\engines\db-sidecar\duckle-db-sidecar.exe",
+        ))
+        .unwrap();
+        assert!(sql.contains("C:/Users/tester/.duckdb/extensions"));
+        assert!(sql.contains("engines/db-sidecar/installed-extensions"));
+        assert!(sql.contains("autoinstall_known_extensions = true"));
+        match old {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
     }
 
     #[test]
