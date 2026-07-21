@@ -27,7 +27,7 @@ pub enum SidecarDiagnosticCode {
 }
 
 impl SidecarDiagnosticCode {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 15] = [
         Self::ParentLaunchStarted,
         Self::ParentProgramInvalid,
         Self::ParentSpawnFailed,
