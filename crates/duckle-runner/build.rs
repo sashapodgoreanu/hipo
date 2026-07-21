@@ -25,27 +25,6 @@ fn profile_dir(out_dir: &Path) -> Option<PathBuf> {
     out_dir.ancestors().nth(3).map(Path::to_path_buf)
 }
 
-fn staged_candidates(manifest_dir: &Path, out_dir: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("DUCKLE_QUACK_EXTENSION") {
-        candidates.push(PathBuf::from(path));
-    }
-    candidates.push(manifest_dir.join("bin").join(QUACK_EXTENSION_FILE));
-    candidates.push(
-        manifest_dir
-            .join("..")
-            .join("..")
-            .join("apps")
-            .join("desktop")
-            .join("bin")
-            .join(QUACK_EXTENSION_FILE),
-    );
-    if let Some(profile) = profile_dir(out_dir) {
-        candidates.push(profile.join(QUACK_EXTENSION_FILE));
-    }
-    candidates
-}
-
 fn verify(path: &Path, expected: &str) -> Result<Vec<u8>, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let actual = format!("{:x}", Sha256::digest(&bytes));
@@ -66,60 +45,34 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let embedded = out_dir.join("embedded-quack-extension.bin");
+    let source = manifest_dir.join("bin").join(QUACK_EXTENSION_FILE);
 
-    println!("cargo:rerun-if-env-changed=DUCKLE_QUACK_EXTENSION");
-    for candidate in staged_candidates(&manifest_dir, &out_dir) {
-        println!("cargo:rerun-if-changed={}", candidate.display());
+    println!("cargo:rerun-if-changed={}", source.display());
+
+    let expected = expected_sha256(&target_os, &target_arch).unwrap_or_else(|| {
+        panic!(
+            "no verified DuckDB/Quack bundle for {}-{}",
+            target_os, target_arch
+        )
+    });
+    if !source.is_file() {
+        panic!(
+            "required packaged Quack extension is missing: {}",
+            source.display()
+        );
     }
 
-    let expected = expected_sha256(&target_os, &target_arch);
-    let source = staged_candidates(&manifest_dir, &out_dir)
-        .into_iter()
-        .find(|candidate| candidate.is_file());
+    let bytes = verify(&source, expected)
+        .unwrap_or_else(|error| panic!("Quack runner staging rejected: {error}"));
+    std::fs::write(&embedded, &bytes)
+        .unwrap_or_else(|error| panic!("write {}: {error}", embedded.display()));
 
-    match (expected, source) {
-        (Some(expected), Some(source)) => {
-            let bytes = verify(&source, expected)
-                .unwrap_or_else(|error| panic!("official runner staging rejected: {error}"));
-            std::fs::write(&embedded, &bytes)
-                .unwrap_or_else(|error| panic!("write {}: {error}", embedded.display()));
-
-            // Keep the verified pair adjacent in target/<profile>. Desktop's
-            // build script and release staging can locate both binaries without
-            // consulting PATH or the network.
-            if let Some(profile) = profile_dir(&out_dir) {
-                let adjacent = profile.join(QUACK_EXTENSION_FILE);
-                if adjacent != source {
-                    std::fs::write(&adjacent, &bytes).unwrap_or_else(|error| {
-                        panic!("write verified {}: {error}", adjacent.display())
-                    });
-                }
-            }
-        }
-        (Some(_), None) => {
-            std::fs::write(&embedded, [])
-                .unwrap_or_else(|error| panic!("write {}: {error}", embedded.display()));
-            println!(
-                "cargo:warning={} not staged; duckle-db-sidecar will report runner_unavailable until the verified offline extension is supplied",
-                QUACK_EXTENSION_FILE
-            );
-        }
-        (None, Some(source)) => {
-            panic!(
-                "no approved DuckDB/Quack bundle for {}-{}, but {} was staged",
-                target_os,
-                target_arch,
-                source.display()
-            );
-        }
-        (None, None) => {
-            std::fs::write(&embedded, [])
-                .unwrap_or_else(|error| panic!("write {}: {error}", embedded.display()));
-            println!(
-                "cargo:warning=official runner is unavailable on unsupported target {}-{}",
-                target_os, target_arch
-            );
-        }
+    // Keep the verified extension adjacent to the release sidecar. The desktop
+    // build consumes this pair automatically during `cargo tauri build`.
+    if let Some(profile) = profile_dir(&out_dir) {
+        let adjacent = profile.join(QUACK_EXTENSION_FILE);
+        std::fs::write(&adjacent, &bytes)
+            .unwrap_or_else(|error| panic!("write verified {}: {error}", adjacent.display()));
     }
 
     println!("cargo:rustc-env=DUCKLE_EMBEDDED_QUACK_EXTENSION={}", embedded.display());
