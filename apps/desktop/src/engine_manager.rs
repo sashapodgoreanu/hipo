@@ -621,11 +621,20 @@ mod runner_pin_tests {
     #[cfg(windows)]
     #[test]
     fn desktop_controller_registration_does_not_create_the_pool() {
-        let controller = DesktopRunnerController::new(Some(PathBuf::from("missing-sidecar.exe")));
+        let sidecar_dir = tempfile::tempdir().unwrap();
+        let sidecar = sidecar_dir.path().join("duckle-db-sidecar.exe");
+        std::fs::write(&sidecar, b"test-sidecar").unwrap();
+
+        let controller = DesktopRunnerController::new(Some(sidecar));
         let workspace = tempfile::tempdir().unwrap();
         let profile = RunnerResourcesProfile::default();
-        let official = controller.controller_for_workspace(workspace.path(), &profile);
-        assert!(official.is_none());
-        assert_eq!(controller.entry_point_class(), EntryPointClass::Production);
+        let official = controller
+            .controller_for_workspace(workspace.path(), &profile)
+            .expect("an existing staged sidecar registers a lazy controller");
+        drop(official);
+
+        let state = controller.state.lock().unwrap();
+        let registered = state.controllers.values().next().unwrap();
+        assert!(registered.pool.get().is_none());
     }
 }
