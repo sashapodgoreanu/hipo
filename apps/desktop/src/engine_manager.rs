@@ -1,13 +1,52 @@
 //! Engine installation manager and packaged Quack runner ownership.
 //!
-//! The existing installation implementation remains isolated in the base
-//! module. This wrapper owns the DuckDB/Quack pair metadata, performs offline
-//! checksum verification, and provides one lazy per-workspace controller.
+//! The existing optional-tool installation implementation remains isolated in
+//! the base module. DuckDB execution itself is packaged with the application;
+//! it is never downloaded as a CLI and is never selected at runtime.
 
 #[allow(dead_code)]
 #[path = "engine_manager_base.rs"]
 mod base;
 pub use base::*;
+
+/// Present the packaged DuckDB/Quack pair as the required installed engine.
+/// Optional tools such as llama.cpp continue to use the legacy installer.
+pub fn status(app_data: &Path) -> Vec<EngineStatus> {
+    let mut statuses = base::status(app_data);
+    statuses.retain(|status| status.id != "duckdb");
+    statuses.insert(
+        0,
+        EngineStatus {
+            id: "duckdb".into(),
+            name: "DuckDB / Quack".into(),
+            description: "Packaged database runner".into(),
+            required: true,
+            installed: true,
+            version: Some(DUCKDB_VERSION.into()),
+            target_version: DUCKDB_VERSION.into(),
+            outdated: false,
+            path: None,
+            available: true,
+        },
+    );
+    statuses
+}
+
+/// DuckDB is part of the application package. A stale frontend request to
+/// install it completes locally and never downloads or executes a CLI binary.
+pub fn install<F: FnMut(InstallProgress)>(
+    app_data: &Path,
+    engine_id: &str,
+    mut on_progress: F,
+) -> Result<String, String> {
+    if engine_id == "duckdb" {
+        let packaged = app_data.join("engines").join("db-sidecar");
+        let path = packaged.to_string_lossy().to_string();
+        on_progress(InstallProgress::Done { path: path.clone() });
+        return Ok(path);
+    }
+    base::install(app_data, engine_id, on_progress)
+}
 
 use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 use duckle_db_runner::model::{
@@ -516,6 +555,16 @@ mod runner_pin_tests {
         assert_eq!(pin.extension_file, "quack.duckdb_extension");
         assert_eq!(pin.quack_sha256.len(), 64);
         assert!(official_runner_pin_for("windows", "aarch64").is_none());
+    }
+
+    #[test]
+    fn packaged_database_runner_is_reported_installed() {
+        let app_data = tempfile::tempdir().unwrap();
+        let statuses = status(app_data.path());
+        let runner = statuses.iter().find(|status| status.id == "duckdb").unwrap();
+        assert!(runner.installed);
+        assert!(runner.required);
+        assert_eq!(runner.name, "DuckDB / Quack");
     }
 
     #[test]
