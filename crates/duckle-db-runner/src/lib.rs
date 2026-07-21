@@ -18,6 +18,7 @@ pub mod process_cleanup;
 pub mod resources;
 pub mod run_database;
 pub mod run_session;
+pub mod sidecar_diagnostics;
 pub mod worker_pool;
 
 #[cfg(windows)]
