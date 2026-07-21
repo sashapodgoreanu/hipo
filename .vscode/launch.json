@@ -2,6 +2,25 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Duckle: F5 desktop debug",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\target\\debug\\duckle.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}\\apps\\desktop",
+      "preLaunchTask": "Duckle: prepare F5 debug",
+      "environment": [
+        { "name": "RUST_BACKTRACE", "value": "full" },
+        {
+          "name": "RUST_LOG",
+          "value": "duckle_desktop=debug,duckle_duckdb_engine=trace,duckle_db_runner=trace,info"
+        },
+        { "name": "DUCKLE_DEBUG_RUNNER_ERRORS", "value": "1" }
+      ],
+      "stopAtEntry": false,
+      "externalConsole": false
+    },
+    {
       "name": "Duckle: attach desktop (run debug.ps1 first)",
       "type": "cppvsdbg",
       "request": "attach",
