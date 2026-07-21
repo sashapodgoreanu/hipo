@@ -27,9 +27,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<HeadlessController>>>> = OnceLock::new();
 
 /// Build a headless engine using the single controller owned by this workspace
-/// process. The legacy DuckDB path argument is ignored until the remaining CLI
-/// plumbing is physically removed from the caller signatures.
-pub(crate) fn engine_for_workspace(_legacy_duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
+/// process. No DuckDB executable path or runtime backend selector is accepted.
+pub(crate) fn engine_for_workspace(workspace: &Path) -> DuckdbEngine {
     let base = DuckdbEngine::new(PathBuf::new());
     let resources = workspace_resources(workspace);
     if let Err(error) = &resources {
@@ -111,14 +110,11 @@ fn sidecar_name() -> &'static str {
 fn resolve_sidecar_path() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let directory = executable.parent()?;
-    [
-        directory.join(sidecar_name()),
-        directory
-            .parent()
-            .map(|engines| engines.join("db-sidecar").join(sidecar_name()))?,
-    ]
-    .into_iter()
-    .find_map(absolute_existing_file)
+    let mut candidates = vec![directory.join(sidecar_name())];
+    if let Some(engines) = directory.parent() {
+        candidates.push(engines.join("db-sidecar").join(sidecar_name()));
+    }
+    candidates.into_iter().find_map(absolute_existing_file)
 }
 
 fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
@@ -272,7 +268,7 @@ mod tests {
 
     #[test]
     fn headless_engine_has_only_the_quack_route() {
-        let engine = engine_for_workspace(PathBuf::from("ignored"), Path::new("."));
+        let engine = engine_for_workspace(Path::new("."));
         assert_eq!(engine.execution_route(), ExecutionRoute::OfficialRunner);
     }
 
