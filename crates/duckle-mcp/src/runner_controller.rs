@@ -4,6 +4,7 @@
 //! individual tool calls receive fresh cancellation scopes. Every call uses the
 //! same packaged runner route as desktop, headless, and scheduler.
 
+use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 use duckle_db_runner::resources::{
@@ -24,17 +25,22 @@ use std::sync::{Arc, Mutex, OnceLock};
 static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<McpController>>>> =
     OnceLock::new();
 
-pub(crate) fn engine_for_workspace(_legacy_duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
+pub(crate) fn engine_for_workspace(_retired_duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
     let base = DuckdbEngine::new(PathBuf::new());
     let resources = workspace_resources(workspace);
     if let Err(error) = &resources {
         eprintln!("duckle-mcp: {error}");
     }
-    resources
+    let engine = resources
         .ok()
         .and_then(|resources| controller_for_workspace(workspace, &resources.requested))
         .map(|controller| base.with_official_runner_controller(controller))
-        .unwrap_or(base)
+        .unwrap_or(base);
+
+    // Fixed internal adapter for the old engine API. Runtime configuration
+    // cannot select a different backend.
+    engine
+        .with_runner_selection(EntryPointClass::Production, &CutoverGate::Approved)
         .for_new_run()
 }
 
