@@ -88,6 +88,7 @@ def absolutize_links(text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--binary", required=True, help="path to the built duckle-runner")
+    ap.add_argument("--mcp-binary", help="path to the built duckle-mcp (optional)")
     ap.add_argument("--platform", required=True, help="wheel platform tag")
     ap.add_argument("--outdir", default=os.path.join(HERE, "dist"))
     args = ap.parse_args()
@@ -103,7 +104,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         stage = os.path.join(tmp, "pkg")
         shutil.copytree(HERE, stage, ignore=shutil.ignore_patterns("dist", "build", "*.egg-info", "__pycache__"))
-        for stale in ("duckle-runner", "duckle-runner.exe"):
+        for stale in ("duckle-runner", "duckle-runner.exe", "duckle-mcp", "duckle-mcp.exe"):
             p = os.path.join(stage, "duckle", stale)
             if os.path.exists(p):
                 os.remove(p)
@@ -113,6 +114,19 @@ def main():
 
         size_mb = os.path.getsize(dest) / (1024 * 1024)
         print("staged {} ({:.1f} MB)".format(target_name, size_mb))
+
+        # The MCP server rides in the same package directory. It looks for
+        # duckle-runner beside itself, so shipping them together is what makes
+        # its build_pipeline tool work with no configuration.
+        if args.mcp_binary:
+            if not os.path.isfile(args.mcp_binary):
+                sys.exit("build_wheel: no such mcp binary: {}".format(args.mcp_binary))
+            mcp_name = "duckle-mcp.exe" if is_windows_tag else "duckle-mcp"
+            mcp_dest = os.path.join(stage, "duckle", mcp_name)
+            shutil.copyfile(args.mcp_binary, mcp_dest)
+            os.chmod(mcp_dest, 0o755)
+            print("staged {} ({:.1f} MB)".format(
+                mcp_name, os.path.getsize(mcp_dest) / (1024 * 1024)))
 
         # The package README is the PyPI page. It is written with absolute
         # URLs already, but run the rewriter anyway so a repo-relative link

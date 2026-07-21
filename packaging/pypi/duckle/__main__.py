@@ -16,16 +16,18 @@ import shutil
 import subprocess
 import sys
 
-_BIN_NAME = "duckle-runner.exe" if os.name == "nt" else "duckle-runner"
+_EXE = ".exe" if os.name == "nt" else ""
+_BIN_NAME = "duckle-runner" + _EXE
 
 
-def _binary_path():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _BIN_NAME)
+def _binary_path(stem="duckle-runner"):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), stem + _EXE)
     if not os.path.exists(path):
         sys.stderr.write(
-            "duckle: bundled runner not found at {}\n"
-            "This wheel appears to be built for a different platform.\n"
-            "Report at https://github.com/slothflowlabs/duckle/issues\n".format(path)
+            "duckle: bundled {} not found at {}\n"
+            "This wheel appears to be built for a different platform, or was built\n"
+            "without that binary.\n"
+            "Report at https://github.com/slothflowlabs/duckle/issues\n".format(stem, path)
         )
         raise SystemExit(2)
     return path
@@ -70,13 +72,13 @@ def _engine_env():
     return env
 
 
-def main():
-    binary = _binary_path()
-    # argv[0] is what the runner sees as its own name, and it renders help
-    # under that name. Passing the bundled binary's path would make a pip user
+def _exec(stem, default_name):
+    binary = _binary_path(stem)
+    # argv[0] is what the child sees as its own name, and the runner renders
+    # help under it. Passing the bundled binary's path would make a pip user
     # read "duckle-runner --pipeline ..." for a command they do not have, so
-    # pass the launcher's name (normally "duckle") instead.
-    invoked = os.path.splitext(os.path.basename(sys.argv[0]))[0] or "duckle"
+    # pass the launcher's name instead.
+    invoked = os.path.splitext(os.path.basename(sys.argv[0]))[0] or default_name
     argv = [invoked] + sys.argv[1:]
     env = _engine_env()
     if os.name == "nt":
@@ -89,6 +91,22 @@ def main():
     # execve already takes the binary separately from argv, so argv[0] is
     # free to be the friendly name.
     os.execve(binary, argv, env)
+
+
+def main():
+    _exec("duckle-runner", "duckle")
+
+
+def mcp_main():
+    """Entry point for the `duckle-mcp` console script.
+
+    A stdio JSON-RPC MCP server: an MCP client spawns it and talks over
+    stdin/stdout, so this must not print anything of its own. It resolves the
+    DuckDB engine exactly like the runner does, and finds duckle-runner (which
+    build_pipeline shells out to) by looking beside itself, which is satisfied
+    because both binaries ship in this package directory.
+    """
+    _exec("duckle-mcp", "duckle-mcp")
 
 
 if __name__ == "__main__":

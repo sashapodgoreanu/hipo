@@ -36,10 +36,15 @@ Issues = "https://github.com/slothflowlabs/duckle/issues"
 
 [project.scripts]
 duckle = "duckle.__main__:main"
+# The MCP server, so `pip install duckle` also gives an AI agent a governed
+# way to author, validate, run and trace pipelines. It sits beside the runner
+# in the same package directory, which is one of the places it already looks
+# for duckle-runner, so build_pipeline works with no configuration.
+duckle-mcp = "duckle.__main__:mcp_main"
 
 [tool.setuptools]
 packages = ["duckle"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-duckle = ["duckle-runner", "duckle-runner.exe"]
+duckle = ["duckle-runner", "duckle-runner.exe", "duckle-mcp", "duckle-mcp.exe"]
