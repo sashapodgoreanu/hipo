@@ -6,20 +6,24 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/slothflowlabs/duckle/blob/main/LICENSE)
 [![GitHub](https://img.shields.io/github/stars/slothflowlabs/duckle?style=social)](https://github.com/slothflowlabs/duckle)
 
+## Build your first pipeline
+
+Paste this into Claude Code, Cursor, or Codex. The agent does the rest.
+
+> Run `uvx duckle quickstart` to build my first data pipeline and run it, then add duckle as an MCP server with `claude mcp add duckle -- uvx duckle mcp` so you can build more.
+
+Nothing to install first. The agent fetches Duckle and the DuckDB engine on demand, runs a real pipeline, shows you the rows, and then has 19 tools for building the next one.
+
+Prefer to drive it yourself:
+
 ```sh
-pip install duckle
-duckle quickstart
+uvx duckle quickstart      # no install
+pip install duckle         # or install it
 ```
 
 <img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-install.svg" alt="Terminal: pip install duckle then duckle quickstart, which scaffolds sample data and a pipeline, runs it, and prints the resulting rows" width="660"/>
 
 `quickstart` scaffolds sample data and a pipeline, runs it, and shows you the rows. One command from nothing to a result, because the engine ships in the install: a ~20 MB native binary plus the DuckDB CLI. No JVM, no Docker, no server, no account.
-
-No install at all, if you have [uv](https://docs.astral.sh/uv/):
-
-```sh
-uvx duckle@latest quickstart
-```
 
 ---
 

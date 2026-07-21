@@ -473,6 +473,14 @@ Pick the binary for your OS from the [latest release](https://github.com/slothfl
 
 The single-file binary above is all you need for **Build Pipeline** too: the headless runner is embedded into the app at build time, and exporting a pipeline produces ONE self-contained executable (the engine, the DuckDB CLI, any needed extensions, and the resolved pipeline are all inside that one file). Copy that single file to your server and run or schedule it - no separate runner download required.
 
+### Let an agent do it
+
+Paste this into Claude Code, Cursor, or Codex:
+
+> Run `uvx duckle quickstart` to build my first data pipeline and run it, then add duckle as an MCP server with `claude mcp add duckle -- uvx duckle mcp` so you can build more.
+
+Nothing to install first. The agent fetches Duckle and the DuckDB engine on demand, runs a real pipeline, shows you the rows, and then has 19 tools for the next one.
+
 ### CLI only (CI, cron, containers)
 
 If you do not want the desktop studio, install just the headless runner. It is about 20 MB rather than ~100 MB, has no GUI dependency, and is what a build step actually needs.
