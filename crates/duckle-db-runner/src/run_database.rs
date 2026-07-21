@@ -155,6 +155,16 @@ impl QuackTransport {
     }
 }
 
+#[cfg(debug_assertions)]
+fn debug_duckdb_error(operation: &str, error: &duckdb::Error) {
+    if std::env::var("DUCKLE_DEBUG_RUNNER_ERRORS").as_deref() == Ok("1") {
+        eprintln!("[duckle-runner-debug] {operation}: {error}");
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_duckdb_error(_operation: &str, _error: &duckdb::Error) {}
+
 impl RunDatabaseTransport for QuackTransport {
     fn execute_batch(
         &self,
@@ -167,10 +177,16 @@ impl RunDatabaseTransport for QuackTransport {
                 return Err(RunnerFailureReason::Cancelled);
             }
             let query = format!("SELECT count(*)::BIGINT FROM ({})", self.remote_relation(statement));
-            let count: i64 = self
+            let count: i64 = match self
                 .connection()?
                 .query_row(&query, [], |row| row.get(0))
-                .map_err(|_| RunnerFailureReason::RunnerCrashed)?;
+            {
+                Ok(count) => count,
+                Err(error) => {
+                    debug_duckdb_error("execute_batch.query_row", &error);
+                    return Err(RunnerFailureReason::RunnerCrashed);
+                }
+            };
             rows = rows.saturating_add(count.max(0) as u64);
         }
         Ok(SqlBatchResult {
@@ -194,20 +210,35 @@ impl RunDatabaseTransport for QuackTransport {
             limit.saturating_add(1)
         );
         let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(&query)
-            .map_err(|_| RunnerFailureReason::RunnerCrashed)?;
+        let mut statement = match connection.prepare(&query) {
+            Ok(statement) => statement,
+            Err(error) => {
+                debug_duckdb_error("preview.prepare", &error);
+                return Err(RunnerFailureReason::RunnerCrashed);
+            }
+        };
         let columns = (0..statement.column_count())
             .map(|index| statement.column_name(index).map_or("?", String::as_str).to_string())
             .collect::<Vec<_>>();
-        let mut result_rows = statement
-            .query([])
-            .map_err(|_| RunnerFailureReason::RunnerCrashed)?;
+        let mut result_rows = match statement.query([]) {
+            Ok(rows) => rows,
+            Err(error) => {
+                debug_duckdb_error("preview.query", &error);
+                return Err(RunnerFailureReason::RunnerCrashed);
+            }
+        };
         let mut rows = Vec::new();
-        while let Some(row) = result_rows
-            .next()
-            .map_err(|_| RunnerFailureReason::RunnerCrashed)?
-        {
+        loop {
+            let next = match result_rows.next() {
+                Ok(next) => next,
+                Err(error) => {
+                    debug_duckdb_error("preview.next", &error);
+                    return Err(RunnerFailureReason::RunnerCrashed);
+                }
+            };
+            let Some(row) = next else {
+                break;
+            };
             if cancellation.is_cancelled() {
                 return Err(RunnerFailureReason::Cancelled);
             }
@@ -221,9 +252,13 @@ impl RunDatabaseTransport for QuackTransport {
             }
             let mut values = BTreeMap::new();
             for (index, column) in columns.iter().enumerate() {
-                let value = row
-                    .get_ref(index)
-                    .map_err(|_| RunnerFailureReason::RunnerCrashed)?;
+                let value = match row.get_ref(index) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        debug_duckdb_error("preview.get_ref", &error);
+                        return Err(RunnerFailureReason::RunnerCrashed);
+                    }
+                };
                 values.insert(column.clone(), value_to_json(value));
             }
             rows.push(values);
