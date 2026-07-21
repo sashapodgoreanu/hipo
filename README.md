@@ -485,7 +485,7 @@ uvx duckle quickstart
 
 Paste this into Claude Code, Cursor, or Codex:
 
-> Run `uvx duckle@latest quickstart` to build my first pipeline and run it
+> Run `uvx duckle quickstart` to build my first pipeline and run it
 
 Nothing to install first. The agent fetches Duckle and the DuckDB engine on demand, runs a real pipeline, and shows you the rows.
 
