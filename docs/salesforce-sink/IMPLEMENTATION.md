@@ -193,12 +193,46 @@ implementation lost exactly this (empty success file on a completed 210k-row
 job, found live) - so the result fetch uses `into_reader()` and streams to the
 results file without ever buffering the body.
 
+## Bulk API 2.0 query source (`src.salesforce.bulk`)
+
+The read half of migration-scale: a SOQL statement runs as an **async query
+job** (`POST /jobs/query`, `operation: query|queryAll` - queryAll includes
+deleted and archived records), the same shared poller drives it to
+`JobComplete` (cancellable, configurable `pollIntervalSecs`/`timeoutSecs`,
+abort on timeout), and the paged CSV result sets stream to a private staging
+file that DuckDB `read_csv`s into the node's table - so a multi-GB result set
+never lands in memory on either leg.
+
+**Pagination.** Result pages walk `GET /jobs/query/{id}/results` with an
+optional `maxRecords` page size. The next page's handle arrives in the
+`Sforce-Locator` response header; the last page is signalled by the **literal
+string `"null"`** in that header, not by its absence. Pages append through the
+same per-file-header logic as the sink's result files, so the staging file
+carries exactly one header.
+
+**Typed empty results (#170).** A 0-record query with a declared node schema
+materializes a typed empty relation (`materialize_empty_result`); without a
+schema it fails with a clear source-level error rather than the bare `json`
+column of old. With rows and a declared schema, the columns are pinned via
+`all_varchar` + `TRY_CAST` (a stray unparseable cell becomes NULL rather than
+failing the load); without one, `read_csv` inference applies.
+
+**SOQL restrictions.** Bulk 2.0 queries reject GROUP BY, OFFSET, TYPEOF,
+aggregates and parent-to-child subqueries at job creation; compound fields
+must be queried by component. The API's own message surfaces in the run error
+(`MALFORMED_QUERY: ...`).
+
+**Auth.** Identical to `snk.salesforce.bulk` - the sink-shaped keys
+(`authMode`/`instanceUrl`/`accessToken`, client-credentials mint per run,
+saved-connection resolution) - NOT the REST-form `src.salesforce`'s
+`authType`/`authToken`.
+
 ## Remaining work
 
 Tier 1 and Tier 2 are complete (see Status). What's left is follow-up:
 
 1. **Salesforce auth: OAuth Client-Credentials** - *shipped (#166).* Both `src.salesforce` and both sinks offer a client-credentials `authMode`: the engine mints a fresh short-lived token per run from `clientId`/`clientSecret`/`loginUrl` (`{loginUrl}/services/oauth2/token`) instead of a pasted ~2h Bearer token. A saved encrypted Salesforce connection kind also shipped (#166 stage 2, `duckle-secrets`). Follow-up: JWT-bearer + 401-retry/refresh.
-2. **Bulk query source** - `src.salesforce.bulk` (create query job → poll → walk `Sforce-Locator` result pages → typed relation). A follow-up PR; the `duckle-secrets` gate already recognises the source id.
+2. **Bulk query source** - *shipped.* `src.salesforce.bulk` (see the section above).
 3. **Tier 3** - reject/error output stream (*partially shipped as `resultsPath` success/error files - #166; a first-class reject output port remains*), parent→child ID remapping, external-Id relationship resolution, compound fields (Address/Location), API-limit retry/backoff.
 
 ## Contribution checklist (per CONTRIBUTING.md)

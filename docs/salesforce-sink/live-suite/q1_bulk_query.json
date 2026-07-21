@@ -1,0 +1,95 @@
+{
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "source",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "label": "SF bulk query",
+        "componentId": "src.salesforce.bulk",
+        "properties": {
+          "connectionRef": "sf-live",
+          "apiVersion": "v60.0",
+          "query": "SELECT Id, Name, External_ID__c FROM Account WHERE External_ID__c LIKE 'BULK-%' ORDER BY External_ID__c",
+          "operation": "query",
+          "pollIntervalSecs": 2,
+          "timeoutSecs": 600
+        },
+        "schema": [
+          {
+            "name": "Id",
+            "type": "string",
+            "nullable": true
+          },
+          {
+            "name": "Name",
+            "type": "string",
+            "nullable": true
+          },
+          {
+            "name": "External_ID__c",
+            "type": "string",
+            "nullable": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "n2",
+      "type": "transform",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "data": {
+        "label": "order",
+        "componentId": "code.sql",
+        "properties": {
+          "sql": "SELECT Id, Name, External_ID__c FROM input ORDER BY External_ID__c"
+        }
+      }
+    },
+    {
+      "id": "n3",
+      "type": "sink",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "data": {
+        "label": "csv",
+        "componentId": "snk.csv",
+        "properties": {
+          "path": "${workspace}/out/bulk_query.csv",
+          "mode": "overwrite",
+          "hasHeader": true
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "n1",
+      "target": "n2",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    },
+    {
+      "id": "e2",
+      "source": "n2",
+      "target": "n3",
+      "sourceHandle": "main",
+      "targetHandle": "main",
+      "data": {
+        "connectionType": "main"
+      }
+    }
+  ]
+}

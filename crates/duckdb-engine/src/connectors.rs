@@ -810,7 +810,13 @@ impl DuckdbEngine {
                 return Err(e);
             }
 
-            let status = match self.bulk_poll_ingest_job(&ingest_base, &job_id, &auth_header, spec)
+            let status = match self.bulk_poll_job(
+                &ingest_base,
+                &job_id,
+                &auth_header,
+                spec.poll_interval_secs,
+                spec.timeout_secs,
+            )
             {
                 Ok(s) => s,
                 Err(e) => {
@@ -894,6 +900,235 @@ impl DuckdbEngine {
             succeeded,
             total_failed,
             job_ids.len()
+        ))
+    }
+
+    /// src.salesforce.bulk: read a SOQL result set through a Bulk API 2.0 query
+    /// job. Create job -> poll to JobComplete -> walk the paged CSV result sets
+    /// (Sforce-Locator) into a staging file -> read_csv materializes it as the
+    /// node's table. The result pages stream to disk, so a multi-GB result set
+    /// never lands in memory; only DuckDB's own reader touches the full file.
+    pub(crate) fn run_salesforce_bulk_source(
+        &self,
+        db: &Path,
+        spec: &SalesforceBulkSourceSpec,
+    ) -> Result<String, EngineError> {
+        let (access_token, instance_url) = match &spec.oauth {
+            Some(o) => {
+                let (tok, minted_instance) = mint_oauth_token(o)?;
+                let instance = if !minted_instance.is_empty() {
+                    minted_instance
+                } else if !spec.instance_url.is_empty() {
+                    spec.instance_url.clone()
+                } else {
+                    return Err(EngineError::Config(
+                        "salesforce bulk: OAuth token response carried no instance_url and no \
+                         instanceUrl was configured"
+                            .into(),
+                    ));
+                };
+                (tok, instance)
+            }
+            None => (spec.access_token.clone(), spec.instance_url.clone()),
+        };
+        let auth_header = format!("Bearer {}", access_token);
+        let query_base = format!(
+            "{}/services/data/{}/jobs/query",
+            instance_url.trim_end_matches('/'),
+            spec.api_version
+        );
+
+        // Same private staging pattern as the sink: the result set is org data,
+        // so the dir is owner-only on Unix, and ScopedDir removes it on every
+        // exit path. pid + process-local counter keeps concurrent stages apart.
+        static BULKQ_DIR_SEQ: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let seq = BULKQ_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let staging_dir = std::env::temp_dir().join(format!(
+            "duckle-sfbulkq-{}-{}",
+            std::process::id(),
+            seq
+        ));
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        let _cleanup = ScopedDir(staging_dir.clone());
+        create_private_dir(&staging_dir).map_err(|e| {
+            EngineError::Other(format!("salesforce bulk: creating staging dir: {}", e))
+        })?;
+        let result_path = staging_dir.join("result.csv");
+
+        // Create the query job. Salesforce validates the SOQL here, so an
+        // unsupported construct (GROUP BY, aggregate, parent-to-child subquery)
+        // fails fast with the API's own message.
+        let body = serde_json::json!({
+            "operation": spec.operation,
+            "query": spec.query,
+            "contentType": "CSV",
+            "columnDelimiter": "COMMA",
+            "lineEnding": "LF",
+        });
+        let resp = crate::tls::http_agent()
+            .post(&query_base)
+            .set("Authorization", &auth_header)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json")
+            .send_string(&body.to_string());
+        let txt = bulk_read_body(resp, &query_base, "create query job")?;
+        let v: JsonValue = serde_json::from_str(&txt).map_err(|e| {
+            EngineError::Query(format!(
+                "salesforce bulk: create query job: non-JSON response ({}): {}",
+                e,
+                tail_chars(&txt, 200)
+            ))
+        })?;
+        let job_id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Query(format!(
+                    "salesforce bulk: create query job: response carried no job id: {}",
+                    tail_chars(&txt, 200)
+                ))
+            })?
+            .to_string();
+
+        let status = match self.bulk_poll_job(
+            &query_base,
+            &job_id,
+            &auth_header,
+            spec.poll_interval_secs,
+            spec.timeout_secs,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = self.bulk_abort_job(&query_base, &job_id, &auth_header);
+                return Err(e);
+            }
+        };
+        if status.state != "JobComplete" {
+            return Err(EngineError::Query(format!(
+                "salesforce bulk {}: query job {} ended {}{}",
+                spec.operation,
+                job_id,
+                status.state,
+                if status.error_message.is_empty() {
+                    String::new()
+                } else {
+                    format!(" - {}", status.error_message)
+                }
+            )));
+        }
+
+        // Walk the paged result sets. Each page streams to the staging file;
+        // append_bulk_result_csv keeps the first page's header and strips later
+        // ones. The last page is signalled by the LITERAL STRING "null" in the
+        // Sforce-Locator header - not an absent header - a documented sharp
+        // edge of the API.
+        let mut total_rows: u64 = 0;
+        let mut locator: Option<String> = None;
+        loop {
+            self.check_cancelled()?;
+            let mut url = format!("{}/{}/results", query_base, job_id);
+            let mut sep = '?';
+            if let Some(n) = spec.max_records {
+                url.push_str(&format!("{}maxRecords={}", sep, n));
+                sep = '&';
+            }
+            if let Some(loc) = &locator {
+                url.push_str(&format!("{}locator={}", sep, loc));
+            }
+            let resp = crate::tls::http_agent()
+                .get(&url)
+                .set("Authorization", &auth_header)
+                .set("Accept", "text/csv")
+                .call();
+            let resp = match resp {
+                Ok(r) => r,
+                Err(ureq::Error::Status(code, r)) => {
+                    let body = r.into_string().unwrap_or_default();
+                    return Err(EngineError::Query(format!(
+                        "salesforce bulk: fetch query results: HTTP {}: {}",
+                        code,
+                        tail_chars(&body, 300)
+                    )));
+                }
+                Err(e) => {
+                    return Err(EngineError::Query(format!(
+                        "salesforce bulk: fetch query results: {}",
+                        e
+                    )))
+                }
+            };
+            total_rows += resp
+                .header("Sforce-NumberOfRecords")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let next = resp.header("Sforce-Locator").map(|s| s.to_string());
+            append_bulk_result_csv(&result_path, resp.into_reader()).map_err(|e| {
+                EngineError::Other(format!(
+                    "salesforce bulk: writing {}: {}",
+                    result_path.display(),
+                    e
+                ))
+            })?;
+            match next.as_deref() {
+                Some("null") | Some("") | None => break,
+                Some(loc) => locator = Some(loc.to_string()),
+            }
+        }
+
+        if total_rows == 0 {
+            // The #170 contract: a 0-record query must yield a typed empty
+            // relation (or a clear error when no schema is declared), never a
+            // bare `json` column downstream SQL can't bind.
+            crate::materialize_empty_result(
+                self.binary(),
+                db,
+                &spec.node_id,
+                spec.declared_schema.as_deref(),
+            )?;
+            return Ok(format!(
+                "salesforce bulk {}: 0 rows (typed empty relation)",
+                spec.operation
+            ));
+        }
+
+        // DuckDB reads the staged CSV straight into the node's table. With a
+        // declared schema the columns are pinned to those names and types
+        // (all_varchar + TRY_CAST, so a stray unparseable cell becomes NULL
+        // rather than failing a multi-GB load); without one, read_csv infers.
+        let csv_target = sql_escape(&result_path.to_string_lossy().replace('\\', "/"));
+        let create_sql = match spec.declared_schema.as_deref() {
+            Some(cols) if !cols.is_empty() => {
+                let select_list = cols
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "TRY_CAST({col} AS {ty}) AS {col}",
+                            col = plan::quote_ident(&c.name),
+                            ty = plan::data_type_to_duckdb_sql(&c.data_type)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "CREATE OR REPLACE TABLE {} AS SELECT {} FROM read_csv('{}', header=true, all_varchar=true);",
+                    plan::quote_ident(&spec.node_id),
+                    select_list,
+                    csv_target
+                )
+            }
+            _ => format!(
+                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_csv('{}', header=true);",
+                plan::quote_ident(&spec.node_id),
+                csv_target
+            ),
+        };
+        self.run(Some(db), &create_sql, false)?;
+
+        Ok(format!(
+            "salesforce bulk {}: {} rows via job {}",
+            spec.operation, total_rows, job_id
         ))
     }
 
@@ -981,17 +1216,18 @@ impl DuckdbEngine {
     /// Poll a job until it reaches a terminal state, or the configured timeout
     /// elapses. Checks cancellation every iteration (unlike the Snowflake /
     /// Databricks pollers) because a Bulk job can legitimately run for hours.
-    fn bulk_poll_ingest_job(
+    fn bulk_poll_job(
         &self,
-        ingest_base: &str,
+        jobs_base: &str,
         job_id: &str,
         auth_header: &str,
-        spec: &SalesforceBulkSinkSpec,
+        poll_interval_secs: u64,
+        timeout_secs: u64,
     ) -> Result<BulkJobStatus, EngineError> {
-        let url = format!("{}/{}", ingest_base, job_id);
+        let url = format!("{}/{}", jobs_base, job_id);
         let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(spec.timeout_secs);
-        let interval = std::time::Duration::from_secs(spec.poll_interval_secs);
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let interval = std::time::Duration::from_secs(poll_interval_secs);
         loop {
             self.check_cancelled()?;
             let resp = crate::tls::http_agent()
@@ -1033,7 +1269,7 @@ impl DuckdbEngine {
             if start.elapsed() >= timeout {
                 return Err(EngineError::Query(format!(
                     "salesforce bulk: job {} did not finish within {}s (last state '{}')",
-                    job_id, spec.timeout_secs, state
+                    job_id, timeout_secs, state
                 )));
             }
             std::thread::sleep(interval);

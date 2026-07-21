@@ -18,6 +18,7 @@ stage 2 plus the Tier-1 write paths:
 | b2 | `b2_bulk_upsert.json` | bulk **upsert** by `External_ID__c` (overwrites one row, creates another; results csv shows `sf__Created` true+false) |
 | b5 | `b5_bulk_badid.json` | a failed record with **no `resultsPath`** — the sampled `sf__Error` must appear in the run error itself |
 | b3 | `b3_bulk_delete.json` | bulk **delete** by retrieved Ids; org left clean (`b4_bulk_retrieve.json` is the BULK-\* re-read) |
+| q1/q2 | `q1_bulk_query.json` | **`src.salesforce.bulk`**: the SOQL runs as an async query job, paged CSV result sets stream via `Sforce-Locator`; run once with rows (4) and once on the clean org, where the declared schema must yield a typed empty relation (#170) |
 
 All suite records carry `External_ID__c = SUITE-*` (Collections steps) or
 `BULK-*` (Bulk steps); the delete steps and a final cleanup remove them, so

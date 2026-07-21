@@ -6154,6 +6154,71 @@ export function synthesizeManifest(componentId: string): ComponentManifest | und
     return manifest;
 }
 
+// src.salesforce.bulk: Bulk API 2.0 query source. Auth mirrors
+// snk.salesforce.bulk (authMode / instanceUrl / accessToken - the sink-shaped
+// keys, NOT src.salesforce's REST-form authType/authToken), which is what the
+// saved-connection resolution injects for both Bulk nodes.
+function synthSalesforceBulkSource(comp: ComponentDef): ComponentManifest {
+    return base(comp, [
+        {
+            label: 'Salesforce org',
+            fields: [
+                salesforceConnectionRefField(),
+                {
+                    key: 'authMode',
+                    label: 'Auth mode',
+                    kind: 'select',
+                    defaultValue: 'bearer',
+                    options: [
+                        { label: 'Bearer token (paste / refresh manually)', value: 'bearer' },
+                        { label: 'OAuth 2.0 Client Credentials (mint per run)', value: 'clientCredentials' },
+                    ],
+                    description: 'Client Credentials mints a fresh short-lived token each run from a connected app, so you stop pasting an expiring token (#166).',
+                    visibleWhen: [whenNoConnection()],
+                },
+                { key: 'instanceUrl', label: 'Instance URL', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Org base URL (no trailing slash).', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'bearer' }] },
+                { key: 'accessToken', label: 'Access token', kind: 'text', secret: true, placeholder: '${ENV:SF_TOKEN}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'bearer' }] },
+                { key: 'loginUrl', label: 'Login URL', kind: 'text', placeholder: 'https://acme.my.salesforce.com', description: 'Your My Domain base. POSTs the client-credentials grant to {loginUrl}/services/oauth2/token.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                { key: 'clientId', label: 'Client ID', kind: 'text', placeholder: 'Connected app consumer key', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                { key: 'clientSecret', label: 'Client secret', kind: 'text', secret: true, placeholder: '${ENV:SF_CLIENT_SECRET}', description: 'Use ${ENV:...} so no secret lands in the pipeline JSON.', visibleWhen: [whenNoConnection(), { key: 'authMode', equals: 'clientCredentials' }] },
+                { key: 'apiVersion', label: 'API version', kind: 'text', defaultValue: 'v60.0' },
+            ],
+        },
+        {
+            label: 'Query',
+            fields: [
+                {
+                    key: 'query',
+                    label: 'SOQL query',
+                    kind: 'textarea',
+                    rows: 4,
+                    required: true,
+                    placeholder: 'SELECT Id, Name FROM Account',
+                    description: 'Bulk 2.0 queries do not support GROUP BY, OFFSET, aggregates, or parent-to-child subqueries; compound fields must be queried by component. Salesforce rejects those at job creation.',
+                },
+                {
+                    key: 'operation',
+                    label: 'Operation',
+                    kind: 'select',
+                    defaultValue: 'query',
+                    options: [
+                        { label: 'Query (non-deleted records)', value: 'query' },
+                        { label: 'Query all (includes deleted / archived)', value: 'queryAll' },
+                    ],
+                },
+                { key: 'maxRecords', label: 'Page size (maxRecords)', kind: 'integer', placeholder: 'server default', description: 'Records per result-set fetch. Pages are walked via Sforce-Locator either way; this only tunes round-trip granularity.' },
+            ],
+        },
+        {
+            label: 'Bulk job',
+            fields: [
+                { key: 'pollIntervalSecs', label: 'Poll interval (s)', kind: 'integer', defaultValue: 5, description: 'Seconds between job-status checks.' },
+                { key: 'timeoutSecs', label: 'Job timeout (s)', kind: 'integer', defaultValue: 3600, description: 'Give up and abort the query job after this long.' },
+            ],
+        },
+    ], 'declared');
+}
+
 function dispatchManifest(componentId: string): ComponentManifest | undefined {
     const entry = findPaletteEntry(componentId);
     if (!entry) return undefined;
@@ -6167,6 +6232,10 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     if (componentId === 'src.webhook') return synthWebhookSource(comp);
 
     // Sources
+    // src.salesforce.bulk lives in the saas.crm group but is NOT a REST-form
+    // source (it drives the Bulk API 2.0 query-job lifecycle with the
+    // sink-shaped auth keys); route by id ahead of the group checks.
+    if (comp.id === 'src.salesforce.bulk') return synthSalesforceBulkSource(comp);
     if (groupId === 'src.files') return synthFileSource(comp);
     if (groupId === 'src.lakehouse') return synthLakehouseSource(comp);
     if (groupId === 'snk.lakehouse') return synthLakehouseSink(comp);
