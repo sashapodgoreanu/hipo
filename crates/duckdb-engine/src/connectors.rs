@@ -1077,7 +1077,25 @@ impl DuckdbEngine {
             }
         }
 
-        if total_rows == 0 {
+        // Emptiness is decided by what was actually staged, not by
+        // Sforce-NumberOfRecords alone. That header is optional and
+        // non-standard: an egress proxy or gateway that strips or rewrites
+        // Sforce-* headers makes `total_rows` stay 0 through `unwrap_or(0)`
+        // even though every page's CSV was streamed to disk, and taking the
+        // empty branch there would discard a complete multi-GB extract and
+        // report the run as a successful 0-row read. A silent wrong answer is
+        // the one outcome a migration source must never produce, so the file
+        // is the authority and the header is only a fast path.
+        let staged_has_rows = result_csv_has_data_rows(&result_path);
+        if total_rows == 0 && staged_has_rows {
+            eprintln!(
+                "salesforce bulk: Sforce-NumberOfRecords was missing or unparseable on every \
+                 page, but {} contains data rows; reading the staged file rather than \
+                 reporting an empty result",
+                result_path.display()
+            );
+        }
+        if total_rows == 0 && !staged_has_rows {
             // The #170 contract: a 0-record query must yield a typed empty
             // relation (or a clear error when no schema is declared), never a
             // bare `json` column downstream SQL can't bind.
@@ -10456,6 +10474,41 @@ fn bulk_read_body(
     }
 }
 
+/// Whether a staged Bulk result CSV holds at least one data row, i.e. any
+/// non-blank content beyond the header line.
+///
+/// This is the authority on whether a query returned records. The
+/// Sforce-NumberOfRecords response header is optional and non-standard, so a
+/// proxy that strips it would otherwise make a fully staged extract look empty.
+/// Reads only as far as the first data byte after the header, so it costs
+/// nothing on a multi-GB file.
+fn result_csv_has_data_rows(path: &Path) -> bool {
+    use std::io::BufRead;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false, // never created: nothing was fetched
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = String::new();
+    // Header.
+    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+        return false;
+    }
+    // First non-blank line after it.
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => return false,
+            Ok(_) => {
+                if !line.trim().is_empty() {
+                    return true;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
 /// Append one job's CSV result set to a per-run file, streaming - a result set
 /// can be ~100 MB, so it is never buffered whole. The first body written to a
 /// given file keeps its whole content (header + rows); every later body strips
@@ -11152,8 +11205,57 @@ mod context_var_tests {
 #[cfg(test)]
 mod salesforce_bulk_tests {
     use super::{
-        append_bulk_result_csv, BULK_SPLIT_TARGET_BYTES, BULK_UPLOAD_MAX_BYTES,
+        append_bulk_result_csv, result_csv_has_data_rows, BULK_SPLIT_TARGET_BYTES,
+        BULK_UPLOAD_MAX_BYTES,
     };
+
+    /// The Bulk query source decided emptiness from the optional
+    /// Sforce-NumberOfRecords header alone, defaulted to 0. A proxy that
+    /// strips the non-standard Sforce-* headers therefore made a fully staged
+    /// extract look empty, and the run discarded it and reported success with
+    /// 0 rows. The staged file is now the authority, so these pin what it
+    /// reports.
+    #[test]
+    fn staged_csv_row_detection_drives_the_empty_decision() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A real result set: header plus rows.
+        let with_rows = dir.path().join("with_rows.csv");
+        std::fs::write(&with_rows, "Id,Name
+001,Acme
+002,Globex
+").unwrap();
+        assert!(result_csv_has_data_rows(&with_rows));
+
+        // A genuinely empty result: header only. This must stay the typed
+        // empty-relation path (#170).
+        let header_only = dir.path().join("header_only.csv");
+        std::fs::write(&header_only, "Id,Name
+").unwrap();
+        assert!(!result_csv_has_data_rows(&header_only));
+
+        // Header with only trailing blank lines is still empty.
+        let blank_tail = dir.path().join("blank_tail.csv");
+        std::fs::write(&blank_tail, "Id,Name
+
+
+").unwrap();
+        assert!(!result_csv_has_data_rows(&blank_tail));
+
+        // A single row with no trailing newline still counts.
+        let no_trailing_nl = dir.path().join("no_nl.csv");
+        std::fs::write(&no_trailing_nl, "Id,Name
+001,Acme").unwrap();
+        assert!(result_csv_has_data_rows(&no_trailing_nl));
+
+        // Nothing fetched at all: the file was never created.
+        assert!(!result_csv_has_data_rows(&dir.path().join("missing.csv")));
+
+        // Zero-length file (created but nothing written).
+        let empty = dir.path().join("empty.csv");
+        std::fs::write(&empty, "").unwrap();
+        assert!(!result_csv_has_data_rows(&empty));
+    }
 
     #[test]
     fn split_target_leaves_headroom_under_the_upload_ceiling() {
