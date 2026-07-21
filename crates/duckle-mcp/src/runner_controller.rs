@@ -1,11 +1,9 @@
-//! Workspace-owned official runner adapter for MCP pipeline execution.
+//! Workspace-owned Quack runner adapter for MCP pipeline execution.
 //!
 //! The MCP process is long-lived, so controllers are cached by workspace while
-//! individual tool calls receive fresh cancellation scopes. Provisioning stays
-//! lazy and production remains on compatibility until packaged CutoverEvidence
-//! approves cutover.
+//! individual tool calls receive fresh cancellation scopes. Every call uses the
+//! same packaged runner route as desktop, headless, and scheduler.
 
-use duckle_db_runner::cutover::{configured_entry_point_class, packaged_cutover_gate};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 use duckle_db_runner::resources::{
@@ -23,25 +21,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(windows)]
-static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<LazyMcpController>>>> =
+static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<McpController>>>> =
     OnceLock::new();
 
-pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
-    let base = DuckdbEngine::new(duckdb);
+pub(crate) fn engine_for_workspace(_legacy_duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
+    let base = DuckdbEngine::new(PathBuf::new());
     let resources = workspace_resources(workspace);
     if let Err(error) = &resources {
         eprintln!("duckle-mcp: {error}");
     }
-    let with_controller = resources
+    resources
         .ok()
         .and_then(|resources| controller_for_workspace(workspace, &resources.requested))
         .map(|controller| base.with_official_runner_controller(controller))
-        .unwrap_or(base);
-    with_controller
-        .with_runner_selection(
-            configured_entry_point_class(),
-            &packaged_cutover_gate(),
-        )
+        .unwrap_or(base)
         .for_new_run()
 }
 
@@ -74,7 +67,7 @@ fn controller_for_workspace(
         return Some(existing);
     }
 
-    let controller = Arc::new(LazyMcpController::new(sidecar_path, profile.clone()));
+    let controller = Arc::new(McpController::new(sidecar_path, profile.clone()));
     let mut registry = controllers
         .lock()
         .expect("MCP controller registry poisoned");
@@ -105,19 +98,16 @@ fn sidecar_name() -> &'static str {
 }
 
 fn resolve_sidecar_path() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("DUCKLE_DB_SIDECAR_BIN") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(directory) = executable.parent() {
-            candidates.push(directory.join(sidecar_name()));
-            if let Some(app_data) = directory.parent() {
-                candidates.push(app_data.join("engines").join("db-sidecar").join(sidecar_name()));
-            }
-        }
-    }
-    candidates.into_iter().find_map(absolute_existing_file)
+    let executable = std::env::current_exe().ok()?;
+    let directory = executable.parent()?;
+    [
+        directory.join(sidecar_name()),
+        directory
+            .parent()
+            .map(|app_data| app_data.join("engines").join("db-sidecar").join(sidecar_name()))?,
+    ]
+    .into_iter()
+    .find_map(absolute_existing_file)
 }
 
 fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
@@ -133,14 +123,14 @@ fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-struct LazyMcpController {
+struct McpController {
     sidecar_path: PathBuf,
     requested_profile: Mutex<RunnerResourcesProfile>,
     pool: OnceLock<Result<Arc<WorkerPoolControl>, RunnerFailureReason>>,
 }
 
 #[cfg(windows)]
-impl LazyMcpController {
+impl McpController {
     fn new(sidecar_path: PathBuf, requested_profile: RunnerResourcesProfile) -> Self {
         Self {
             sidecar_path,
@@ -202,7 +192,7 @@ impl LazyMcpController {
 }
 
 #[cfg(windows)]
-impl OfficialRunnerController for LazyMcpController {
+impl OfficialRunnerController for McpController {
     fn acquire(
         &self,
         run_id: RunId,
@@ -284,9 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn mcp_production_route_stays_compatible_before_cutover() {
-        let engine = engine_for_workspace(PathBuf::from("duckdb"), Path::new("."));
-        assert_eq!(engine.execution_route(), ExecutionRoute::CliCompatibility);
+    fn mcp_uses_only_the_quack_route() {
+        let engine = engine_for_workspace(PathBuf::new(), Path::new("."));
+        assert_eq!(engine.execution_route(), ExecutionRoute::OfficialRunner);
     }
 
     #[test]
