@@ -215,7 +215,16 @@ materializes a typed empty relation (`materialize_empty_result`); without a
 schema it fails with a clear source-level error rather than the bare `json`
 column of old. With rows and a declared schema, the columns are pinned via
 `all_varchar` + `TRY_CAST` (a stray unparseable cell becomes NULL rather than
-failing the load); without one, `read_csv` inference applies.
+failing the load); without one, every column reads as text (`all_varchar`) -
+Salesforce serves CSV text either way, and letting `read_csv` sniff types
+turns a `01234` postcode into BIGINT `1234`, which is silent corruption. Cast
+downstream, or declare a schema to pin types.
+
+**Result-walk guards.** `timeoutSecs` bounds only the poll phase, so the page
+walk carries its own: a non-advancing `Sforce-Locator` (a peer or middlebox
+echoing the same token) fails the run rather than re-appending the same page
+forever, and a far-out page ceiling backstops a peer that keeps minting fresh
+locators.
 
 **SOQL restrictions.** Bulk 2.0 queries reject GROUP BY, OFFSET, TYPEOF,
 aggregates and parent-to-child subqueries at job creation; compound fields

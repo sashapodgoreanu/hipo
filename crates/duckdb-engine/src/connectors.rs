@@ -1026,6 +1026,7 @@ impl DuckdbEngine {
         // edge of the API.
         let mut total_rows: u64 = 0;
         let mut locator: Option<String> = None;
+        let mut pages_fetched: u64 = 0;
         loop {
             self.check_cancelled()?;
             let mut url = format!("{}/{}/results", query_base, job_id);
@@ -1075,8 +1076,34 @@ impl DuckdbEngine {
                     e
                 ))
             })?;
+            pages_fetched += 1;
             match next.as_deref() {
                 Some("null") | Some("") | None => break,
+                // Runaway guards: timeoutSecs only bounds the POLL phase, so
+                // the page walk needs its own. A peer (or interfering
+                // middlebox) that echoes the same locator back would otherwise
+                // re-append the same page forever; a locator that keeps
+                // changing is still capped far above any real result set
+                // (50M pages even at the 1000-record floor is 50B records).
+                Some(loc) if locator.as_deref() == Some(loc) => {
+                    return Err(EngineError::Query(format!(
+                        "salesforce bulk: query job {} returned a non-advancing \
+                         Sforce-Locator ('{}') on page {}; aborting the result walk \
+                         rather than re-fetching the same page forever",
+                        job_id,
+                        loc,
+                        pages_fetched
+                    )));
+                }
+                Some(loc) if pages_fetched >= BULK_QUERY_MAX_PAGES => {
+                    return Err(EngineError::Query(format!(
+                        "salesforce bulk: query job {} exceeded {} result pages \
+                         (last locator '{}'); this is a runaway backstop, not a \
+                         tunable - a genuine result set this large should be split \
+                         with WHERE clauses",
+                        job_id, BULK_QUERY_MAX_PAGES, loc
+                    )));
+                }
                 Some(loc) => locator = Some(loc.to_string()),
             }
         }
@@ -1140,8 +1167,14 @@ impl DuckdbEngine {
                     csv_target
                 )
             }
+            // No declared schema: read everything as text rather than letting
+            // read_csv sniff types - inference turns a 01234 postcode into
+            // BIGINT 1234 and silently drops the leading zero. Salesforce
+            // serves every value as CSV text anyway; casting is a downstream
+            // choice the user makes deliberately (or by declaring a schema,
+            // which pins types via TRY_CAST above).
             _ => format!(
-                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_csv('{}', header=true);",
+                "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_csv('{}', header=true, all_varchar=true);",
                 plan::quote_ident(&spec.node_id),
                 csv_target
             ),
@@ -10415,6 +10448,12 @@ fn salesforce_record_envelope(row: &JsonValue, object: &str) -> JsonValue {
 /// these to 150 - the 150 is a post-base64 number, not a raw-CSV one.
 const BULK_SPLIT_TARGET_BYTES: u64 = 90 * 1024 * 1024;
 const BULK_UPLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Runaway backstop on the Bulk query result walk, NOT a tunable: at the
+/// server's 1000-record page floor this is 50 billion records, far beyond any
+/// legitimate extract. The walk's real guard is the non-advancing-locator
+/// check; this cap only bounds a peer that keeps minting fresh locators.
+const BULK_QUERY_MAX_PAGES: u64 = 50_000_000;
 
 /// Terminal snapshot of a Bulk API 2.0 ingest job.
 struct BulkJobStatus {
