@@ -1,8 +1,6 @@
-// build_base.rs is the retained pre-cutover desktop packaging implementation.
-// Its superseded main/embed_db_sidecar entry points are removed by T071; until
-// then they are intentionally compiled only as private compatibility helpers.
+// Shared packaging helpers retained until the final source-file cleanup.
 #[allow(dead_code)]
-mod legacy {
+mod packaging {
     include!("build_base.rs");
 
     pub fn embed_common_sidecars() {
@@ -39,6 +37,7 @@ mod legacy {
                 ))
             }
         };
+
         let bytes = std::fs::read(extension)
             .map_err(|error| format!("read staged {}: {error}", extension.display()))?;
         let actual = format!(
@@ -72,11 +71,8 @@ const QUACK_LICENSE: &str = "MIT";
 const QUACK_PROVENANCE: &str = "duckdb/duckdb-quack";
 const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 
-// The desktop runtime historically compared only the extracted binary length
-// before replacing its stable AppData copy. Appending this packaging revision
-// gives the corrected sidecar a distinct length so installations cannot retain
-// an older same-sized executable. Bump only when the staged sidecar contract
-// changes; T071 removes the retained compatibility packaging path entirely.
+// Bump when the staged sidecar contract changes so an installed desktop app
+// cannot retain a same-sized older executable in AppData.
 const DB_SIDECAR_PACKAGE_REVISION: usize = 1;
 
 fn main() {
@@ -88,23 +84,10 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build_base.rs");
     println!("cargo:rerun-if-changed=.duckle-always-restamp-build-epoch");
-    println!("cargo:rerun-if-env-changed=DUCKLE_ENTRY_POINT_CLASS");
 
-    legacy::embed_common_sidecars();
+    packaging::embed_common_sidecars();
     embed_db_sidecar_pair();
-    legacy::finish_tauri_build();
-}
-
-fn official_runner_required() -> bool {
-    matches!(
-        std::env::var("DUCKLE_ENTRY_POINT_CLASS").as_deref(),
-        Ok("test") | Ok("release-ci") | Ok("release_ci")
-    )
-}
-
-fn write_empty(path: &std::path::Path) {
-    std::fs::write(path, [])
-        .unwrap_or_else(|error| panic!("write empty {}: {error}", path.display()));
+    packaging::finish_tauri_build();
 }
 
 fn compress_db_sidecar(source: &std::path::Path, destination: &std::path::Path) {
@@ -134,7 +117,7 @@ fn pair_in_directory(
     } else {
         if sidecar.is_file() || extension.is_file() {
             println!(
-                "cargo:warning=ignoring incomplete local official-runner pair in {}; sidecar and Quack extension must be adjacent",
+                "cargo:warning=ignoring incomplete Quack runner pair in {}; sidecar and extension must be adjacent",
                 directory.display()
             );
         }
@@ -170,7 +153,7 @@ fn embed_db_sidecar_pair() {
     let pair = if staged_sidecar.is_file() {
         if !staged_extension.is_file() {
             panic!(
-                "explicit desktop staging is incomplete: apps/desktop/bin/{sidecar_name} requires apps/desktop/bin/{QUACK_EXTENSION_FILE}"
+                "desktop staging is incomplete: apps/desktop/bin/{sidecar_name} requires apps/desktop/bin/{QUACK_EXTENSION_FILE}"
             );
         }
         Some((staged_sidecar, staged_extension))
@@ -179,43 +162,26 @@ fn embed_db_sidecar_pair() {
             .into_iter()
             .flatten()
             .find_map(|directory| pair_in_directory(&directory, sidecar_name))
-    };
+    }
+    .unwrap_or_else(|| {
+        panic!(
+            "the desktop app requires {sidecar_name} and {QUACK_EXTENSION_FILE} as an adjacent verified pair in apps/desktop/bin, the active Cargo profile, or target/release"
+        )
+    });
 
     let embedded_sidecar = out_dir.join("embedded-db-sidecar.bin");
     let embedded_extension = out_dir.join("embedded-quack-extension.bin");
-    let pin_manifest = out_dir.join("official-runner-pin.json");
+    let (sidecar, extension) = pair;
+    let checksum = packaging::verify_quack(&extension, &target_os, &target_arch)
+        .unwrap_or_else(|error| panic!("Quack runner staging rejected: {error}"));
+    compress_db_sidecar(&sidecar, &embedded_sidecar);
+    packaging::compress(&extension, &embedded_extension);
+    let manifest = packaging::write_pin_manifest(&out_dir, checksum);
 
-    match pair {
-        Some((sidecar, extension)) => {
-            let checksum = legacy::verify_quack(&extension, &target_os, &target_arch)
-                .unwrap_or_else(|error| panic!("official runner staging rejected: {error}"));
-            compress_db_sidecar(&sidecar, &embedded_sidecar);
-            legacy::compress(&extension, &embedded_extension);
-            let manifest = legacy::write_pin_manifest(&out_dir, checksum);
-            println!(
-                "cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}",
-                manifest.display()
-            );
-        }
-        None if official_runner_required() => {
-            panic!(
-                "DUCKLE_ENTRY_POINT_CLASS requires the verified official runner, but {sidecar_name} and {QUACK_EXTENSION_FILE} were not found as an adjacent pair in apps/desktop/bin, the active Cargo profile, or target/release"
-            );
-        }
-        None => {
-            write_empty(&embedded_sidecar);
-            write_empty(&embedded_extension);
-            write_empty(&pin_manifest);
-            println!(
-                "cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}",
-                pin_manifest.display()
-            );
-            println!(
-                "cargo:warning=verified duckle-db-sidecar/Quack pair not staged; official runner remains unavailable"
-            );
-        }
-    }
-
+    println!(
+        "cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}",
+        manifest.display()
+    );
     println!(
         "cargo:rustc-env=DUCKLE_EMBEDDED_DB_SIDECAR={}",
         embedded_sidecar.display()
@@ -228,4 +194,5 @@ fn embed_db_sidecar_pair() {
     println!("cargo:rustc-env=DUCKLE_QUACK_VERSION={QUACK_VERSION}");
     println!("cargo:rustc-env=DUCKLE_QUACK_LICENSE={QUACK_LICENSE}");
     println!("cargo:rustc-env=DUCKLE_QUACK_PROVENANCE={QUACK_PROVENANCE}");
+    println!("cargo:warning=desktop database runtime: quack");
 }
