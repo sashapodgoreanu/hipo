@@ -1,8 +1,10 @@
-//! Explicit, serializable gate for enabling the official runner in production.
+//! Cutover evidence retained for release documentation.
 //!
-//! Production binaries accept only evidence embedded at compile time through
-//! `DUCKLE_CUTOVER_EVIDENCE_JSON`. A runtime environment variable or workspace
-//! file cannot silently enable the official route after a release is built.
+//! Runtime routing is intentionally no longer controlled by build classes,
+//! environment variables, or evidence manifests. Duckle has one database
+//! execution route: the packaged Quack runner. Evidence remains serializable so
+//! owners can record parity, benchmark, package, and approval results without
+//! introducing a second executable path.
 
 use crate::bundle::{bundle_for, BundlePlatform, QuackBundleEntry};
 use serde::{Deserialize, Serialize};
@@ -15,8 +17,6 @@ pub const REQUIRED_CUTOVER_CRITERIA: [&str; 11] = [
     "SC-009", "SC-010", "SC-011",
 ];
 
-/// Criteria for which `not_applicable` would amount to a safety, compatibility,
-/// containment, redaction, or offline-package waiver. Those criteria must pass.
 const NON_WAIVABLE_CRITERIA: [&str; 5] = ["SC-001", "SC-003", "SC-004", "SC-005", "SC-011"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,7 +31,6 @@ pub enum EvidenceStatus {
 #[serde(rename_all = "camelCase")]
 pub struct EvidenceItem {
     pub status: EvidenceStatus,
-    /// A stable short identifier, not a log, command line or benchmark output.
     pub evidence_id: String,
 }
 
@@ -83,15 +82,10 @@ pub struct CutoverEvidence {
 }
 
 impl CutoverEvidence {
-    /// Evaluate this manifest for the current packaged platform against the
-    /// mandatory Feature 003 cutover criteria.
     pub fn evaluate_required(&self) -> CutoverGate {
         self.evaluate(REQUIRED_CUTOVER_CRITERIA)
     }
 
-    /// Only the criteria declared applicable to the migration gate are
-    /// mandatory. The caller chooses the set so future intentionally-out-of-
-    /// scope criteria can be marked NotApplicable without a hidden bypass.
     pub fn evaluate<'a, I>(&self, required_criteria: I) -> CutoverGate
     where
         I: IntoIterator<Item = &'a str>,
@@ -109,6 +103,7 @@ impl CutoverEvidence {
         I: IntoIterator<Item = &'a str>,
     {
         let mut missing_or_failed = Vec::new();
+
         if self.schema_version != CUTOVER_MANIFEST_SCHEMA_VERSION {
             push_unique(&mut missing_or_failed, "schema_version");
         }
@@ -155,9 +150,10 @@ impl CutoverEvidence {
             match disposition {
                 FindingDisposition::Resolved => {}
                 FindingDisposition::Accepted { motivation } if !motivation.trim().is_empty() => {}
-                FindingDisposition::Accepted { .. } => {
-                    push_unique(&mut missing_or_failed, &format!("finding:{finding}:motivation"));
-                }
+                FindingDisposition::Accepted { .. } => push_unique(
+                    &mut missing_or_failed,
+                    &format!("finding:{finding}:motivation"),
+                ),
                 FindingDisposition::Open => {
                     push_unique(&mut missing_or_failed, &format!("finding:{finding}"));
                 }
@@ -166,8 +162,9 @@ impl CutoverEvidence {
 
         match (self.bundle.as_ref(), expected_bundle) {
             (Some(actual), Some(expected)) if actual.matches(expected) => {}
-            (Some(_), Some(_)) => push_unique(&mut missing_or_failed, "bundle_identity"),
-            (None, Some(_)) => push_unique(&mut missing_or_failed, "bundle_identity"),
+            (Some(_), Some(_)) | (None, Some(_)) => {
+                push_unique(&mut missing_or_failed, "bundle_identity");
+            }
             (_, None) => push_unique(&mut missing_or_failed, "bundle_target"),
         }
 
@@ -213,6 +210,7 @@ impl CutoverGate {
     }
 }
 
+/// Transitional source-compatibility type. It no longer controls execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryPointClass {
     Production,
@@ -233,23 +231,21 @@ impl EntryPointClass {
     }
 }
 
+/// Transitional source-compatibility type. `Compatibility` is never selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunnerSelection {
     Official,
     Compatibility,
 }
 
-/// Entry-point class selected while compiling the binary. Unknown values fail
-/// closed to Production. Runtime environment changes cannot reclassify a built
-/// release as Test or Compatibility.
+/// Kept temporarily so existing callers compile while T071 removes the old
+/// selector API. There is no environment- or build-class configuration anymore.
 pub fn configured_entry_point_class() -> EntryPointClass {
-    option_env!("DUCKLE_ENTRY_POINT_CLASS")
-        .and_then(EntryPointClass::parse)
-        .unwrap_or(EntryPointClass::Production)
+    EntryPointClass::Production
 }
 
-/// Parse and evaluate the immutable manifest compiled into this binary. A
-/// missing or malformed manifest produces stable diagnostic IDs only.
+/// Evidence remains available to release tooling and documentation, but its
+/// result does not switch the runtime backend.
 pub fn packaged_cutover_gate() -> CutoverGate {
     static GATE: OnceLock<CutoverGate> = OnceLock::new();
     GATE.get_or_init(|| evaluate_cutover_json(option_env!("DUCKLE_CUTOVER_EVIDENCE_JSON")))
@@ -262,6 +258,7 @@ pub fn evaluate_cutover_json(json: Option<&str>) -> CutoverGate {
             missing_or_failed: vec!["cutover_manifest".to_string()],
         };
     };
+
     match serde_json::from_str::<CutoverEvidence>(json) {
         Ok(evidence) => evidence.evaluate_required(),
         Err(_) => CutoverGate::Rejected {
@@ -270,24 +267,13 @@ pub fn evaluate_cutover_json(json: Option<&str>) -> CutoverGate {
     }
 }
 
-/// The packaged gate is authoritative for production and release-CI builds.
-/// Before approval they stay on compatibility. After approval, an older caller
-/// cannot silently force the product back to CLI by passing a stale local
-/// rejection. Test and explicit compatibility entry points may exercise the
-/// official runner before the production gate.
-pub fn select_runner(entry_point: EntryPointClass, gate: &CutoverGate) -> RunnerSelection {
-    match entry_point {
-        EntryPointClass::Test | EntryPointClass::Compatibility => RunnerSelection::Official,
-        EntryPointClass::Production | EntryPointClass::ReleaseCi => {
-            let approved = matches!(gate, CutoverGate::Approved)
-                || matches!(packaged_cutover_gate(), CutoverGate::Approved);
-            if approved {
-                RunnerSelection::Official
-            } else {
-                RunnerSelection::Compatibility
-            }
-        }
-    }
+/// Duckle now has one database runtime. Arguments are accepted only until all
+/// callers are migrated away from the old selector API.
+pub fn select_runner(
+    _entry_point: EntryPointClass,
+    _gate: &CutoverGate,
+) -> RunnerSelection {
+    RunnerSelection::Official
 }
 
 #[cfg(test)]
@@ -308,6 +294,7 @@ mod tests {
                 )
             })
             .collect();
+
         CutoverEvidence {
             schema_version: CUTOVER_MANIFEST_SCHEMA_VERSION,
             release_id: "r1".into(),
@@ -329,31 +316,24 @@ mod tests {
     }
 
     #[test]
-    fn production_stays_compatible_without_packaged_evidence() {
-        let gate = evaluate_cutover_json(None);
-        assert!(matches!(gate, CutoverGate::Rejected { .. }));
-        assert_eq!(
-            select_runner(EntryPointClass::Production, &gate),
-            RunnerSelection::Compatibility
-        );
-        assert_eq!(
-            select_runner(EntryPointClass::ReleaseCi, &gate),
-            RunnerSelection::Compatibility
-        );
-        assert_eq!(
-            select_runner(EntryPointClass::Test, &gate),
-            RunnerSelection::Official
-        );
+    fn every_legacy_entry_point_maps_to_the_single_runner() {
+        let rejected = evaluate_cutover_json(None);
+        for entry_point in [
+            EntryPointClass::Production,
+            EntryPointClass::ReleaseCi,
+            EntryPointClass::Test,
+            EntryPointClass::Compatibility,
+        ] {
+            assert_eq!(
+                select_runner(entry_point, &rejected),
+                RunnerSelection::Official
+            );
+        }
     }
 
     #[test]
-    fn complete_matching_evidence_approves_production() {
-        let gate = approved_evidence().evaluate_required();
-        assert_eq!(gate, CutoverGate::Approved);
-        assert_eq!(
-            select_runner(EntryPointClass::Production, &gate),
-            RunnerSelection::Official
-        );
+    fn complete_matching_evidence_is_still_recordable() {
+        assert_eq!(approved_evidence().evaluate_required(), CutoverGate::Approved);
     }
 
     #[test]
@@ -382,12 +362,5 @@ mod tests {
             .rejection_ids()
             .iter()
             .any(|id| id == "finding:quality-1:motivation"));
-    }
-
-    #[test]
-    fn entry_point_parser_fails_closed_for_unknown_values() {
-        assert_eq!(EntryPointClass::parse("release-ci"), Some(EntryPointClass::ReleaseCi));
-        assert_eq!(EntryPointClass::parse("compatibility"), Some(EntryPointClass::Compatibility));
-        assert_eq!(EntryPointClass::parse("unknown"), None);
     }
 }
