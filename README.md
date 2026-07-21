@@ -869,16 +869,16 @@ manage saved connections.
 If you have [uv](https://docs.astral.sh/uv/), one line connects any MCP client. Nothing is installed, no engine to configure: uv fetches the package and the DuckDB engine into a throwaway environment and the server finds it there.
 
 ```sh
-claude mcp add duckle -- uvx --from duckle duckle-mcp
+claude mcp add duckle -- uvx duckle mcp
 ```
 
 For Claude Desktop, Cursor, or any other client, the same thing as config:
 
 ```json
-{ "mcpServers": { "duckle": { "command": "uvx", "args": ["--from", "duckle", "duckle-mcp"] } } }
+{ "mcpServers": { "duckle": { "command": "uvx", "args": ["duckle", "mcp"] } } }
 ```
 
-`--from` is needed because the command (`duckle-mcp`) and the package (`duckle`) have different names. If you would rather install it, `pip install duckle` puts `duckle-mcp` on PATH and the config becomes just `"command": "duckle-mcp"`.
+`uvx duckle mcp` works because the package and the command are both named `duckle`, so there is no `--from` to remember. If you would rather install it, `pip install duckle` puts `duckle` on PATH and the same `duckle mcp` command applies.
 
 Then ask the agent something like *"use duckle to list the available components"*. It can discover a real connector rather than guess one, compile-check a pipeline with `validate_pipeline` **before anything executes**, run it, and hand back column-level lineage. What it produces is the same JSON the canvas opens, so you can see what it built.
 

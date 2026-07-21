@@ -159,33 +159,32 @@ VALIDATE = [
 
 
 # --------------------------------------------------------------- demo 3
-# The agent loop, with nothing installed. Tool results are verbatim from a
-# real MCP session driven through `uvx --from duckle duckle-mcp`.
+# The agent loop. Opens with the one command a first-time user types, then
+# follows the conversation. Tool results are verbatim from a real MCP session.
 AGENT = [
-    ("cmd", "claude mcp add duckle -- uvx --from duckle duckle-mcp"),
+    ("cmd", "claude mcp add duckle -- uvx duckle mcp"),
     ("ok",  "Added stdio MCP server duckle"),
     ("out", ""),
-    ("dim", "# nothing installed: uv fetches duckle and the DuckDB engine on demand"),
+    ("cmd", "claude"),
     ("out", ""),
-    ("key", "> find me the salesforce connectors, then load orders.csv"),
-    ("key", "  into parquet keeping only orders over 20"),
-    ("out", ""),
-    ("dim", "  duckle - list_components(query=\"salesforce\")"),
-    ("out", "    3: snk.salesforce, snk.salesforce.bulk, src.salesforce"),
+    ("key", "> load orders.csv into parquet, keep orders over 20"),
     ("out", ""),
     ("dim", "  duckle - get_component_schema(\"xf.filter\")"),
-    ("out", "    predicate, rejectOnError"),
+    ("out", "      predicate, rejectOnError"),
     ("out", ""),
     ("dim", "  duckle - create_pipeline(\"big-orders\")"),
-    ("ok",  "    ok  validation: 3 stages compiled"),
+    ("ok",  "      ok   3 stages compiled"),
     ("out", ""),
     ("dim", "  duckle - run_pipeline(\"big-orders.json\")"),
-    ("ok",  "    ok  169 ms"),
-    ("ok",  "      csv      ok (4 rows)"),
-    ("ok",  "      filter   ok (3 rows)"),
-    ("ok",  "      parquet  ok (3 rows)"),
+    ("ok",  "      ok   169 ms"),
+    ("ok",  "        csv      ok (4 rows)"),
+    ("ok",  "        filter   ok (3 rows)"),
+    ("ok",  "        parquet  ok (3 rows)"),
     ("out", ""),
-    ("dim", "# Compile-checked before it ran. The graph opens in the canvas."),
+    ("out", "  Wrote big_orders.parquet. The pipeline is saved as JSON,"),
+    ("out", "  so you can open it on the canvas and see what I built."),
+    ("out", ""),
+    ("dim", "# Compile-checked before it ran. No pip install, no engine setup."),
 ]
 
 

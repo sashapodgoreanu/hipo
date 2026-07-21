@@ -35,6 +35,7 @@ USAGE:
     duckle-runner --pipeline <file.json> [options]
     duckle-runner validate [<file.json> ...] [--json]
     duckle-runner quickstart [--force]
+    duckle-runner mcp                      (stdio MCP server for AI agents)
 
 EXIT CODES (stable, safe to gate CI on):
     0    success
@@ -746,6 +747,46 @@ fn collect_input_fingerprints(doc: &PipelineDoc) -> Vec<manifest::InputFingerpri
 /// Run one side of a `review --data` comparison sink-safely: every sink node is
 /// removed before execution, so sources are read and transforms run but no
 /// destination is ever written. Returns each surviving node's row count.
+/// `mcp` - hand off to the MCP server sitting next to this binary.
+///
+/// Exists so the agent entry point is a plain `uvx duckle mcp` rather than
+/// `uvx --from duckle duckle-mcp`. uvx maps its first argument to both the
+/// package and the command, so a command whose name differs from the package
+/// needs --from; routing through the `duckle` command avoids that entirely.
+/// The MCP server speaks JSON-RPC on stdio, so this must exec rather than
+/// wrap: nothing may be written to stdout here.
+fn run_mcp() -> ExitCode {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("duckle mcp: locating this executable: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let name = if cfg!(windows) { "duckle-mcp.exe" } else { "duckle-mcp" };
+    let server = match exe.parent().map(|d| d.join(name)) {
+        Some(p) if p.exists() => p,
+        _ => {
+            eprintln!(
+                "duckle mcp: {name} not found next to {}.\n\
+                 The pip package ships it; a source build needs \
+                 `cargo build -p duckle-mcp` first.",
+                exe.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let mut cmd = std::process::Command::new(&server);
+    cmd.args(std::env::args_os().skip(2));
+    match cmd.status() {
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
+        Err(e) => {
+            eprintln!("duckle mcp: starting {}: {e}", server.display());
+            ExitCode::from(2)
+        }
+    }
+}
+
 /// `quickstart` - scaffold a working pipeline, run it, and show the rows.
 ///
 /// Deliberately goes all the way to a result. The comparable onboarding
@@ -1374,6 +1415,10 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         };
+    }
+    // `mcp` -> hand off to the MCP server, so agents use `uvx duckle mcp`.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        return run_mcp();
     }
     // `quickstart` -> scaffold a working pipeline, run it, show the rows.
     if std::env::args().nth(1).as_deref() == Some("quickstart") {

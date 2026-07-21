@@ -107,16 +107,16 @@ Note: `validate` does not yet catch every missing required property, so a clean 
 The same package is an MCP server, so an AI agent gets a governed way to work with data instead of a shell. Point Claude Code, Claude Desktop or Cursor at it:
 
 ```json
-{ "mcpServers": { "duckle": { "command": "uvx", "args": ["--from", "duckle", "duckle-mcp"] } } }
+{ "mcpServers": { "duckle": { "command": "uvx", "args": ["duckle", "mcp"] } } }
 ```
 
 Or in Claude Code:
 
 ```sh
-claude mcp add duckle -- uvx --from duckle duckle-mcp
+claude mcp add duckle -- uvx duckle mcp
 ```
 
-That is the whole setup. No pip install, no PATH, no engine to configure: uv fetches the package and the DuckDB engine into a throwaway environment and the server finds it there. If you did `pip install duckle`, `"command": "duckle-mcp"` works too.
+That is the whole setup. No pip install, no PATH, no engine to configure: uv fetches the package and the DuckDB engine into a throwaway environment and the server finds it there. If you did `pip install duckle`, `"command": "duckle"`, `"args": ["mcp"]` works the same way.
 
 **19 tools**, including `list_components`, `get_component_schema`, `create_pipeline`, `validate_pipeline`, `run_pipeline`, `pipeline_lineage`, `trust_report` and `schema_drift`.
 
