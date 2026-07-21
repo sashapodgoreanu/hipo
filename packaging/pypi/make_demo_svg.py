@@ -106,13 +106,10 @@ def render(path, title, lines):
 
 
 # --------------------------------------------------------------- demo 1
-# The actual new-user path: one command, from nothing to real rows.
-# Captured verbatim from a pip-installed duckle with DUCKLE_DUCKDB_BIN unset.
+# The true first run: one command, nothing installed, real rows out.
+# Captured verbatim from `uvx duckle quickstart` against the published package.
 INSTALL = [
-    ("cmd", "pip install duckle"),
-    ("ok",  "Successfully installed duckdb-cli-1.5.4 duckle-0.5.8"),
-    ("out", ""),
-    ("cmd", "duckle quickstart"),
+    ("cmd", "uvx duckle quickstart"),
     ("out", ""),
     ("key", "Duckle quickstart"),
     ("out", ""),
@@ -122,7 +119,7 @@ INSTALL = [
     ("out", "Running pipelines/quickstart.json ..."),
     ("out", ""),
     ("out", "status   : ok"),
-    ("dim", "duration : 563 ms"),
+    ("dim", "duration : 212 ms"),
     ("ok",  "  csv        ok (8 rows)"),
     ("ok",  "  filter     ok (5 rows)"),
     ("ok",  "  derive     ok (5 rows)"),
@@ -137,7 +134,7 @@ INSTALL = [
     ("out", "  6,EU,Soylent,55,66.0,EU-Soylent"),
     ("out", "  7,UK,Vehement,22,26.4,UK-Vehement"),
     ("out", ""),
-    ("dim", "# One command. Scaffolded, compiled to SQL, executed by DuckDB."),
+    ("dim", "# Nothing installed. Scaffolded, compiled to SQL, run by DuckDB."),
 ]
 
 # --------------------------------------------------------------- demo 2
@@ -191,7 +188,7 @@ AGENT = [
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     render(os.path.join(OUT_DIR, "pypi-demo-install.svg"),
-           "pip install duckle", INSTALL)
+           "uvx duckle quickstart", INSTALL)
     render(os.path.join(OUT_DIR, "pypi-demo-validate.svg"),
            "duckle validate  -  the CI gate", VALIDATE)
     render(os.path.join(OUT_DIR, "pypi-demo-agent.svg"),

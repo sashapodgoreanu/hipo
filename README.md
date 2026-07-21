@@ -473,6 +473,14 @@ Pick the binary for your OS from the [latest release](https://github.com/slothfl
 
 The single-file binary above is all you need for **Build Pipeline** too: the headless runner is embedded into the app at build time, and exporting a pipeline produces ONE self-contained executable (the engine, the DuckDB CLI, any needed extensions, and the resolved pipeline are all inside that one file). Copy that single file to your server and run or schedule it - no separate runner download required.
 
+<p align="center"><img src="docs/assets/pypi-demo-install.svg" alt="Terminal: uvx duckle quickstart scaffolds sample data and a pipeline, runs it, and prints the resulting rows" width="660"/></p>
+
+One command, nothing installed: it scaffolds sample data and a pipeline, compiles it to SQL, runs it on DuckDB, and shows you the rows.
+
+```sh
+uvx duckle quickstart
+```
+
 ### Let an agent do it
 
 Paste this into Claude Code, Cursor, or Codex:

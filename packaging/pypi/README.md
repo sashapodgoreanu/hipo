@@ -21,9 +21,9 @@ uvx duckle quickstart      # no install
 pip install duckle         # or install it
 ```
 
-<img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-install.svg" alt="Terminal: pip install duckle then duckle quickstart, which scaffolds sample data and a pipeline, runs it, and prints the resulting rows" width="660"/>
+<img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-install.svg" alt="Terminal: uvx duckle quickstart scaffolds sample data and a pipeline, runs it, and prints the resulting rows" width="660"/>
 
-`quickstart` scaffolds sample data and a pipeline, runs it, and shows you the rows. One command from nothing to a result, because the engine ships in the install: a ~20 MB native binary plus the DuckDB CLI. No JVM, no Docker, no server, no account.
+`quickstart` scaffolds sample data and a pipeline, runs it, and shows you the rows. One command from nothing to a result, because the engine comes with it: a ~20 MB native binary plus the DuckDB CLI. No JVM, no Docker, no server, no account.
 
 ---
 
