@@ -1,0 +1,209 @@
+# Publish the `duckle` Python package to PyPI.
+#
+# Runs when a GitHub release is PUBLISHED, not when a tag is pushed, so the
+# desktop release workflow finishes and you have looked at the draft before
+# anything reaches PyPI. A PyPI version can never be re-uploaded or reused
+# after deletion, so this deliberately trails a human decision.
+#
+# Auth is Trusted Publishing (OIDC): no API token exists anywhere in this repo
+# or in its secrets. GitHub mints a short-lived identity token for this exact
+# workflow and PyPI verifies it against the publisher you configured. See
+# packaging/pypi/PUBLISHING.md for the one-time PyPI setup.
+name: PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Index to publish to"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+      ref:
+        description: "Tag or SHA to build from (default: the default branch)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # Refuse early if the package version does not match the release tag. Getting
+  # this wrong means publishing the wrong version under a name that can never
+  # be reused.
+  check-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=$(grep -m1 '^version = ' packaging/pypi/pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          echo "package version: $pkg"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            if [ "v$pkg" != "$tag" ]; then
+              echo "::error::packaging/pypi/pyproject.toml is $pkg but the release tag is $tag."
+              echo "::error::Bump the version and re-run, or the wrong version ships."
+              exit 1
+            fi
+            echo "tag $tag matches"
+          fi
+
+  build-wheels:
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Linux is built against musl and linked fully static, so the binary
+          # has no libc dependency at all and legitimately satisfies both the
+          # manylinux and musllinux tags. Building natively on ubuntu-24.04
+          # instead would link glibc 2.39 and could not honestly claim
+          # manylinux_2_17, which is the whole point of the tag.
+          - os: ubuntu-24.04
+            name: linux-x64
+            image: messense/rust-musl-cross:x86_64-musl
+            triple: x86_64-unknown-linux-musl
+            plat: manylinux_2_17_x86_64.manylinux2014_x86_64.musllinux_1_2_x86_64
+          - os: ubuntu-24.04
+            name: linux-arm64
+            image: messense/rust-musl-cross:aarch64-musl
+            triple: aarch64-unknown-linux-musl
+            plat: manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_2_aarch64
+          - os: macos-14
+            name: macos-arm64
+            triple: aarch64-apple-darwin
+            plat: macosx_11_0_arm64
+          - os: macos-14
+            name: macos-x64
+            triple: x86_64-apple-darwin
+            plat: macosx_11_0_x86_64
+          - os: windows-latest
+            name: windows-x64
+            triple: x86_64-pc-windows-msvc
+            plat: win_amd64
+          - os: windows-11-arm
+            name: windows-arm64
+            triple: aarch64-pc-windows-msvc
+            plat: win_arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --quiet build wheel
+
+      # Linux: compile inside the musl cross image, the same one
+      # scripts/build-runner-linux.sh already uses for the embedded runner.
+      - name: Build duckle-runner (Linux, static musl)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/io" -w /io -e CARGO_TARGET_DIR=/tmp/t \
+            "${{ matrix.image }}" \
+            bash -lc "cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-runner \
+                      && cp /tmp/t/${{ matrix.triple }}/release-runner/duckle-runner /io/duckle-runner"
+          file duckle-runner || true
+
+      - name: Set up Rust
+        if: runner.os != 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - if: runner.os != 'Linux'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pypi-${{ matrix.triple }}
+
+      - name: Build duckle-runner (macOS / Windows)
+        if: runner.os != 'Linux'
+        shell: bash
+        # The deployment target must match the macosx_11_0 wheel tag, or the
+        # wheel claims to support a system the binary will not launch on.
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          set -euo pipefail
+          cargo build --profile release-runner --target ${{ matrix.triple }} -p duckle-runner
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.triple }}/release-runner/duckle-runner.exe" duckle-runner.exe
+          else
+            cp "target/${{ matrix.triple }}/release-runner/duckle-runner" duckle-runner
+          fi
+
+      - name: Build the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin=duckle-runner
+          [ "${{ runner.os }}" = "Windows" ] && bin=duckle-runner.exe
+          python packaging/pypi/build_wheel.py \
+            --binary "$bin" \
+            --platform "${{ matrix.plat }}" \
+            --outdir dist
+
+      - name: Check the wheel renders and is well formed
+        shell: bash
+        run: |
+          python -m pip install --quiet twine
+          python -m twine check dist/*.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    needs: [check-version, build-wheels]
+    runs-on: ubuntu-24.04
+    # The environment is what the PyPI trusted publisher is pinned to, and it
+    # is where a required reviewer can be added so a publish waits on approval.
+    environment:
+      name: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi') && 'testpypi' || 'pypi' }}
+      url: https://pypi.org/project/duckle/
+    permissions:
+      id-token: write   # mint the OIDC token; this is the whole auth story
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: List what is about to be published
+        run: |
+          ls -la dist/
+          echo "version: ${{ needs.check-version.outputs.version }}"
+          count=$(ls dist/*.whl | wc -l)
+          echo "wheels: $count"
+          if [ "$count" -ne 6 ]; then
+            echo "::error::expected 6 platform wheels, found $count"
+            exit 1
+          fi
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
