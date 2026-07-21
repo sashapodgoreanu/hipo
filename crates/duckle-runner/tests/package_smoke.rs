@@ -3,11 +3,14 @@
 //! The workflow points these tests at the files copied into the release-shaped
 //! package directory. The sidecar is then executed with a clean DuckDB home and
 //! deliberately unusable network proxies. It must stage the embedded extension
-//! before failing only because no private bootstrap handles were supplied.
+//! in its private versioned directory before failing only because no private
+//! bootstrap handles were supplied.
 
-use duckle_db_runner::bundle::{bundle_for, verify_staged_bundle, BundlePlatform, DUCKDB_VERSION};
+use duckle_db_runner::bundle::{
+    bundle_for, packaged_extension_path, verify_staged_bundle, BundlePlatform,
+};
 use duckle_db_runner::model::RunnerFailureReason;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 fn package_path(name: &str) -> PathBuf {
@@ -16,17 +19,9 @@ fn package_path(name: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("{name} must point at the release-shaped package artifact"))
 }
 
-fn extension_cache_path(home: &Path, platform: BundlePlatform) -> PathBuf {
-    home.join(".duckdb")
-        .join("extensions")
-        .join(format!("v{DUCKDB_VERSION}"))
-        .join(platform.repository_name())
-        .join("quack.duckdb_extension")
-}
-
 #[test]
 #[ignore = "requires the verified release-shaped sidecar/Quack package"]
-fn packaged_sidecar_stages_embedded_quack_with_a_clean_offline_home() {
+fn packaged_sidecar_stages_embedded_quack_privately_with_a_clean_offline_home() {
     let sidecar = package_path("DUCKLE_PACKAGE_SIDECAR");
     let packaged_extension = package_path("DUCKLE_PACKAGE_EXTENSION");
     let platform = BundlePlatform::current().expect("T074 runs only on approved package targets");
@@ -61,16 +56,29 @@ fn packaged_sidecar_stages_embedded_quack_with_a_clean_offline_home() {
         "runner_unavailable",
         "the offline package must fail only at the private bootstrap boundary"
     );
-    assert!(!missing_cli.exists(), "the package must never create or install a CLI");
-
-    let cached = extension_cache_path(home.path(), platform);
-    assert!(cached.is_file(), "embedded Quack extension was not staged");
-    assert_eq!(
-        std::fs::read(&cached).expect("read staged cache extension"),
-        std::fs::read(&packaged_extension).expect("read packaged extension"),
-        "the executable and adjacent extension must be one matching package pair"
+    assert!(
+        !missing_cli.exists(),
+        "the package must never create or install a CLI"
     );
-    verify_staged_bundle(&cached, expected).expect("offline-staged extension identity");
+
+    let private_extension =
+        packaged_extension_path(&sidecar, platform).expect("private extension path");
+    assert!(
+        private_extension.is_file(),
+        "embedded Quack extension was not staged privately"
+    );
+    assert_eq!(
+        std::fs::read(&private_extension).expect("read privately staged extension"),
+        std::fs::read(&packaged_extension).expect("read packaged extension"),
+        "the executable and verified extension must be one matching package pair"
+    );
+    verify_staged_bundle(&private_extension, expected)
+        .expect("offline private extension identity");
+
+    assert!(
+        !home.path().join(".duckdb").join("extensions").exists(),
+        "the sidecar must never create or modify the user's DuckDB extension cache"
+    );
 }
 
 #[test]
