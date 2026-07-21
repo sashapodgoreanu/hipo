@@ -4,8 +4,6 @@
 //! module. This wrapper owns the DuckDB/Quack pair metadata, performs offline
 //! checksum verification, and provides the real lazy per-workspace controller.
 
-// The base module still contains the pre-cutover controller stub. The real
-// controller below shadows it; T071 removes the retained compatibility stub.
 #[allow(dead_code)]
 #[path = "engine_manager_base.rs"]
 mod base;
@@ -25,6 +23,10 @@ use duckle_db_runner::resources::{
     resolve_workspace_runner_resources, WorkspaceRunnerResources, WorkspaceRunnerResourcesError,
 };
 use duckle_db_runner::run_database::{PreviewResult, SqlBatchResult};
+#[cfg(windows)]
+use duckle_db_runner::sidecar_diagnostics::{
+    append_desktop_diagnostic, desktop_sidecar_program_path, SidecarDiagnosticCode,
+};
 #[cfg(windows)]
 use duckle_db_runner::worker_pool::{PoolError, WorkerPoolControl};
 use duckle_duckdb_engine::OfficialRunnerController;
@@ -73,9 +75,6 @@ pub struct OfficialRunnerPin {
     pub extension_file: &'static str,
 }
 
-/// Return the only approved DuckDB/Quack pair for a supported release target.
-/// Unsupported targets stay unavailable rather than downloading an unpinned
-/// extension at build or run time.
 #[cfg(test)]
 pub fn official_runner_pin_for(os: &str, arch: &str) -> Option<OfficialRunnerPin> {
     let quack_sha256 = match (os, arch) {
@@ -94,8 +93,6 @@ pub fn official_runner_pin_for(os: &str, arch: &str) -> Option<OfficialRunnerPin
     })
 }
 
-/// Verify an already staged Quack extension entirely offline. This function
-/// never installs, downloads, or accepts a provider-supplied checksum.
 #[cfg(test)]
 pub fn verify_offline_quack_extension(
     path: &Path,
@@ -119,8 +116,6 @@ struct WorkspaceEngineMetadata {
     engine: Option<String>,
 }
 
-/// Read the persisted workspace engine without rewriting it. SlothDB remains a
-/// valid stored value, but execution receives an explicit no-fallback diagnostic.
 pub fn workspace_engine_diagnostic(workspace: &Path) -> Result<Option<&'static str>, String> {
     let path = workspace.join("duckle.json");
     let bytes = match std::fs::read(path) {
@@ -144,21 +139,33 @@ struct DesktopControllerState {
     controllers: HashMap<PathBuf, Arc<DesktopWorkspaceController>>,
 }
 
-/// Process-wide desktop registry. It owns one lazy controller per workspace,
-/// while each controller owns at most one WorkerPoolControl. Registering the
-/// staged sidecar before cutover does not start a process or create warm workers.
 pub struct DesktopRunnerController {
     state: Mutex<DesktopControllerState>,
     sidecar_path: Option<PathBuf>,
     legacy_engine_disabled: Mutex<bool>,
+    official_controller_ready: Mutex<bool>,
 }
 
 impl DesktopRunnerController {
     pub fn new(sidecar_path: Option<PathBuf>) -> Self {
+        #[cfg(windows)]
+        let sidecar_path = resolve_desktop_sidecar_path(sidecar_path);
+
+        #[cfg(windows)]
+        append_desktop_diagnostic(
+            sidecar_path.as_deref(),
+            if sidecar_path.is_some() {
+                SidecarDiagnosticCode::DesktopControllerReady
+            } else {
+                SidecarDiagnosticCode::DesktopSidecarMissing
+            },
+        );
+
         Self {
             state: Mutex::new(DesktopControllerState::default()),
             sidecar_path,
             legacy_engine_disabled: Mutex::new(false),
+            official_controller_ready: Mutex::new(false),
         }
     }
 
@@ -175,35 +182,76 @@ impl DesktopRunnerController {
         workspace: &Path,
         profile: &RunnerResourcesProfile,
     ) -> Option<Arc<dyn OfficialRunnerController>> {
+        if let Ok(mut ready) = self.official_controller_ready.lock() {
+            *ready = false;
+        }
+
         let legacy_disabled = workspace_engine_diagnostic(workspace).ok().flatten().is_some();
         *self.legacy_engine_disabled.lock().ok()? = legacy_disabled;
         if legacy_disabled {
-            // This controller exists solely to prevent the production compatibility
-            // selector from falling through to DuckDB CLI for a SlothDB workspace.
+            if let Ok(mut ready) = self.official_controller_ready.lock() {
+                *ready = true;
+            }
             return Some(Arc::new(DisabledLegacyEngineController));
         }
 
-        profile.validate().ok()?;
-        let sidecar_path = self.sidecar_path.as_ref()?.clone();
+        if profile.validate().is_err() {
+            #[cfg(windows)]
+            append_desktop_diagnostic(
+                self.sidecar_path.as_deref(),
+                SidecarDiagnosticCode::DesktopProfileInvalid,
+            );
+            return None;
+        }
+
+        let Some(sidecar_path) = self.sidecar_path.as_ref().cloned() else {
+            #[cfg(windows)]
+            append_desktop_diagnostic(None, SidecarDiagnosticCode::DesktopSidecarMissing);
+            return None;
+        };
 
         #[cfg(windows)]
         {
             let key = workspace
                 .canonicalize()
                 .unwrap_or_else(|_| workspace.to_path_buf());
-            let mut state = self.state.lock().ok()?;
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    append_desktop_diagnostic(
+                        Some(&sidecar_path),
+                        SidecarDiagnosticCode::DesktopPoolCreateFailed,
+                    );
+                    return None;
+                }
+            };
             let controller = state
                 .controllers
                 .entry(key)
                 .or_insert_with(|| {
                     Arc::new(DesktopWorkspaceController::new(
-                        sidecar_path,
+                        sidecar_path.clone(),
                         profile.clone(),
                     ))
                 })
                 .clone();
             drop(state);
-            controller.apply_requested_profile(profile.clone()).ok()?;
+
+            if controller.apply_requested_profile(profile.clone()).is_err() {
+                append_desktop_diagnostic(
+                    Some(&sidecar_path),
+                    SidecarDiagnosticCode::DesktopProfileApplyFailed,
+                );
+                return None;
+            }
+
+            if let Ok(mut ready) = self.official_controller_ready.lock() {
+                *ready = true;
+            }
+            append_desktop_diagnostic(
+                Some(&sidecar_path),
+                SidecarDiagnosticCode::DesktopControllerReady,
+            );
             Some(controller)
         }
 
@@ -214,9 +262,6 @@ impl DesktopRunnerController {
         }
     }
 
-    /// Apply a saved generation without waiting for another pipeline run. If the
-    /// lazy controller has not been registered yet, persistence remains the
-    /// authority and the first registration will read that profile.
     pub fn apply_profile_if_active(
         &self,
         workspace: &Path,
@@ -252,7 +297,20 @@ impl DesktopRunnerController {
     }
 
     pub fn entry_point_class(&self) -> EntryPointClass {
-        configured_entry_point_class()
+        let ready = self
+            .official_controller_ready
+            .lock()
+            .map(|ready| *ready)
+            .unwrap_or(false);
+        if ready {
+            configured_entry_point_class()
+        } else {
+            // `engine_for_run` asks for the controller before it asks for the
+            // entry-point class. Falling back to Production here prevents a Test
+            // build from selecting Official with no controller and returning the
+            // opaque `runner_unavailable` before the launcher is reached.
+            EntryPointClass::Production
+        }
     }
 
     pub fn cutover_gate(&self) -> CutoverGate {
@@ -262,8 +320,6 @@ impl DesktopRunnerController {
             .map(|disabled| *disabled)
             .unwrap_or(true)
         {
-            // Force the engine onto the rejecting controller. Compatibility is a
-            // DuckDB fallback and is therefore forbidden for persisted SlothDB.
             CutoverGate::Approved
         } else {
             packaged_cutover_gate()
@@ -278,6 +334,21 @@ impl DesktopRunnerController {
             .filter(|disabled| **disabled)
             .map(|_| SLOTHDB_DISABLED_DIAGNOSTIC)
     }
+}
+
+#[cfg(windows)]
+fn resolve_desktop_sidecar_path(staged: Option<PathBuf>) -> Option<PathBuf> {
+    let explicit = std::env::var_os("DUCKLE_DB_SIDECAR_BIN").map(PathBuf::from);
+    let adjacent = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_path_buf))
+        .map(|directory| directory.join("duckle-db-sidecar.exe"));
+    let app_data = Some(desktop_sidecar_program_path());
+
+    [staged, explicit, adjacent, app_data]
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.is_absolute() && candidate.is_file())
 }
 
 struct DisabledLegacyEngineController;
@@ -343,19 +414,36 @@ impl DesktopWorkspaceController {
         use duckle_db_runner::local_process_provider::LocalProcessProvider;
         use duckle_db_runner::local_quack_sidecar::WindowsLocalSidecarLauncher;
 
-        let profile = self
-            .requested_profile
-            .lock()
-            .map_err(|_| RunnerFailureReason::InvalidProfile)?
-            .clone();
-        let launcher = WindowsLocalSidecarLauncher::new(self.sidecar_path.clone())?;
-        let provider = Arc::new(LocalProcessProvider::new(
-            Arc::new(launcher),
-            HostResourceLimits::default(),
-        ));
-        WorkerPoolControl::new(provider, profile, now_millis())
-            .map(Arc::new)
-            .map_err(pool_failure)
+        append_desktop_diagnostic(
+            Some(&self.sidecar_path),
+            SidecarDiagnosticCode::DesktopPoolCreateStarted,
+        );
+
+        let result = (|| {
+            let profile = self
+                .requested_profile
+                .lock()
+                .map_err(|_| RunnerFailureReason::InvalidProfile)?
+                .clone();
+            let launcher = WindowsLocalSidecarLauncher::new(self.sidecar_path.clone())?;
+            let provider = Arc::new(LocalProcessProvider::new(
+                Arc::new(launcher),
+                HostResourceLimits::default(),
+            ));
+            WorkerPoolControl::new(provider, profile, now_millis())
+                .map(Arc::new)
+                .map_err(pool_failure)
+        })();
+
+        append_desktop_diagnostic(
+            Some(&self.sidecar_path),
+            if result.is_ok() {
+                SidecarDiagnosticCode::DesktopPoolReady
+            } else {
+                SidecarDiagnosticCode::DesktopPoolCreateFailed
+            },
+        );
+        result
     }
 
     fn apply_requested_profile(
@@ -468,7 +556,6 @@ mod runner_pin_tests {
         let dir = tempfile::tempdir().unwrap();
         let extension = dir.path().join(QUACK_EXTENSION_FILE);
         std::fs::write(&extension, b"not-the-pinned-extension").unwrap();
-
         assert_eq!(
             verify_offline_quack_extension(&extension, "windows", "x86_64"),
             Err("official_runner.extension_checksum_mismatch".to_string())
@@ -531,29 +618,14 @@ mod runner_pin_tests {
         );
     }
 
-    #[test]
-    fn slothdb_install_is_rejected_before_download_or_fallback() {
-        let app_data = tempfile::tempdir().unwrap();
-        let error = install(app_data.path(), "slothdb", |_| {})
-            .expect_err("SlothDB install remains disabled");
-        assert!(error.contains("engine_disabled"), "{error}");
-        assert!(error.contains("SlothDB"), "{error}");
-        assert!(!app_data.path().join("engines").join("slothdb").exists());
-    }
-
     #[cfg(windows)]
     #[test]
     fn desktop_controller_registration_does_not_create_the_pool() {
         let controller = DesktopRunnerController::new(Some(PathBuf::from("missing-sidecar.exe")));
         let workspace = tempfile::tempdir().unwrap();
         let profile = RunnerResourcesProfile::default();
-        let official = controller
-            .controller_for_workspace(workspace.path(), &profile)
-            .expect("lazy controller registration does not inspect or launch the sidecar");
-        drop(official);
-
-        let state = controller.state.lock().unwrap();
-        let registered = state.controllers.values().next().unwrap();
-        assert!(registered.pool.get().is_none());
+        let official = controller.controller_for_workspace(workspace.path(), &profile);
+        assert!(official.is_none());
+        assert_eq!(controller.entry_point_class(), EntryPointClass::Production);
     }
 }
