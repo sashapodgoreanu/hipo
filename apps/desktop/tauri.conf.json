@@ -3,10 +3,13 @@
   "productName": "Duckle",
   "version": "0.5.5",
   "identifier": "io.duckle.app",
-    "build": {
+  "build": {
     "beforeDevCommand": "npm --prefix ../frontend run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm --prefix ../frontend run build",
+    "beforeBuildCommand": {
+      "script": "cargo build --release -p duckle-runner --bins && npm --prefix frontend run build",
+      "cwd": "../.."
+    },
     "frontendDist": "../../frontend/dist"
   },
   "app": {
