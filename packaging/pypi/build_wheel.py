@@ -127,28 +127,37 @@ def main():
             print("README.md {:.0f} KB, {} relative link(s) absolutized".format(
                 len(body.encode("utf-8")) / 1024, rewritten))
 
-        cmd = [
-            sys.executable, "-m", "build", "--wheel",
-            "--outdir", os.path.abspath(args.outdir),
-            "--config-setting=--build-option=--plat-name={}".format(args.platform),
-            stage,
-        ]
-        rc = subprocess.call(cmd)
+        # Build untagged, then retag with `wheel tags`.
+        #
+        # NOT setuptools' --plat-name. That sanitizes every '.' in the tag to
+        # '_', so a compressed tag set like
+        #   manylinux_2_17_x86_64.musllinux_1_2_x86_64
+        # lands in the filename as one run of underscores and PyPI rejects the
+        # upload with "unsupported platform tag". `wheel tags` takes repeated
+        # --platform-tag arguments and joins them with '.' correctly, which is
+        # how uv and friends ship a single Linux wheel that satisfies both
+        # glibc and musl.
+        outdir = os.path.abspath(args.outdir)
+        rc = subprocess.call([
+            sys.executable, "-m", "build", "--wheel", "--outdir", outdir, stage,
+        ])
         if rc != 0:
-            # setuptools' --plat-name plumbing differs across versions; fall
-            # back to wheel's own retagging, which is version independent.
-            print("build with --plat-name failed, retagging instead", file=sys.stderr)
-            rc = subprocess.call([sys.executable, "-m", "build", "--wheel",
-                                  "--outdir", os.path.abspath(args.outdir), stage])
-            if rc != 0:
-                sys.exit("build_wheel: wheel build failed")
-            for name in sorted(os.listdir(args.outdir)):
-                if name.endswith("-any.whl"):
-                    subprocess.check_call([
-                        sys.executable, "-m", "wheel", "tags",
-                        "--platform-tag", args.platform, "--remove",
-                        os.path.join(args.outdir, name),
-                    ])
+            sys.exit("build_wheel: wheel build failed")
+
+        # One --platform-tag carrying the whole dot-joined set. Repeating the
+        # flag does not accumulate, it overwrites, so passing the tags
+        # separately silently ships a wheel tagged for only the last one.
+        retagged = False
+        for name in sorted(os.listdir(outdir)):
+            if name.endswith("-any.whl"):
+                subprocess.check_call([
+                    sys.executable, "-m", "wheel", "tags",
+                    "--platform-tag", args.platform,
+                    "--remove", os.path.join(outdir, name),
+                ])
+                retagged = True
+        if not retagged:
+            sys.exit("build_wheel: no -any.whl to retag; nothing was built")
 
     print("\nwheels in {}:".format(args.outdir))
     for name in sorted(os.listdir(args.outdir)):
