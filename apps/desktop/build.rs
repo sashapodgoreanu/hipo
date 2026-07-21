@@ -88,10 +88,18 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build_base.rs");
     println!("cargo:rerun-if-changed=.duckle-always-restamp-build-epoch");
+    println!("cargo:rerun-if-env-changed=DUCKLE_ENTRY_POINT_CLASS");
 
     legacy::embed_common_sidecars();
     embed_db_sidecar_pair();
     legacy::finish_tauri_build();
+}
+
+fn official_runner_required() -> bool {
+    matches!(
+        std::env::var("DUCKLE_ENTRY_POINT_CLASS").as_deref(),
+        Ok("test") | Ok("release-ci") | Ok("release_ci")
+    )
 }
 
 fn write_empty(path: &std::path::Path) {
@@ -179,6 +187,11 @@ fn embed_db_sidecar_pair() {
             println!(
                 "cargo:rustc-env=DUCKLE_OFFICIAL_RUNNER_PIN={}",
                 manifest.display()
+            );
+        }
+        None if official_runner_required() => {
+            panic!(
+                "DUCKLE_ENTRY_POINT_CLASS requires the verified official runner, but {sidecar_name} and {QUACK_EXTENSION_FILE} were not found as an adjacent pair in apps/desktop/bin or the active Cargo profile directory"
             );
         }
         None => {
