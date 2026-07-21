@@ -1,10 +1,8 @@
-//! Workspace-owned official runner adapter for scheduled executions.
+//! Workspace-owned Quack runner adapter for scheduled executions.
 //!
-//! This mirrors the headless runner boundary: controller provisioning is lazy,
-//! the sidecar path stays private, and production remains on compatibility until
-//! packaged CutoverEvidence is approved.
+//! Controller provisioning is lazy, the sidecar path stays private, and every
+//! scheduled run uses the same packaged runner route as desktop and headless.
 
-use duckle_db_runner::cutover::{configured_entry_point_class, packaged_cutover_gate};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 use duckle_db_runner::resources::{
@@ -22,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(windows)]
-static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<LazySchedulerController>>>> =
+static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<SchedulerController>>>> =
     OnceLock::new();
 
 pub(crate) fn configure_engine_for_workspace(
@@ -33,15 +31,11 @@ pub(crate) fn configure_engine_for_workspace(
     if let Err(error) = &resources {
         tracing::warn!(reason = %error, "scheduler runner resources rejected");
     }
-    let with_controller = resources
+    resources
         .ok()
         .and_then(|resources| controller_for_workspace(workspace, &resources.requested))
         .map(|controller| base.with_official_runner_controller(controller))
-        .unwrap_or(base);
-    with_controller.with_runner_selection(
-        configured_entry_point_class(),
-        &packaged_cutover_gate(),
-    )
+        .unwrap_or(base)
 }
 
 pub(crate) fn workspace_resources(
@@ -73,10 +67,7 @@ fn controller_for_workspace(
         return Some(existing);
     }
 
-    let controller = Arc::new(LazySchedulerController::new(
-        sidecar_path,
-        profile.clone(),
-    ));
+    let controller = Arc::new(SchedulerController::new(sidecar_path, profile.clone()));
     let mut registry = controllers
         .lock()
         .expect("scheduler controller registry poisoned");
@@ -107,19 +98,16 @@ fn sidecar_name() -> &'static str {
 }
 
 fn resolve_sidecar_path() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("DUCKLE_DB_SIDECAR_BIN") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(directory) = executable.parent() {
-            candidates.push(directory.join(sidecar_name()));
-            if let Some(app_data) = directory.parent() {
-                candidates.push(app_data.join("engines").join("db-sidecar").join(sidecar_name()));
-            }
-        }
-    }
-    candidates.into_iter().find_map(absolute_existing_file)
+    let executable = std::env::current_exe().ok()?;
+    let directory = executable.parent()?;
+    [
+        directory.join(sidecar_name()),
+        directory
+            .parent()
+            .map(|app_data| app_data.join("engines").join("db-sidecar").join(sidecar_name()))?,
+    ]
+    .into_iter()
+    .find_map(absolute_existing_file)
 }
 
 fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
@@ -135,14 +123,14 @@ fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-struct LazySchedulerController {
+struct SchedulerController {
     sidecar_path: PathBuf,
     requested_profile: Mutex<RunnerResourcesProfile>,
     pool: OnceLock<Result<Arc<WorkerPoolControl>, RunnerFailureReason>>,
 }
 
 #[cfg(windows)]
-impl LazySchedulerController {
+impl SchedulerController {
     fn new(sidecar_path: PathBuf, requested_profile: RunnerResourcesProfile) -> Self {
         Self {
             sidecar_path,
@@ -204,7 +192,7 @@ impl LazySchedulerController {
 }
 
 #[cfg(windows)]
-impl OfficialRunnerController for LazySchedulerController {
+impl OfficialRunnerController for SchedulerController {
     fn acquire(
         &self,
         run_id: RunId,
@@ -272,12 +260,12 @@ mod tests {
     use duckle_duckdb_engine::ExecutionRoute;
 
     #[test]
-    fn scheduler_production_route_stays_compatible_before_cutover() {
+    fn scheduler_uses_only_the_quack_route() {
         let engine = configure_engine_for_workspace(
-            DuckdbEngine::new(PathBuf::from("duckdb")),
+            DuckdbEngine::new(PathBuf::new()),
             Path::new("."),
         );
-        assert_eq!(engine.execution_route(), ExecutionRoute::CliCompatibility);
+        assert_eq!(engine.execution_route(), ExecutionRoute::OfficialRunner);
     }
 
     #[test]
