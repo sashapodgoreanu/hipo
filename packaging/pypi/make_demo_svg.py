@@ -45,7 +45,13 @@ def esc(s):
 
 
 def render(path, title, lines):
-    """lines: list of (kind, text); kind picks the row colour."""
+    """lines: list of (kind, text); kind picks the row colour.
+
+    `title` is the window chrome caption. It should describe what the reader
+    is looking at, not repeat the command, which is already the first line of
+    the transcript: a title bar reading "uvx duckle quickstart" directly above
+    "$ uvx duckle quickstart" just looks like a rendering bug.
+    """
     width = max(660, int(PAD_X * 2 + CHAR_W * max(len(t) for _, t in lines) + 10))
     height = TOP + LINE_H * (len(lines) + 1) + 16
 
@@ -106,35 +112,36 @@ def render(path, title, lines):
 
 
 # --------------------------------------------------------------- demo 1
-# The true first run: one command, nothing installed, real rows out.
-# Captured verbatim from `uvx duckle quickstart` against the published package.
+# The onboarding prompt, not a terminal session. A first-time user pastes one
+# sentence into their agent and the agent does the rest. Everything the agent
+# prints is verbatim from a real `uvx duckle quickstart` run.
 INSTALL = [
-    ("cmd", "uvx duckle quickstart"),
+    ("key", "> Run uvx duckle quickstart to build my first data pipeline"),
+    ("key", "  and run it"),
     ("out", ""),
-    ("key", "Duckle quickstart"),
+    ("dim", "  Running uvx duckle quickstart ..."),
     ("out", ""),
-    ("dim", "  created  orders.csv  (8 rows of sample data)"),
-    ("dim", "  created  pipelines/quickstart.json"),
+    ("out", "  Duckle quickstart"),
     ("out", ""),
-    ("out", "Running pipelines/quickstart.json ..."),
+    ("dim", "    created  orders.csv  (8 rows of sample data)"),
+    ("dim", "    created  pipelines/quickstart.json"),
     ("out", ""),
-    ("out", "status   : ok"),
-    ("dim", "duration : 212 ms"),
-    ("ok",  "  csv        ok (8 rows)"),
-    ("ok",  "  filter     ok (5 rows)"),
-    ("ok",  "  derive     ok (5 rows)"),
-    ("ok",  "  out        ok (5 rows)"),
+    ("out", "    status   : ok"),
+    ("dim", "    duration : 212 ms"),
+    ("ok",  "      csv        ok (8 rows)"),
+    ("ok",  "      filter     ok (5 rows)"),
+    ("ok",  "      derive     ok (5 rows)"),
+    ("ok",  "      out        ok (5 rows)"),
     ("out", ""),
-    ("out", "out.csv:"),
+    ("dim", "    id,region,customer,amount,total,tag"),
+    ("out", "    2,EU,Globex,25,30.0,EU-Globex"),
+    ("out", "    3,US,Initech,40,48.0,US-Initech"),
+    ("out", "    4,UK,Umbrella,30,36.0,UK-Umbrella"),
+    ("out", "    6,EU,Soylent,55,66.0,EU-Soylent"),
+    ("out", "    7,UK,Vehement,22,26.4,UK-Vehement"),
     ("out", ""),
-    ("dim", "  id,region,customer,amount,total,tag"),
-    ("out", "  2,EU,Globex,25,30.0,EU-Globex"),
-    ("out", "  3,US,Initech,40,48.0,US-Initech"),
-    ("out", "  4,UK,Umbrella,30,36.0,UK-Umbrella"),
-    ("out", "  6,EU,Soylent,55,66.0,EU-Soylent"),
-    ("out", "  7,UK,Vehement,22,26.4,UK-Vehement"),
-    ("out", ""),
-    ("dim", "# Nothing installed. Scaffolded, compiled to SQL, run by DuckDB."),
+    ("out", "  Your first pipeline ran: 8 rows in, 5 out, written to"),
+    ("out", "  out.csv. Nothing was installed."),
 ]
 
 # --------------------------------------------------------------- demo 2
@@ -188,8 +195,8 @@ AGENT = [
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     render(os.path.join(OUT_DIR, "pypi-demo-install.svg"),
-           "uvx duckle quickstart", INSTALL)
+           "paste this into Claude Code, Cursor or Codex", INSTALL)
     render(os.path.join(OUT_DIR, "pypi-demo-validate.svg"),
-           "duckle validate  -  the CI gate", VALIDATE)
+           "the CI gate", VALIDATE)
     render(os.path.join(OUT_DIR, "pypi-demo-agent.svg"),
-           "duckle as an MCP server", AGENT)
+           "your agent, with real tools", AGENT)
