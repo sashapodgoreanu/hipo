@@ -120,6 +120,28 @@ fn compress_db_sidecar(source: &std::path::Path, destination: &std::path::Path) 
         .unwrap_or_else(|error| panic!("write {}: {error}", destination.display()));
 }
 
+fn pair_in_directory(
+    directory: &std::path::Path,
+    sidecar_name: &str,
+) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let sidecar = directory.join(sidecar_name);
+    let extension = directory.join(QUACK_EXTENSION_FILE);
+    println!("cargo:rerun-if-changed={}", sidecar.display());
+    println!("cargo:rerun-if-changed={}", extension.display());
+
+    if sidecar.is_file() && extension.is_file() {
+        Some((sidecar, extension))
+    } else {
+        if sidecar.is_file() || extension.is_file() {
+            println!(
+                "cargo:warning=ignoring incomplete local official-runner pair in {}; sidecar and Quack extension must be adjacent",
+                directory.display()
+            );
+        }
+        None
+    }
+}
+
 fn embed_db_sidecar_pair() {
     let manifest_dir =
         std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -134,19 +156,16 @@ fn embed_db_sidecar_pair() {
     };
 
     let staged_dir = manifest_dir.join("bin");
-    let profile_dir = out_dir.ancestors().nth(3).map(std::path::Path::to_path_buf);
+    let active_profile_dir = out_dir.ancestors().nth(3).map(std::path::Path::to_path_buf);
+    let release_profile_dir = active_profile_dir
+        .as_ref()
+        .and_then(|profile| profile.parent())
+        .map(|target| target.join("release"));
+
     let staged_sidecar = staged_dir.join(sidecar_name);
     let staged_extension = staged_dir.join(QUACK_EXTENSION_FILE);
-
     println!("cargo:rerun-if-changed={}", staged_sidecar.display());
     println!("cargo:rerun-if-changed={}", staged_extension.display());
-    if let Some(profile) = &profile_dir {
-        println!("cargo:rerun-if-changed={}", profile.join(sidecar_name).display());
-        println!(
-            "cargo:rerun-if-changed={}",
-            profile.join(QUACK_EXTENSION_FILE).display()
-        );
-    }
 
     let pair = if staged_sidecar.is_file() {
         if !staged_extension.is_file() {
@@ -155,22 +174,11 @@ fn embed_db_sidecar_pair() {
             );
         }
         Some((staged_sidecar, staged_extension))
-    } else if let Some(profile) = profile_dir {
-        let sidecar = profile.join(sidecar_name);
-        let extension = profile.join(QUACK_EXTENSION_FILE);
-        if sidecar.is_file() && extension.is_file() {
-            Some((sidecar, extension))
-        } else {
-            if sidecar.is_file() || extension.is_file() {
-                println!(
-                    "cargo:warning=ignoring incomplete local official-runner fallback in {}; sidecar and Quack extension must be adjacent",
-                    profile.display()
-                );
-            }
-            None
-        }
     } else {
-        None
+        [active_profile_dir, release_profile_dir]
+            .into_iter()
+            .flatten()
+            .find_map(|directory| pair_in_directory(&directory, sidecar_name))
     };
 
     let embedded_sidecar = out_dir.join("embedded-db-sidecar.bin");
@@ -191,7 +199,7 @@ fn embed_db_sidecar_pair() {
         }
         None if official_runner_required() => {
             panic!(
-                "DUCKLE_ENTRY_POINT_CLASS requires the verified official runner, but {sidecar_name} and {QUACK_EXTENSION_FILE} were not found as an adjacent pair in apps/desktop/bin or the active Cargo profile directory"
+                "DUCKLE_ENTRY_POINT_CLASS requires the verified official runner, but {sidecar_name} and {QUACK_EXTENSION_FILE} were not found as an adjacent pair in apps/desktop/bin, the active Cargo profile, or target/release"
             );
         }
         None => {
