@@ -8,10 +8,11 @@ use crate::model::RunnerFailureReason;
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const DUCKDB_VERSION: &str = "1.5.4";
 pub const QUACK_EXTENSION_VERSION: &str = "1.5.4";
+pub const QUACK_EXTENSION_FILE: &str = "quack.duckdb_extension";
 pub const QUACK_LICENSE: &str = "MIT";
 pub const QUACK_PROVENANCE: &str = "https://github.com/duckdb/duckdb-quack";
 pub const QUACK_EXTENSION_BASE_URL: &str = "https://extensions.duckdb.org/v1.5.4";
@@ -91,10 +92,31 @@ pub fn bundle_for(platform: BundlePlatform) -> Option<&'static QuackBundleEntry>
     QUACK_BUNDLES.iter().find(|entry| entry.platform == platform)
 }
 
+/// Returns the application-private, versioned Quack extension path belonging to
+/// one packaged database sidecar. It deliberately does not use DuckDB's global
+/// `~/.duckdb/extensions` cache, so an extension installed by the user is never
+/// replaced, deleted, or selected accidentally by the official runner.
+pub fn packaged_extension_path(
+    sidecar_program: &Path,
+    platform: BundlePlatform,
+) -> Result<PathBuf, RunnerFailureReason> {
+    let directory = sidecar_program
+        .parent()
+        .ok_or(RunnerFailureReason::RunnerUnavailable)?;
+    Ok(directory
+        .join("extensions")
+        .join(format!("v{DUCKDB_VERSION}"))
+        .join(platform.repository_name())
+        .join(QUACK_EXTENSION_FILE))
+}
+
 /// Verifies a release-staged extension without loading it. A missing artifact
 /// is an availability error; any identity mismatch stays distinct and blocks
 /// worker readiness before a sidecar can receive a lease.
-pub fn verify_staged_bundle(path: &Path, expected: &QuackBundleEntry) -> Result<(), RunnerFailureReason> {
+pub fn verify_staged_bundle(
+    path: &Path,
+    expected: &QuackBundleEntry,
+) -> Result<(), RunnerFailureReason> {
     let mut file = File::open(path).map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     let hash = sha256_reader(&mut file).map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     if hash != expected.sha256 {
@@ -140,8 +162,22 @@ mod tests {
             assert_eq!(entry.duckdb_version, DUCKDB_VERSION);
             assert_eq!(entry.quack_version, QUACK_EXTENSION_VERSION);
             assert_eq!(entry.license, QUACK_LICENSE);
-            assert!(entry.sha256.chars().all(|character| character.is_ascii_hexdigit()));
+            assert!(entry
+                .sha256
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()));
             assert_eq!(entry.sha256.len(), 64);
         }
+    }
+
+    #[test]
+    fn packaged_extension_path_is_private_versioned_and_platform_scoped() {
+        let sidecar = Path::new(r"C:\Users\tester\AppData\Roaming\io.duckle.app\engines\db-sidecar\duckle-db-sidecar.exe");
+        let path = packaged_extension_path(&sidecar, BundlePlatform::WindowsAmd64).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming\io.duckle.app\engines\db-sidecar\extensions\v1.5.4\windows_amd64\quack.duckdb_extension")
+        );
+        assert!(!path.to_string_lossy().contains(r".duckdb\extensions"));
     }
 }
