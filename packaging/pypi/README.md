@@ -102,6 +102,8 @@ Note: `validate` does not yet catch every missing required property, so a clean 
 
 ## Agent-ready, with nothing installed
 
+<img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-agent.svg" alt="Terminal: adding duckle as an MCP server via uvx, then an agent discovering Salesforce connectors, reading a component schema, creating a pipeline that compiles, and running it" width="660"/>
+
 The same package is an MCP server, so an AI agent gets a governed way to work with data instead of a shell. Point Claude Code, Claude Desktop or Cursor at it:
 
 ```json

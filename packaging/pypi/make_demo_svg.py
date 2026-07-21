@@ -110,7 +110,7 @@ def render(path, title, lines):
 # Captured verbatim from a pip-installed duckle with DUCKLE_DUCKDB_BIN unset.
 INSTALL = [
     ("cmd", "pip install duckle"),
-    ("ok",  "Successfully installed duckdb-cli-1.5.4 duckle-0.5.7"),
+    ("ok",  "Successfully installed duckdb-cli-1.5.4 duckle-0.5.8"),
     ("out", ""),
     ("cmd", "duckle quickstart"),
     ("out", ""),
@@ -158,9 +158,42 @@ VALIDATE = [
 ]
 
 
+# --------------------------------------------------------------- demo 3
+# The agent loop, with nothing installed. Tool results are verbatim from a
+# real MCP session driven through `uvx --from duckle duckle-mcp`.
+AGENT = [
+    ("cmd", "claude mcp add duckle -- uvx --from duckle duckle-mcp"),
+    ("ok",  "Added stdio MCP server duckle"),
+    ("out", ""),
+    ("dim", "# nothing installed: uv fetches duckle and the DuckDB engine on demand"),
+    ("out", ""),
+    ("key", "> find me the salesforce connectors, then load orders.csv"),
+    ("key", "  into parquet keeping only orders over 20"),
+    ("out", ""),
+    ("dim", "  duckle - list_components(query=\"salesforce\")"),
+    ("out", "    3: snk.salesforce, snk.salesforce.bulk, src.salesforce"),
+    ("out", ""),
+    ("dim", "  duckle - get_component_schema(\"xf.filter\")"),
+    ("out", "    predicate, rejectOnError"),
+    ("out", ""),
+    ("dim", "  duckle - create_pipeline(\"big-orders\")"),
+    ("ok",  "    ok  validation: 3 stages compiled"),
+    ("out", ""),
+    ("dim", "  duckle - run_pipeline(\"big-orders.json\")"),
+    ("ok",  "    ok  169 ms"),
+    ("ok",  "      csv      ok (4 rows)"),
+    ("ok",  "      filter   ok (3 rows)"),
+    ("ok",  "      parquet  ok (3 rows)"),
+    ("out", ""),
+    ("dim", "# Compile-checked before it ran. The graph opens in the canvas."),
+]
+
+
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     render(os.path.join(OUT_DIR, "pypi-demo-install.svg"),
            "pip install duckle", INSTALL)
     render(os.path.join(OUT_DIR, "pypi-demo-validate.svg"),
            "duckle validate  -  the CI gate", VALIDATE)
+    render(os.path.join(OUT_DIR, "pypi-demo-agent.svg"),
+           "duckle as an MCP server", AGENT)
