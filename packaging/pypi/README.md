@@ -27,6 +27,12 @@ pip install duckle         # or install it
 
 ---
 
+## Or install it
+
+<img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-pip.svg" alt="Terminal: pip install duckle brings the DuckDB engine, then a job.py using the Python API reads a CSV, filters, derives a column and writes Parquet" width="660"/>
+
+Where `uvx` is for trying it, `pip` is for keeping it: a persistent `duckle` command, `duckle-mcp` for agents, and `import duckle` in Python.
+
 ## No data passes through Python
 
 Every method appends a node to a pipeline graph. Nothing executes until `.run()`, and then the whole graph is handed to the engine, compiled to SQL, and executed inside DuckDB.

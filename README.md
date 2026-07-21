@@ -499,6 +499,8 @@ pip install duckle
 
 That is the whole install. It brings the DuckDB CLI with it (via the [`duckdb-cli`](https://pypi.org/project/duckdb-cli/) package published by the DuckDB Foundation), so there is nothing else to fetch and it works offline. Wheels ship for Linux, macOS and Windows on x86-64 and arm64.
 
+<p align="center"><img src="docs/assets/pypi-demo-pip.svg" alt="Terminal: pip install duckle brings the DuckDB engine, then a job.py using the Python API reads a CSV, filters, derives a column and writes Parquet" width="660"/></p>
+
 It also gives you a Python API, where pipelines are built as code and executed by DuckDB rather than by Python:
 
 ```python

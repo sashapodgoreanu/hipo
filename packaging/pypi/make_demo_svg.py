@@ -191,6 +191,41 @@ AGENT = [
 ]
 
 
+# --------------------------------------------------------------- demo 4
+# The pip path. Where uvx is for trying it, pip is for keeping it: a
+# persistent `duckle` command, `duckle-mcp`, and `import duckle` in Python.
+# Captured verbatim from a fresh install of 0.5.9 off PyPI.
+PIP = [
+    ("cmd", "pip install duckle"),
+    ("dim", "Downloading duckle-0.5.9-py3-none-win_amd64.whl (23.0 MB)"),
+    ("dim", "Downloading duckdb_cli-1.5.4-py3-none-win_amd64.whl (12.9 MB)"),
+    ("ok",  "Successfully installed duckdb-cli-1.5.4 duckle-0.5.9"),
+    ("out", ""),
+    ("dim", "# three commands, and the engine, on your PATH:"),
+    ("dim", "#   duckle   duckle-mcp   duckdb"),
+    ("out", ""),
+    ("cmd", "cat job.py"),
+    ("key", "import duckle"),
+    ("key", "from duckle import col"),
+    ("out", ""),
+    ("out", '(duckle.read_csv("orders.csv")'),
+    ("out", "    .where(col.amount >= 20)"),
+    ("out", '    .derive(total="round(amount * 1.2, 2)")'),
+    ("out", '    .write_parquet("out.parquet")'),
+    ("out", "    .run())"),
+    ("out", ""),
+    ("cmd", "python job.py"),
+    ("out", "status   : ok"),
+    ("dim", "duration : 388 ms"),
+    ("ok",  "  csv        ok (5 rows)"),
+    ("ok",  "  filter     ok (3 rows)"),
+    ("ok",  "  pyexpr     ok (3 rows)"),
+    ("ok",  "  parquet    ok (3 rows)"),
+    ("out", ""),
+    ("dim", "# Python built the plan. DuckDB moved the rows."),
+]
+
+
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     render(os.path.join(OUT_DIR, "pypi-demo-install.svg"),
@@ -199,3 +234,5 @@ if __name__ == "__main__":
            "the CI gate", VALIDATE)
     render(os.path.join(OUT_DIR, "pypi-demo-agent.svg"),
            "your agent, with real tools", AGENT)
+    render(os.path.join(OUT_DIR, "pypi-demo-pip.svg"),
+           "pip install duckle", PIP)
