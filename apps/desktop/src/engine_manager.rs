@@ -519,6 +519,106 @@ pub(crate) fn ensure_macos_launchable(dir: &Path, main_binary: &Path) -> Result<
     macos_prepare_engine(dir, main_binary)
 }
 
+/// Extract a .tar.gz engine archive into `dir`, flattening every entry to its
+/// leaf name so the binary keeps its sibling shared libraries. Returns whether
+/// the wanted binary was found (it is written atomically to `target`, since
+/// status() keys off that path existing).
+///
+/// Link entries need real handling. A tar stores a symlink's target in the
+/// HEADER with an empty body, so copying the entry writes a 0-byte regular
+/// file. That was issue #89: llama.cpp ships `libllama.0.0.9305.dylib` plus the
+/// `libllama.0.dylib` / `libllama.dylib` symlinks its binaries actually link
+/// against, and those landed as empty files. dyld then reported
+/// `Library not loaded: @rpath/libllama-common.0.dylib ... tried: '<path>' ()`,
+/// where the empty parentheses mean the file was found but was not a valid
+/// Mach-O. No amount of re-signing could fix that, because there was nothing to
+/// sign; the bytes were never written.
+fn extract_tar_gz(
+    buf: &[u8],
+    dir: &Path,
+    target: &Path,
+    want: &str,
+    binary: &str,
+) -> Result<bool, String> {
+    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(buf));
+    let mut archive = tar::Archive::new(gz);
+    let mut extracted = false;
+    // Links are replayed after the regular files, because a tar may list a
+    // link before the entry it points at.
+    let mut links: Vec<(String, String)> = Vec::new();
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path().map_err(|e| e.to_string())?.to_path_buf();
+        let leaf = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if entry.header().entry_type().is_dir() || leaf.is_empty() {
+            continue;
+        }
+        let et = entry.header().entry_type();
+        if et.is_symlink() || et.is_hard_link() {
+            let target_leaf = entry
+                .link_name()
+                .ok()
+                .flatten()
+                .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+                .unwrap_or_default();
+            if !target_leaf.is_empty() && target_leaf != leaf {
+                links.push((leaf, target_leaf));
+            }
+            continue;
+        }
+        let is_target_binary =
+            leaf.eq_ignore_ascii_case(want) || leaf.eq_ignore_ascii_case(binary);
+        if is_target_binary {
+            // Atomic for the binary status() keys off of.
+            copy_atomic(&mut entry, target)?;
+            extracted = true;
+        } else {
+            let out_path = dir.join(&leaf);
+            let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+    // Recreate the links now every real file is on disk. All of llama.cpp's
+    // links are same-directory, so the flattened leaf is a valid relative
+    // target.
+    for (link_leaf, target_leaf) in links {
+        let link_path = dir.join(&link_leaf);
+        if !dir.join(&target_leaf).exists() {
+            // Nothing to point at: leave what is there rather than replacing a
+            // real file with a dangling link.
+            continue;
+        }
+        let _ = std::fs::remove_file(&link_path);
+        #[cfg(unix)]
+        {
+            if let Err(e) = std::os::unix::fs::symlink(&target_leaf, &link_path) {
+                return Err(format!(
+                    "could not link {} -> {}: {}",
+                    link_leaf, target_leaf, e
+                ));
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows needs a privilege for symlinks, so copy instead. The
+            // duplicated bytes are harmless and the loader is satisfied.
+            std::fs::copy(dir.join(&target_leaf), &link_path).map_err(|e| {
+                format!("could not copy {} -> {}: {}", target_leaf, link_leaf, e)
+            })?;
+        }
+    }
+    Ok(extracted)
+}
+
 fn install_spec<F: FnMut(InstallProgress)>(
     app_data: &Path,
     s: &EngineSpec,
@@ -634,39 +734,7 @@ fn install_spec<F: FnMut(InstallProgress)>(
         // to the engine dir so the binary keeps its sibling .so / .dylib.
         on_progress(InstallProgress::Extracting);
         let want = binary_file_name(s);
-        let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(buf));
-        let mut archive = tar::Archive::new(gz);
-        let mut extracted = false;
-        for entry in archive.entries().map_err(|e| e.to_string())? {
-            let mut entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path().map_err(|e| e.to_string())?.to_path_buf();
-            let leaf = path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if entry.header().entry_type().is_dir() || leaf.is_empty() {
-                continue;
-            }
-            let is_target_binary =
-                leaf.eq_ignore_ascii_case(&want) || leaf.eq_ignore_ascii_case(s.binary);
-            if is_target_binary {
-                // Atomic for the binary status() keys off of.
-                copy_atomic(&mut entry, &target)?;
-                extracted = true;
-            } else {
-                let out_path = dir.join(&leaf);
-                let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
-                std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        &out_path,
-                        std::fs::Permissions::from_mode(0o755),
-                    );
-                }
-            }
-        }
+        let extracted = extract_tar_gz(&buf, &dir, &target, &want, s.binary)?;
         if !extracted {
             return Err(format!(
                 "{} binary not found inside the downloaded tarball",
@@ -893,6 +961,125 @@ fn install_llama_model<F: FnMut(InstallProgress)>(
         return Err(e);
     }
     finalize_download(&tmp, &target)
+}
+
+#[cfg(test)]
+mod tar_extract_tests {
+    use super::extract_tar_gz;
+    use std::io::Write;
+
+    /// Build a .tar.gz shaped like llama.cpp's macOS release: a real versioned
+    /// dylib, the two symlinks that point at it, and the server binary. The
+    /// symlink entries are written explicitly so this holds on any host
+    /// filesystem, including one that cannot create symlinks.
+    fn llamacpp_shaped_tarball() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+
+        let real = b"FAKE-MACHO-DYLIB-BYTES";
+        let mut h = tar::Header::new_gnu();
+        h.set_path("build/bin/libllama-common.0.0.9305.dylib").unwrap();
+        h.set_size(real.len() as u64);
+        h.set_mode(0o755);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        builder.append(&h, &real[..]).unwrap();
+
+        for link in ["libllama-common.0.dylib", "libllama-common.dylib"] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(0); // a tar symlink carries no body
+            h.set_mode(0o755);
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_cksum();
+            builder
+                .append_link(&mut h, format!("build/bin/{link}"), "libllama-common.0.0.9305.dylib")
+                .unwrap();
+        }
+
+        let server = b"FAKE-SERVER-BINARY";
+        let mut h = tar::Header::new_gnu();
+        h.set_path("build/bin/llama-server").unwrap();
+        h.set_size(server.len() as u64);
+        h.set_mode(0o755);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        builder.append(&h, &server[..]).unwrap();
+
+        let tar_bytes = builder.into_inner().unwrap();
+        let mut gz =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&tar_bytes).unwrap();
+        gz.finish().unwrap()
+    }
+
+    /// Issue #89. The dylib symlinks used to land as 0-byte regular files,
+    /// because a tar symlink has an empty body and the extractor copied the
+    /// body. dyld then refused to load them and llama-server aborted, which
+    /// looked like a code-signing failure and was not.
+    #[test]
+    fn dylib_symlinks_are_not_extracted_as_empty_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let target = dir.join("llama-server");
+        let found =
+            extract_tar_gz(&llamacpp_shaped_tarball(), dir, &target, "llama-server", "llama-server")
+                .expect("extraction succeeds");
+        assert!(found, "the wanted binary must be found");
+
+        let real = dir.join("libllama-common.0.0.9305.dylib");
+        assert_eq!(std::fs::read(&real).unwrap(), b"FAKE-MACHO-DYLIB-BYTES");
+
+        for link in ["libllama-common.0.dylib", "libllama-common.dylib"] {
+            let p = dir.join(link);
+            assert!(p.exists(), "{link} must exist");
+            let meta = std::fs::metadata(&p).unwrap(); // follows the link
+            assert_ne!(
+                meta.len(),
+                0,
+                "{link} resolved to 0 bytes, which is the #89 bug"
+            );
+            // Reading through the link must yield the real library's bytes,
+            // whether it is a symlink (unix) or a copy (windows fallback).
+            assert_eq!(
+                std::fs::read(&p).unwrap(),
+                b"FAKE-MACHO-DYLIB-BYTES",
+                "{link} must resolve to the real dylib"
+            );
+        }
+    }
+
+    /// A link whose target is missing must not clobber anything or error the
+    /// whole install.
+    #[test]
+    fn dangling_link_is_skipped_not_fatal() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(0);
+        h.set_mode(0o755);
+        h.set_entry_type(tar::EntryType::Symlink);
+        h.set_cksum();
+        builder
+            .append_link(&mut h, "bin/orphan.dylib", "nothing-here.dylib")
+            .unwrap();
+        let bin = b"BINARY";
+        let mut h = tar::Header::new_gnu();
+        h.set_path("bin/llama-server").unwrap();
+        h.set_size(bin.len() as u64);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        builder.append(&h, &bin[..]).unwrap();
+        let tar_bytes = builder.into_inner().unwrap();
+        let mut gz =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&tar_bytes).unwrap();
+        let buf = gz.finish().unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("llama-server");
+        let found = extract_tar_gz(&buf, tmp.path(), &target, "llama-server", "llama-server")
+            .expect("a dangling link must not fail the install");
+        assert!(found);
+        assert!(!tmp.path().join("orphan.dylib").exists());
+    }
 }
 
 #[cfg(test)]
