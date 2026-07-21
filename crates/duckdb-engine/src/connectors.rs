@@ -1168,11 +1168,20 @@ impl DuckdbEngine {
                 )
             }
             // No declared schema: read everything as text rather than letting
-            // read_csv sniff types - inference turns a 01234 postcode into
-            // BIGINT 1234 and silently drops the leading zero. Salesforce
-            // serves every value as CSV text anyway; casting is a downstream
-            // choice the user makes deliberately (or by declaring a schema,
-            // which pins types via TRY_CAST above).
+            // read_csv sniff types, so a column's type does not depend on the
+            // values a given extract happened to contain.
+            //
+            // The risk is type instability between runs, not leading zeros:
+            // DuckDB's sniffer already keeps "01234" as VARCHAR. What it does
+            // not keep stable is a column whose values are all numeric in one
+            // extract and include one alphanumeric in the next. Verified on
+            // DuckDB 1.5.4, that column comes back BIGINT the first time and
+            // VARCHAR the second, so a sink's target table silently changes
+            // shape between runs, or the load fails on a type mismatch.
+            // Salesforce serves every value as CSV text anyway, so reading it
+            // as text is both faithful and deterministic; casting is then a
+            // downstream choice made deliberately, or by declaring a schema,
+            // which pins types via TRY_CAST above.
             _ => format!(
                 "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_csv('{}', header=true, all_varchar=true);",
                 plan::quote_ident(&spec.node_id),

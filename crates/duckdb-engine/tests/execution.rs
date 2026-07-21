@@ -12502,8 +12502,8 @@ fn src_salesforce_bulk_walks_locator_pages_in_order() {
         job_state: "JobComplete",
         stuck: false,
         pages: vec![
-            ("Id,Name,Zip\n001A,Acme,01234\n001B,Globex,02002\n", "P1", 2),
-            ("Id,Name,Zip\n001C,Initech,00042\n", "null", 1),
+            ("Id,Name,Zip,Amt\n001A,Acme,01234,2.50\n001B,Globex,02002,10.00\n", "P1", 2),
+            ("Id,Name,Zip,Amt\n001C,Initech,00042,7.10\n", "null", 1),
         ],
     });
 
@@ -12541,12 +12541,22 @@ fn src_salesforce_bulk_walks_locator_pages_in_order() {
         "pages must land in order: {}",
         written
     );
-    // No declared schema: values must survive as text, not get sniffed into
-    // numerics - a 01234 postcode losing its leading zero is silent data
-    // corruption for a migration source.
+    // No declared schema: every value must come through as text.
+    //
+    // Assert on the DECIMAL, not the leading zeros. DuckDB's sniffer already
+    // keeps "01234" as VARCHAR, so a leading-zero assertion passes with or
+    // without all_varchar and proves nothing. A trailing-zero decimal does
+    // distinguish them: sniffed to DOUBLE, "2.50" comes back out as "2.5" and
+    // "10.00" as "10.0". This assertion fails if the no-schema read ever stops
+    // pinning text.
+    assert!(
+        lines[1].contains("2.50") && lines[2].contains("10.00") && lines[3].contains("7.10"),
+        "decimals must survive the no-schema read as text: {}",
+        written
+    );
     assert!(
         lines[1].contains("01234") && lines[3].contains("00042"),
-        "leading zeros must survive the no-schema read: {}",
+        "leading zeros must survive too: {}",
         written
     );
 }
