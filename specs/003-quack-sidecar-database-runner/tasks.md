@@ -1,180 +1,133 @@
 # Tasks: Quack Sidecar Database Runner
 
-**Input**: Design artifacts and requirements-quality review in `/specs/003-quack-sidecar-database-runner/`.
+**Input**: design artifacts in `/specs/003-quack-sidecar-database-runner/`.
 
-**Tests**: Required for baseline parity, security, lifecycle, autoscaling, IPC/UI, benchmark, and offline-package gates.
-
-***Quality review**: Resolve or explicitly accept the relevant findings in `checklists/runner-quality.md` before completing a cutover gate.
-
-***Organization**: US4 comes first because every run must acquire a worker from its controller.
+**Final owner decision**: one packaged Quack runtime; no runtime cutover gate, backend class, benchmark prerequisite, or CLI fallback. `cargo fmt` is excluded. The final user validation command is the normal `cargo tauri build` from `apps/desktop`.
 
 ## Phase 1: Setup and migration baseline
 
- - [X] T001 Align controller-only acquisition, no budget/queue, five-minute peak, 20% headroom, and cutover rules in `docs/architecture/adr-quack-sidecar-runner.md`
-- [X] T002 Align Feature 003 intent with final pool, profile, and cutover rules in `docs/feature-intents/003-quack-sidecar-database-runner.md`
-- [X] T003 Rename retained PoC to `spikes/quack-sidecar-phase0-spike/` and update its repository references
-- [X] T004 Raise workspace MSRV and CI checks to Rust 1.88, the effective workspace floor required by the existing lockfile, in `Cargo.toml`, `rust-toolchain.toml`, and `.github/workflows/`
-- [X] T005 Create and workspace-register official runner crate in `crates/duckle-db-runner/Cargo.toml`, `crates/duckle-db-runner/src/lib.rs`, and `Cargo.toml`
-- [X] T006 [P] Create and baseline SQL/runtime/source/transform/sink/preview/partial fixtures in `crates/duckdb-engine/tests/quack_runner_parity.rs`
-- [X] T007 [P] Create bundled-runner Windows/macOS/Linux smoke workflow in `.github/workflows/runner-package-smoke.yml`
+- [X] T001 Align controller-only acquisition, no budget/queue, five-minute peak and 20% headroom in `docs/architecture/adr-quack-sidecar-runner.md`
+- [X] T002 Align Feature 003 intent in `docs/feature-intents/003-quack-sidecar-database-runner.md`
+- [X] T003 Preserve the Phase 0 PoC under a named spike during implementation
+- [X] T004 Raise workspace MSRV and CI checks to Rust 1.88
+- [X] T005 Create and workspace-register `crates/duckle-db-runner`
+- [X] T006 [P] Create SQL/runtime/source/transform/sink/preview/partial fixtures
+- [X] T007 [P] Create Windows/macOS/Linux package smoke workflow
 
----
+## Phase 2: Foundational contracts
 
-## Phase 2: Foundational contracts and shared infrastructure
+- [X] T008 Define `RunnerResourcesProfile`, migration, validation and diagnostics
+- [X] T009 [P] Define opaque worker, lease, session, failure and telemetry types
+- [X] T010 Implement complete-profile persistence and migration
+- [X] T011 [P] Add resource-profile IPC DTOs and bridge declarations
+- [X] T012 Implement loopback provider, inherited bootstrap, random credential and handshake
+- [X] T013 Implement process containment, tree termination and artifact sweeper
+- [X] T014 Implement sanitized runner events and allowlisted metrics
+- [X] T015 [P] Add profile serialization, migration and bounds tests
+- [X] T016 [P] Add bootstrap, readiness, mismatch and secret tests
 
-- [X] T008 Define versioned `RunnerResourcesProfile`, defaults, migration, validation, and diagnostics in `crates/duckle-db-runner/src/resources.rs`
-- [X] T009 [P] Define opaque worker/lease/session/provider/failure/event, sanitized-metric, and CutoverEvidence types in `crates/duckle-db-runner/src/model.rs`, `crates/duckle-db-runner/src/cutover.rs`, and `crates/duckle-db-runner/src/lib.rs`
-- [X] T010 Implement compatible complete-profile persistence and migration in `apps/desktop/src/app_settings.rs`
-- [X] T011 [P] Add resource-profile IPC DTOs and typed bridge declarations in `apps/desktop/src/lib.rs` and `frontend/src/tauri-bridge.ts`
-- [X] T012 Implement loopback-only LocalProcessProvider, inherited bootstrap pipe/handle, random credential, effective-profile-before-readiness, and authenticated handshake in `crates/duckle-db-runner/src/local_process_provider.rs`
-- [X] T013 Implement process containment, tree termination, and run-scoped artifact sweeper in `crates/duckle-db-runner/src/process_cleanup.rs`
-- [X] T014 Implement sanitized runner events, allowed metric fields/reason codes, and cutover-gate rejection events excluding endpoint, port, PID, path, SQL, secret, and capability in `crates/duckle-db-runner/src/events.rs`
-- [X] T015 [P] Add profile defaults/serialization/migration/bounds tests in `crates/duckle-db-runner/src/resources.rs` and `apps/desktop/src/app_settings.rs`
-- [X] T016 [P] Add bootstrap, effective-profile readiness, credential, mismatch, and argv/environment/file secret tests in `crates/duckle-db-runner/tests/local_process_provider.rs`
+## Phase 3: Elastic worker pool
 
----
+- [X] T017 Implement worker states, atomic acquire and single-use release
+- [X] T018 Implement five-minute demand peak ledger
+- [X] T019 Implement five-second target calculation and start de-duplication
+- [X] T020 Implement warm provisioning and ready-only scale-in
+- [X] T021 Implement controller-owned on-demand assignment
+- [X] T022 Emit sanitized allocation and lifecycle events
+- [X] T023 [P] Test leases, backoff, cancellation, duplicate start and precedence
+- [X] T024 [P] Test base, ceiling, tick, expiry, restart and scale-in
+- [X] T025 Test 100 on-demand runs and target 120
+- [X] T026 Test second wave using warm workers with 20 ready retained
 
-## Phase 3: User Story 4 - Elastic ready/on-demand worker pool (Priority: P1)
+## Phase 4: Atomic resource profile
 
-**Independent Test**: Exercise concurrent demand, startup failure, release, growth, and scale-in; verify base 3, exclusive lease, on-demand decisions, and 5-second/5-minute policy.
+- [X] T027 Implement generations, permits, cancellable waits and drain-before-apply
+- [X] T028 Implement coalescing and worker-state apply precedence
+- [X] T029 Preserve the prior effective profile on apply failure
+- [X] T030 Connect base-capacity changes to autoscaling
+- [X] T031 Implement atomic runner-resource IPC commands
+- [X] T032 Add Runner resources UI and diagnostics
+- [X] T033 [P] Test drain, coalescing, apply failure and permit limits
+- [X] T034 [P] Test persistence, IPC, legacy profile and convergence
+- [X] T035 Test the Runner resources form
 
-- [X] T017 [US4] Implement WorkerPoolControl states, atomic acquire, lease ownership, and single-use release in `crates/duckle-db-runner/src/worker_pool.rs`
-- [X] T018 [US4] Implement event-time demand tracking and sliding five-minute peak ledger in `crates/duckle-db-runner/src/demand.rs`
-- [X] T019 [US4] Implement 5-second target `max(base_capacity, ceil(peak_5m * 1.20))`, start de-duplication, floor, and restart state in `crates/duckle-db-runner/src/autoscaler.rs`
-- [X] T020 [US4] Implement warm provisioning/readiness and ready-only scale-in without interrupting or replacing leased workers in `crates/duckle-db-runner/src/worker_pool.rs`
-- [X] T021 [US4] Implement immediate controller-owned on-demand assignment with no ready worker, excluded from warm capacity and terminated with run in `crates/duckle-db-runner/src/worker_pool.rs`
-- [X] T022 [US4] Emit correlated sanitized acquire, decision, provision, readiness, lease, release, failure, and scale events in `crates/duckle-db-runner/src/events.rs`
-- [X] T023 [P] [US4] Test exclusive leases, readiness backoff, cancellation during provision, no duplicate start, and shutdown/crash/release/apply/scale precedence in `crates/duckle-db-runner/tests/worker_pool.rs`
-- [X] T024 [P] [US4] Test base 3, ceiling arithmetic, five-second tick, five-minute expiry, restart, and ready-only scale-in in `crates/duckle-db-runner/tests/autoscaler.rs`
-- [X] T025 [US4] Add 100-run test: 100 on-demand assignments, demand counted once, then target 120 warm workers in `crates/duckle-db-runner/tests/worker_pool.rs`
-- [X] T026 [US4] Add second-wave test: 100 leases from 120 warm workers, 20 ready retained, no on-demand workers in `crates/duckle-db-runner/tests/worker_pool.rs`
+## Phase 5: Per-run Quack database
 
----
+- [X] T036 Implement Quack-backed `RunDatabase` and `RunSession`
+- [X] T037 Integrate controller acquisition behind the engine adapter
+- [X] T038 Implement the SQL remote / Quack / Parquet decision table
+- [X] T039 Route preview and partial run through the runner
+- [X] T040 Create one desktop controller per workspace
+- [X] T041 [P] Add isolation, batch, runtime, preview and partial integration tests
+- [X] T042 [P] Prove one controller acquire per normal run and no direct spawn
 
-## Phase 4: User Story 7 - Atomic per-run resource profile (Priority: P1)
+## Phase 6: Catalog sharing without affinity
 
-**Independent Test**: Save versions during 1/2/4/8 active queries; verify drain, coalescing, latest-only atomic apply, apply failure, and base-capacity convergence.
+- [X] T043 Preserve temporary state in planner batches
+- [X] T044 Deduplicate per-run server setup
+- [X] T045 Implement affinity-free planning
+- [X] T046 Migrate Query Source callers to normal run sessions
+- [X] T047 [P] Add catalog-sharing and 2/4/8 concurrency tests
 
-- [X] T027 [US7] Implement profile generations, permits 1..=8, cancellable waits, and drain-before-atomic apply in `crates/duckle-db-runner/src/run_session.rs`
-- [X] T028 [US7] Implement save coalescing, serialized worker-state precedence, ready apply, stale-starting publication prevention, and target-aware termination in `crates/duckle-db-runner/src/worker_pool.rs`
-- [X] T029 [US7] Preserve prior effective profile on apply failure and return sanitized configuration_apply_failed in `crates/duckle-db-runner/src/run_session.rs`
-- [X] T030 [US7] Connect profile base-capacity change to immediate autoscaling without terminating leased workers in `crates/duckle-db-runner/src/autoscaler.rs` and `crates/duckle-db-runner/src/worker_pool.rs`
-- [X] T031 [US7] Implement atomic settings_get_runner_resources and settings_set_runner_resources in `apps/desktop/src/lib.rs`
-- [X] T032 [US7] Add Runner resources UI with complete save, requested/effective diagnostics, and base default 3 in `frontend/src/workflow-ui/SettingsModal.tsx`
-- [X] T033 [P] [US7] Test profile drain, coalescing, apply failure, and permit limits in `crates/duckle-db-runner/tests/run_session.rs`
-- [X] T034 [P] [US7] Test complete profile persistence/IPC, legacy/invalid profile behavior, and base-capacity convergence in `apps/desktop/src/app_settings.rs` and `apps/desktop/src/lib.rs`
-- [X] T035 [US7] Test Runner resources form, 1..=8 range, and diagnostics in `frontend/src/workflow-ui/SettingsModal.test.tsx`
+## Phase 7: Cancellation and cleanup
 
----
+- [X] T048 Wire cancellation to lease and process-scope termination
+- [X] T049 Classify transport loss as `runner_crashed`
+- [X] T050 Implement concurrent desktop run ownership
+- [X] T051 Run sweeper and parent-death containment from startup
+- [X] T052 [P] Add cancellation, crash and orphan integration tests
 
-## Phase 5: User Story 1 - Isolated official database for every pipeline run (Priority: P1)
+## Phase 8: Security
 
-**Independent Test**: Compare parity results, events, preview, partial run, runtime, and external effects with the baseline.
+- [X] T053 Enforce opaque client handles and capability isolation
+- [X] T054 Redact failures before UI, history, logs, headless and MCP output
+- [X] T055 Verify Tauri capability and CSP scope are unchanged
+- [X] T056 [P] Add secret-canary tests across persistent and transient surfaces
+- [X] T057 [P] Add credential and external-runtime isolation tests
 
-- [X] T036 [US1] Implement Quack-backed RunDatabase/session SQL-batch, setup, transfer, preview, and cancel adapter in `crates/duckle-db-runner/src/run_database.rs` and `crates/duckle-db-runner/src/run_session.rs`
-- [X] T037 [US1] Integrate controller acquisition and RunDatabase behind non-default compatibility selection, without changing production routing, in `crates/duckdb-engine/src/lib.rs`
-- [X] T038 [US1] Implement versioned SQL-remote/Quack/Parquet decision table with inputs, outputs, retries, cleanup, and sanitized exceptions in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/src/context.rs`
-- [X] T039 [US1] Route preview and partial run through official runner with unchanged semantics in `crates/duckdb-engine/src/lib.rs`
-- [X] T040 [US1] Create one desktop controller per open workspace with per-run cancellation ownership in `apps/desktop/src/engine_manager.rs` and `apps/desktop/src/lib.rs`
-- [X] T041 [P] [US1] Add isolation, SQL batch, runtime/materialization, preview, and partial integration tests in `crates/duckdb-engine/tests/quack_runner_parity.rs`
-- [X] T042 [P] [US1] Add regression that each normal run emits one controller acquire, cannot directly spawn, and preserves compatibility routing before cutover in `crates/duckdb-engine/tests/quack_runner_parity.rs`
----
+## Phase 9: Offline package and direct activation
 
-## Phase 6: User Story 2 - Catalog sharing and concurrency without affinity (Priority: P1)
+- [X] T058 Pin DuckDB/Quack version, checksum, license and provenance
+- [X] T059 Package and locate the sidecar/extension pair
+- [X] T060 Route headless and web runs through the controller
+- [X] T061 Route scheduler and MCP through the same controller
+- [X] T062 Implement the original migration gate as an intermediate safety step
+- [X] T063 Add original gate-selection and no-silent-fallback regressions
+- [X] T064 Apply memory, CPU, spill and temporary-space limits before readiness
+- [X] T065 Add resource and runner-unavailable integration coverage
+- [X] T066 Add decision-table correctness coverage
+- [X] T067 Record the owner decision that the CLI benchmark is optional analysis, not a runtime activation gate, in `quickstart.md`
+- [X] T068 Route inspect, drift and branch/diff through controller abstractions
+- [X] T069 Verify requested/effective profile consistency for every entry point
+- [X] T070 Verify allowlisted telemetry and retention routing
+- [X] T071 Activate one Quack route, remove runtime class/evidence configuration, disable CLI fallback and make normal desktop packaging require the verified pair
+- [X] T072 Remove `spikes/quack-sidecar-phase0-spike/` after retaining the architectural conclusions
+- [X] T073 Preserve readable-but-disabled SlothDB and xf.dbt diagnostics
+- [X] T074 Add clean offline package and mismatch smoke coverage
 
-**Independent Test**: Verify shared relations, server setup, batches, and 2/4/8 compatible requests without affinity classification or fallback.
+## Phase 10: Polish and final validation
 
-- [X] T043 [US2] Keep temporary state in planner batches and route server setup through RunSession in `crates/duckle-db-runner/src/run_session.rs`
-- [X] T044 [US2] Add per-run server-setup deduplication and catalog visibility across stateless requests in `crates/duckle-db-runner/src/run_session.rs`
-- [X] T045 [US2] Implement and test affinity-free planning while retaining affinity compatibility until cutover in `crates/duckdb-engine/src/plan/mod.rs`, `crates/duckdb-engine/src/plan/graph.rs`, and `crates/duckdb-engine/src/plan/builders.rs`
-- [X] T046 [US2] Migrate affinity callers to normal run database behind compatibility selection while retaining `AffinitySession` until cutover in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/src/affinity_session.rs`
-- [X] T047 [P] [US2] Replace affinity tests with catalog-sharing and 2/4/8 concurrency tests in `crates/duckdb-engine/src/plan/tests.rs` and `crates/duckdb-engine/tests/execution.rs`
----
+- [X] T075 Document pool states, profile application, autoscaling and diagnostics
+- [X] T076 Assert complete sanitized autoscale telemetry
+- [X] T077 Record the direct owner-approved activation decision and remove the obsolete CutoverEvidence template
+- [ ] T078 Run clippy and workspace tests after the final code changes; `cargo fmt` is explicitly excluded by the owner
+- [X] T079 Run frontend install, lint and build
+- [ ] T080 Complete the final production-reference scan and validate the packaged desktop with the normal `cargo tauri build`
 
-## Phase 7: User Story 3 - Deterministic cancellation, crash, and cleanup (Priority: P1)
-
-**Independent Test**: Cancel and force-kill scan, join, spill, transfer, and runtime work; verify sanitized outcome and cleanup within 10 seconds.
-
-- [X] T048 [US3] Wire cancellation to lease cancellation, process-scope termination, and no-new-stage dispatch in `crates/duckdb-engine/src/lib.rs` and `crates/duckle-db-runner/src/run_session.rs`
-- [X] T049 [US3] Classify transport loss as runner_crashed, poison lease, and prevent reuse in `crates/duckle-db-runner/src/worker_pool.rs` and `crates/duckdb-engine/src/lib.rs`
-- [X] T050 [US3] Replace desktop single-current-run state with concurrent run-to-session ownership in `apps/desktop/src/lib.rs`
-- [X] T051 [US3] Run sweeper and parent-death containment from desktop/headless startup in `apps/desktop/src/lib.rs` and `crates/duckle-runner/src/main.rs`
-- [X] T052 [P] [US3] Add cancellation/crash/orphan integration tests for scan, join, spill, transfer, and runtime in `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
----
-
-## Phase 8: User Story 5 - Secret and capability protection (Priority: P1)
-
-**Independent Test**: Use synthetic canaries and inspect spawn, files, IPC, logs, history, errors, export, profiler, cancellation, and access attempts.
-
-- [X] T053 [US5] Enforce opaque client handles and prohibit endpoint/capability exposure to runtime or user code in `crates/duckle-db-runner/src/local_process_provider.rs` and `crates/duckle-db-runner/src/run_session.rs`
-- [X] T054 [US5] Redact failures/events before history, logs, desktop events, headless output, and MCP responses in `crates/duckdb-engine/src/history.rs`, `crates/duckdb-engine/src/run_log.rs`, `apps/desktop/src/lib.rs`, `crates/duckle-runner/src/main.rs`, and `crates/duckle-mcp/src/tools.rs`
-- [X] T055 [US5] Verify no Tauri capability or CSP scope expands in `apps/desktop/capabilities/` and `apps/desktop/tauri.conf.json`
-- [X] T056 [P] [US5] Add secret-canary redaction tests for argv, env, files, IPC, events, history, errors, and logs in `crates/duckle-db-runner/tests/security_redaction.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
-- [X] T057 [P] [US5] Add credential and external-runtime isolation tests in `crates/duckle-db-runner/tests/local_process_provider.rs`
----
-
-## Phase 9: User Story 6 - Offline distribution and complete cutover (Priority: P1)
-
-**Independent Test**: On clean offline builds with no system DuckDB CLI, run desktop, headless, scheduler, MCP, inspect, drift, branch/diff, artifacts, and data tools; establish the benchmark gate, then scan for retired references.
-
-- [X] T058 [US6] Pin DuckDB/Quack with version, checksum, license, provenance, and offline staging verification in `apps/desktop/src/engine_manager.rs` and `apps/desktop/build.rs`
-- [X] T059 [US6] Package and locate sidecar/extension pair for desktop, headless, and releases in `crates/duckle-runner/Cargo.toml`, `apps/desktop/build.rs`, and `.github/workflows/`
-- [X] T060 [US6] Route headless CLI/web through controller and remove web run_lock serialization without an admission queue in `crates/duckle-runner/src/main.rs` and `crates/duckle-runner/src/serve.rs`
-- [X] T061 [US6] Route scheduler and MCP through same controller/run database in `crates/scheduler/src/lib.rs` and `crates/duckle-mcp/src/tools.rs`
-- [X] T062 [US6] Implement CutoverEvidence manifest evaluation and production/test/compatibility/release-CI selection that keeps official runner non-productive until approval in `crates/duckle-db-runner/src/cutover.rs`, `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `crates/duckle-runner/src/main.rs`
-- [X] T063 [US6] Add regression proving production/release-CI gate rejection, test/compatibility selection, and no post-cutover CLI fallback in `crates/duckdb-engine/tests/quack_runner_parity.rs` and `crates/duckle-runner/src/serve.rs`
-- [X] T064 [US6] Apply and verify effective memory, CPU, spill, and temporary-space profile before worker readiness in `crates/duckle-db-runner/src/local_process_provider.rs` and `crates/duckle-db-runner/src/run_session.rs`
-- [X] T065 [US6] Add bounded-spill, disk-full/quota, readiness-rejection, current/peak-metric, invalid-profile, and runner-unavailable integration coverage in `crates/duckle-db-runner/tests/run_session.rs`
-- [X] T066 [US6] Add selection and correctness coverage for SQL remote, Quack transfer, and Parquet decision table in `crates/duckdb-engine/tests/quack_runner_parity.rs`
-- [ ] T067 [US6] **Manuale post-implementazione (owner)**: dopo il completamento integrale della feature, congelare il manifesto di cutover ed eseguire manualmente la comparazione tra il precedente compilato CLI e il sidecar officiale (hardware/build/dataset/seed/warm-up/ripetizioni/soglie, baseline CLI e crossover 1/2/4/8). Non implementare harness o benchmark automatici in questa feature; registrare i risultati in `specs/003-quack-sidecar-database-runner/quickstart.md` e CutoverEvidence.
-- [X] T068 [US6] Inventory and route inspect, drift, and branch/diff through WorkerPoolControl and RunDatabase in `crates/duckdb-engine/src/lib.rs` and `crates/duckdb-engine/tests/quack_runner_parity.rs`
-- [X] T069 [US6] Verify requested/effective profile consistency for desktop, headless, scheduler, and MCP in `apps/desktop/src/lib.rs`, `crates/duckle-runner/src/main.rs`, `crates/scheduler/src/lib.rs`, and `crates/duckle-mcp/src/tools.rs`
-- [X] T070 [US6] Verify permitted stage/attempt/duration/rows/bytes/transport/memory/spill/CPU telemetry, redaction, retention routing, and warm/on-demand distinction in `crates/duckle-db-runner/tests/autoscaler.rs` and `crates/duckdb-engine/tests/quack_runner_lifecycle.rs`
-- [ ] T071 [US6] After CutoverEvidence has all applicable SC pass, named owner/approver, and resolved-or-explicitly-accepted findings, enable official runner and remove CLI, affinity, and compatibility selection in `crates/duckdb-engine/`, `apps/desktop/src/engine_manager.rs`, `crates/duckle-runner/`, `crates/duckle-mcp/`, and `.github/workflows/`
-- [ ] T072 [US6] Remove `spikes/quack-sidecar-phase0-spike/` and retain historical documentation after official runner gates pass
-- [X] T073 [US6] Preserve readable-but-disabled SlothDB and xf.dbt with no-fallback diagnostics in `crates/duckdb-engine/src/lib.rs`, `apps/desktop/src/lib.rs`, and `frontend/src/`
-- [X] T074 [US6] Add clean offline package and mismatch smoke coverage after package staging completes in `.github/workflows/runner-package-smoke.yml`
----
-
-## Phase 10: Polish and final gates
-
-- [X] T075 [P] Document pool states, profile application, autoscale formula, and diagnostics in `docs/architecture/adr-quack-sidecar-runner.md` and `specs/003-quack-sidecar-database-runner/_readme.md`
-- [X] T076 [P] Assert autoscale telemetry has capacity, demand, peak, target, reason, and outcome without sensitive fields in `crates/duckle-db-runner/tests/autoscaler.rs`
-- [ ] T077 Record immutable CutoverEvidence results: parity, threshold-gap, benchmark, owner/approver, and finding resolution or explicit acceptance with motivation in `specs/003-quack-sidecar-database-runner/quickstart.md`
-- [ ] T078 Run formatting, clippy, and workspace tests from `Cargo.toml`
-- [X] T079 Run frontend install, lint, and build from `frontend/package.json`
-- [ ] T080 Scan and resolve final production references to CLI, affinity, and Phase 0 spike in `crates/`, `apps/`, `frontend/`, `.github/`, and `docs/`
----
-
-## Dependencies and execution order
+## Execution order
 
 ```text
-Phase 1 -> Phase 2 -> US4 WorkerPoolControl
-                         |- US7 Resource profile
-                         |- US1 Per-run database -> US2 Catalog/concurrency
-                         |                         -> US3 Lifecycle
-                         `- US5 Security
-All story gates -> US6 gate evidence (T062–T070) -> production cutover (T071–T074) -> Phase 10
+Setup -> Contracts -> Worker pool -> Resource profile -> RunDatabase
+      -> Catalog/concurrency -> Lifecycle -> Security -> Offline package
+      -> Direct Quack activation -> Final validation
 ```
 
-- US4 is mandatory for all allocation; US7 depends on pool lifecycle.
-- US1 depends on US4; US2 and US3 depend on US1.
-- US5 begins with foundational security and must pass before US6.
-- US6 completes security, package, benchmark, entry-point, and requirements-quality evidence before T071 removes CLI, affinity remnants, and the retained spike.
+## Completion condition
 
-## Parallel opportunities
+The feature is complete after T078 and T080 pass. The only user-facing build command is:
 
-- T001/T002, T006/T007, and each non-overlapping `[P]` task can run in parallel.
-- T023/T024 can proceed after pool implementation; T033-T035 after profile implementation.
- - US2, US3, and non-overlapping US5 work can run in parallel after US1 is stable.
-- T074 can be prepared with packaging but executed only after T058-T073.
-
-## Implementation strategy
-
-### MVP first
-
-Complete Phase 1, Phase 2, US4, and the minimal US1 route. A run may not spawn directly: WorkerPoolControl must lease or decide an on-demand worker.
-
-### Completion condition
-
-Complete only after parity, 100-run pool, profile drain, redaction, cancellation/cleanup, offline package, and zero-production-reference gates pass.
+```bat
+@echo off
+cd /d "%~dp0apps\desktop"
+cargo tauri build
+```
