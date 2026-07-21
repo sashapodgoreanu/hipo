@@ -9,6 +9,7 @@
 mod base;
 pub use base::*;
 
+use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 use duckle_db_runner::model::{
     RunCancellation, RunId, RunnerFailureReason, WorkerLease,
 };
@@ -279,6 +280,18 @@ impl DesktopRunnerController {
         let _ = (workspace, profile);
 
         Ok(())
+    }
+
+    /// Fixed compatibility adapter for the old engine API. This is not a
+    /// configuration point: every desktop build selects the packaged Quack route.
+    pub fn entry_point_class(&self) -> EntryPointClass {
+        EntryPointClass::Production
+    }
+
+    /// Fixed compatibility adapter for the old engine API. There is no runtime
+    /// evidence gate or fallback selection anymore.
+    pub fn cutover_gate(&self) -> CutoverGate {
+        CutoverGate::Approved
     }
 
     #[cfg(test)]
