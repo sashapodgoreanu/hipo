@@ -475,7 +475,30 @@ The single-file binary above is all you need for **Build Pipeline** too: the hea
 
 ### CLI only (CI, cron, containers)
 
-If you do not want the desktop studio, install just the headless runner. It is about 20 MB rather than ~100 MB, has no GUI dependency, and is what a build step actually needs:
+If you do not want the desktop studio, install just the headless runner. It is about 20 MB rather than ~100 MB, has no GUI dependency, and is what a build step actually needs.
+
+```sh
+pip install duckle
+```
+
+That is the whole install. It brings the DuckDB CLI with it (via the [`duckdb-cli`](https://pypi.org/project/duckdb-cli/) package published by the DuckDB Foundation), so there is nothing else to fetch and it works offline. Wheels ship for Linux, macOS and Windows on x86-64 and arm64.
+
+It also gives you a Python API, where pipelines are built as code and executed by DuckDB rather than by Python:
+
+```python
+import duckle
+from duckle import col
+
+(duckle.read_csv("orders.csv")
+    .where(col.amount >= 20)
+    .derive(total="round(amount * 1.2, 2)")
+    .write_parquet("out.parquet")
+    .run())
+```
+
+Python expressions compile to vectorized SQL at plan time, so no rows pass through the interpreter. See [the PyPI page](https://pypi.org/project/duckle/) for the full API.
+
+Prefer a plain binary with no Python at all:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/slothflowlabs/duckle/main/scripts/install.sh | sh
@@ -483,7 +506,7 @@ curl -fsSL https://raw.githubusercontent.com/slothflowlabs/duckle/main/scripts/i
 
 The script picks the right binary for your OS and architecture, verifies it against the release's `SHA256SUMS.txt`, and installs it as `duckle`. Windows users download `duckle-runner-windows-x64.exe` from the release page directly. Per-platform assets are named `duckle-runner-<os>-<arch>`.
 
-Pipelines execute as SQL on the DuckDB CLI, so the runner needs a `duckdb` on PATH or `DUCKLE_DUCKDB_BIN` set (`pip install duckdb-cli` is the quickest route). Validation does not:
+Pipelines execute as SQL on the DuckDB CLI, so a runner installed this way needs a `duckdb` on PATH or `DUCKLE_DUCKDB_BIN` set (`pip install duckdb-cli` is the quickest route). Validation does not:
 
 ```sh
 duckle validate                 # compile-check every pipeline under ./pipelines
