@@ -12344,6 +12344,9 @@ fn snk_salesforce_bulk_failed_records_inline_first_errors() {
 
 struct BulkQueryMock {
     job_state: &'static str,
+    /// When true, /results always serves page 0 with a constant non-advancing
+    /// Sforce-Locator, emulating a peer/middlebox that echoes the same token.
+    stuck: bool,
     /// One entry per result page: (csv body, Sforce-Locator value returned
     /// WITH that page, Sforce-NumberOfRecords). The last page's locator is the
     /// literal string "null", exactly as the real API signals it.
@@ -12405,6 +12408,21 @@ fn sf_bulk_query_mock_server(cfg: BulkQueryMock) -> (u16, std::sync::mpsc::Recei
                     r#"{"id":"QJOB1","state":"UploadComplete"}"#.to_string(),
                 )
             } else if method == "GET" && path.contains("/results") {
+                if cfg.stuck {
+                    let (csv, _, nrecords) = cfg.pages[0];
+                    let resp_parts = (
+                        "200 OK",
+                        "text/csv",
+                        format!(
+                            "Sforce-Locator: STUCK
+Sforce-NumberOfRecords: {}
+",
+                            nrecords
+                        ),
+                        csv.to_string(),
+                    );
+                    resp_parts
+                } else {
                 // Page selection: no locator param -> page 0; locator=P{n} -> page n.
                 let idx = path
                     .split("locator=P")
@@ -12431,6 +12449,7 @@ fn sf_bulk_query_mock_server(cfg: BulkQueryMock) -> (u16, std::sync::mpsc::Recei
                         )
                     }
                     None => ("404 Not Found", "text/csv", String::new(), String::new()),
+                }
                 }
             } else if method == "PATCH" {
                 (
@@ -12481,9 +12500,10 @@ fn src_salesforce_bulk_walks_locator_pages_in_order() {
     // stop on the LITERAL "null" locator - yielding all 3 rows in order.
     let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
         job_state: "JobComplete",
+        stuck: false,
         pages: vec![
-            ("Id,Name\n001A,Acme\n001B,Globex\n", "P1", 2),
-            ("Id,Name\n001C,Initech\n", "null", 1),
+            ("Id,Name,Zip\n001A,Acme,01234\n001B,Globex,02002\n", "P1", 2),
+            ("Id,Name,Zip\n001C,Initech,00042\n", "null", 1),
         ],
     });
 
@@ -12521,6 +12541,14 @@ fn src_salesforce_bulk_walks_locator_pages_in_order() {
         "pages must land in order: {}",
         written
     );
+    // No declared schema: values must survive as text, not get sniffed into
+    // numerics - a 01234 postcode losing its leading zero is silent data
+    // corruption for a migration source.
+    assert!(
+        lines[1].contains("01234") && lines[3].contains("00042"),
+        "leading zeros must survive the no-schema read: {}",
+        written
+    );
 }
 
 #[test]
@@ -12530,6 +12558,7 @@ fn src_salesforce_bulk_zero_records_yields_typed_empty_relation() {
     // relation downstream SQL can bind, landing as a header-only csv.
     let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
         job_state: "JobComplete",
+        stuck: false,
         pages: vec![("Id,Name\n", "null", 0)],
     });
 
@@ -12583,6 +12612,7 @@ fn src_salesforce_bulk_failed_job_surfaces_error() {
     let engine = engine_or_skip!();
     let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
         job_state: "Failed",
+        stuck: false,
         pages: vec![],
     });
 
@@ -12621,6 +12651,7 @@ fn src_salesforce_bulk_poll_timeout_aborts_job() {
     let engine = engine_or_skip!();
     let (port, rx) = sf_bulk_query_mock_server(BulkQueryMock {
         job_state: "InProgress",
+        stuck: false,
         pages: vec![],
     });
 
@@ -12662,5 +12693,47 @@ fn src_salesforce_bulk_poll_timeout_aborts_job() {
         last_patch_body.contains("Aborted"),
         "expected a final PATCH {{state: Aborted}}, got body: {}",
         last_patch_body
+    );
+}
+
+#[test]
+fn src_salesforce_bulk_non_advancing_locator_errors() {
+    let engine = engine_or_skip!();
+    // A peer that echoes the same Sforce-Locator back forever must fail the
+    // run, not re-append the same page until the disk fills.
+    let (port, _rx) = sf_bulk_query_mock_server(BulkQueryMock {
+        job_state: "JobComplete",
+        stuck: true,
+        pages: vec![("Id,Name
+001A,Acme
+", "P1", 1)],
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("x.csv").to_string_lossy().replace('\\', "/");
+    let instance = format!("http://127.0.0.1:{}", port);
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node(
+                "q",
+                "src.salesforce.bulk",
+                json!({
+                    "instanceUrl": instance,
+                    "accessToken": "tok-123",
+                    "query": "SELECT Id FROM Account",
+                    "pollIntervalSecs": 1,
+                    "timeoutSecs": 30
+                }),
+            ),
+            node("f", "snk.csv", json!({ "path": out, "mode": "overwrite", "hasHeader": true })),
+        ]),
+        json!([main_edge("e", "q", "f")]),
+    ));
+    assert_eq!(r.status, "error", "a non-advancing locator must fail the run");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("non-advancing") && err.contains("QJOB1") && err.contains("STUCK"),
+        "error should name the job and the stuck locator, got: {}",
+        err
     );
 }
