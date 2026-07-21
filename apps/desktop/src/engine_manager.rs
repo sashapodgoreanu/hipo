@@ -1,17 +1,14 @@
-//! Engine installation manager and immutable official-runner artifact pin.
+//! Engine installation manager and packaged Quack runner ownership.
 //!
 //! The existing installation implementation remains isolated in the base
 //! module. This wrapper owns the DuckDB/Quack pair metadata, performs offline
-//! checksum verification, and provides the real lazy per-workspace controller.
+//! checksum verification, and provides one lazy per-workspace controller.
 
 #[allow(dead_code)]
 #[path = "engine_manager_base.rs"]
 mod base;
 pub use base::*;
 
-use duckle_db_runner::cutover::{
-    configured_entry_point_class, packaged_cutover_gate, CutoverGate, EntryPointClass,
-};
 use duckle_db_runner::model::{
     RunCancellation, RunId, RunnerFailureReason, WorkerLease,
 };
@@ -100,12 +97,12 @@ pub fn verify_offline_quack_extension(
     arch: &str,
 ) -> Result<OfficialRunnerPin, String> {
     let pin = official_runner_pin_for(os, arch)
-        .ok_or_else(|| format!("official_runner.unsupported_target:{os}-{arch}"))?;
+        .ok_or_else(|| format!("runner.unsupported_target:{os}-{arch}"))?;
     let bytes = std::fs::read(path)
-        .map_err(|_| "official_runner.extension_read_failed".to_string())?;
+        .map_err(|_| "runner.extension_read_failed".to_string())?;
     let actual = format!("{:x}", Sha256::digest(&bytes));
     if actual != pin.quack_sha256 {
-        return Err("official_runner.extension_checksum_mismatch".to_string());
+        return Err("runner.extension_checksum_mismatch".to_string());
     }
     Ok(pin)
 }
@@ -143,7 +140,6 @@ pub struct DesktopRunnerController {
     state: Mutex<DesktopControllerState>,
     sidecar_path: Option<PathBuf>,
     legacy_engine_disabled: Mutex<bool>,
-    official_controller_ready: Mutex<bool>,
 }
 
 impl DesktopRunnerController {
@@ -165,7 +161,6 @@ impl DesktopRunnerController {
             state: Mutex::new(DesktopControllerState::default()),
             sidecar_path,
             legacy_engine_disabled: Mutex::new(false),
-            official_controller_ready: Mutex::new(false),
         }
     }
 
@@ -182,16 +177,9 @@ impl DesktopRunnerController {
         workspace: &Path,
         profile: &RunnerResourcesProfile,
     ) -> Option<Arc<dyn OfficialRunnerController>> {
-        if let Ok(mut ready) = self.official_controller_ready.lock() {
-            *ready = false;
-        }
-
         let legacy_disabled = workspace_engine_diagnostic(workspace).ok().flatten().is_some();
         *self.legacy_engine_disabled.lock().ok()? = legacy_disabled;
         if legacy_disabled {
-            if let Ok(mut ready) = self.official_controller_ready.lock() {
-                *ready = true;
-            }
             return Some(Arc::new(DisabledLegacyEngineController));
         }
 
@@ -245,9 +233,6 @@ impl DesktopRunnerController {
                 return None;
             }
 
-            if let Ok(mut ready) = self.official_controller_ready.lock() {
-                *ready = true;
-            }
             append_desktop_diagnostic(
                 Some(&sidecar_path),
                 SidecarDiagnosticCode::DesktopControllerReady,
@@ -296,36 +281,6 @@ impl DesktopRunnerController {
         Ok(())
     }
 
-    pub fn entry_point_class(&self) -> EntryPointClass {
-        let ready = self
-            .official_controller_ready
-            .lock()
-            .map(|ready| *ready)
-            .unwrap_or(false);
-        if ready {
-            configured_entry_point_class()
-        } else {
-            // `engine_for_run` asks for the controller before it asks for the
-            // entry-point class. Falling back to Production here prevents a Test
-            // build from selecting Official with no controller and returning the
-            // opaque `runner_unavailable` before the launcher is reached.
-            EntryPointClass::Production
-        }
-    }
-
-    pub fn cutover_gate(&self) -> CutoverGate {
-        if self
-            .legacy_engine_disabled
-            .lock()
-            .map(|disabled| *disabled)
-            .unwrap_or(true)
-        {
-            CutoverGate::Approved
-        } else {
-            packaged_cutover_gate()
-        }
-    }
-
     #[cfg(test)]
     pub fn legacy_disabled_diagnostic(&self) -> Option<&'static str> {
         self.legacy_engine_disabled
@@ -338,14 +293,13 @@ impl DesktopRunnerController {
 
 #[cfg(windows)]
 fn resolve_desktop_sidecar_path(staged: Option<PathBuf>) -> Option<PathBuf> {
-    let explicit = std::env::var_os("DUCKLE_DB_SIDECAR_BIN").map(PathBuf::from);
     let adjacent = std::env::current_exe()
         .ok()
         .and_then(|executable| executable.parent().map(Path::to_path_buf))
         .map(|directory| directory.join("duckle-db-sidecar.exe"));
     let app_data = Some(desktop_sidecar_program_path());
 
-    [staged, explicit, adjacent, app_data]
+    [staged, adjacent, app_data]
         .into_iter()
         .flatten()
         .find(|candidate| candidate.is_absolute() && candidate.is_file())
@@ -558,7 +512,7 @@ mod runner_pin_tests {
         std::fs::write(&extension, b"not-the-pinned-extension").unwrap();
         assert_eq!(
             verify_offline_quack_extension(&extension, "windows", "x86_64"),
-            Err("official_runner.extension_checksum_mismatch".to_string())
+            Err("runner.extension_checksum_mismatch".to_string())
         );
     }
 
@@ -598,23 +552,22 @@ mod runner_pin_tests {
         .unwrap();
         let original = std::fs::read_to_string(workspace.path().join("duckle.json")).unwrap();
         let controller = DesktopRunnerController::new(None);
-        let official = controller
+        let runner = controller
             .controller_for_workspace(workspace.path(), &RunnerResourcesProfile::default())
             .expect("disabled workspace receives a rejecting controller without a sidecar");
 
-        assert_eq!(controller.cutover_gate(), CutoverGate::Approved);
         assert_eq!(
             controller.legacy_disabled_diagnostic(),
             Some(SLOTHDB_DISABLED_DIAGNOSTIC)
         );
         assert_eq!(
-            official.acquire(RunId::new(), 1, RunCancellation::default(), 0),
+            runner.acquire(RunId::new(), 1, RunCancellation::default(), 0),
             Err(RunnerFailureReason::RunnerUnavailable)
         );
         assert_eq!(
             std::fs::read_to_string(workspace.path().join("duckle.json")).unwrap(),
             original,
-            "compatibility diagnostics must not rewrite the persisted engine"
+            "disabled-engine diagnostics must not rewrite the persisted engine"
         );
     }
 
@@ -628,10 +581,10 @@ mod runner_pin_tests {
         let controller = DesktopRunnerController::new(Some(sidecar));
         let workspace = tempfile::tempdir().unwrap();
         let profile = RunnerResourcesProfile::default();
-        let official = controller
+        let runner = controller
             .controller_for_workspace(workspace.path(), &profile)
             .expect("an existing staged sidecar registers a lazy controller");
-        drop(official);
+        drop(runner);
 
         let state = controller.state.lock().unwrap();
         let registered = state.controllers.values().next().unwrap();
