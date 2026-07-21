@@ -100,15 +100,25 @@ duckle --pipeline my.json       # run one
 
 Note: `validate` does not yet catch every missing required property, so a clean validate is not proof that a run will succeed.
 
-## Agent-ready out of the box
+## Agent-ready, with nothing installed
 
-The same install puts an MCP server on your PATH, so an AI agent gets a governed way to work with data rather than a shell:
+The same package is an MCP server, so an AI agent gets a governed way to work with data instead of a shell. Point Claude Code, Claude Desktop or Cursor at it:
 
 ```json
-{ "mcpServers": { "duckle": { "command": "duckle-mcp" } } }
+{ "mcpServers": { "duckle": { "command": "uvx", "args": ["--from", "duckle", "duckle-mcp"] } } }
 ```
 
-19 tools, including `list_components`, `get_component_schema`, `create_pipeline`, `validate_pipeline`, `run_pipeline`, `pipeline_lineage`, `trust_report` and `schema_drift`. An agent can discover a connector, author a pipeline, compile-check it before anything executes, run it, and get column-level lineage back.
+Or in Claude Code:
+
+```sh
+claude mcp add duckle -- uvx --from duckle duckle-mcp
+```
+
+That is the whole setup. No pip install, no PATH, no engine to configure: uv fetches the package and the DuckDB engine into a throwaway environment and the server finds it there. If you did `pip install duckle`, `"command": "duckle-mcp"` works too.
+
+**19 tools**, including `list_components`, `get_component_schema`, `create_pipeline`, `validate_pipeline`, `run_pipeline`, `pipeline_lineage`, `trust_report` and `schema_drift`.
+
+What that buys over letting an agent write a script: it can discover a real connector rather than guess one, compile-check a pipeline **before anything executes**, run it, and get column-level lineage back. `validate_pipeline` opens no source and writes no sink, so an agent can check its work without touching your data. The pipeline it produces is the same JSON your desktop canvas opens, so you can inspect what it built.
 
 ## Code and canvas are the same file
 

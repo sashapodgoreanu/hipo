@@ -65,7 +65,7 @@
 - [Workspace + Git flow](#workspace-and-git-flow)
 - [Schedules](#schedules-and-triggers)
 - [Server deployment](#server-deployment-build-pipeline)
-- [MCP server (Claude / LLM integration)](#mcp-server-connect-claude-or-any-llm-to-duckle)
+- [MCP server: connect Claude, Cursor or any agent](#mcp-server-connect-claude-or-any-llm-to-duckle)
 - [Connection management](#connection-management)
 - [Context variables](#context-variables)
 
@@ -864,9 +864,27 @@ directory you choose**, validate it (compile without running), run it headlessly
 read existing pipelines and their run logs, build a standalone artifact, and
 manage saved connections.
 
-### Connect in one click (recommended)
+### Connect with nothing installed
 
-The MCP server is **bundled inside the app** - there is nothing extra to install.
+If you have [uv](https://docs.astral.sh/uv/), one line connects any MCP client. Nothing is installed, no engine to configure: uv fetches the package and the DuckDB engine into a throwaway environment and the server finds it there.
+
+```sh
+claude mcp add duckle -- uvx --from duckle duckle-mcp
+```
+
+For Claude Desktop, Cursor, or any other client, the same thing as config:
+
+```json
+{ "mcpServers": { "duckle": { "command": "uvx", "args": ["--from", "duckle", "duckle-mcp"] } } }
+```
+
+`--from` is needed because the command (`duckle-mcp`) and the package (`duckle`) have different names. If you would rather install it, `pip install duckle` puts `duckle-mcp` on PATH and the config becomes just `"command": "duckle-mcp"`.
+
+Then ask the agent something like *"use duckle to list the available components"*. It can discover a real connector rather than guess one, compile-check a pipeline with `validate_pipeline` **before anything executes**, run it, and hand back column-level lineage. What it produces is the same JSON the canvas opens, so you can see what it built.
+
+### Connect in one click
+
+The MCP server is also **bundled inside the app** - there is nothing extra to install.
 In the designer, click **Connect to Claude** in the top bar to open the connector
 popup, then pick your client:
 
