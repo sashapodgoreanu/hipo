@@ -556,3 +556,32 @@ pre code { background: none; border: none; padding: 0; color: var(--code-ink); }
 .discord-pop-x:hover { color: var(--ink); }
 .discord-pop-x svg { width: 15px; height: 15px; }
 @media (max-width: 600px) { .discord-pop { display: none; } .discord-widget { right: 16px; bottom: 16px; } }
+
+/* Agent onboarding prompt card (download section). Sits below the pip install
+   chip and mirrors it: dark in both themes, because it reads as a terminal /
+   code surface rather than page furniture. */
+.prompt-card {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 22px 24px 20px;
+    border-radius: var(--radius);
+    background: #0f1720;
+    border: 1px solid rgba(255, 255, 255, .08);
+    text-align: left;
+}
+.prompt-text {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 1.02rem;
+    line-height: 1.65;
+    color: #c9d5e1;
+    margin: 0 0 18px;
+    word-break: break-word;
+}
+.prompt-text span { color: #f5d90a; font-weight: 700; }
+.prompt-copy { background: #fff; color: #0d0d0d; border-color: #fff; }
+.prompt-copy:hover { background: #f1f3f7; border-color: #f1f3f7; }
+.prompt-copy.copied { background: var(--maya, #5bc8f5); border-color: var(--maya, #5bc8f5); color: #06212e; }
+@media (max-width: 560px) {
+    .prompt-card { padding: 18px 16px 16px; }
+    .prompt-text { font-size: .94rem; }
+}

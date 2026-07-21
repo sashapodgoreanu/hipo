@@ -280,3 +280,43 @@
         });
     })();
 })();
+
+// Copy-to-clipboard for the agent onboarding prompt. Reads the rendered text
+// rather than a duplicated data- attribute, so the button can never drift out
+// of sync with what the visitor is looking at.
+(function () {
+    var btns = document.querySelectorAll('[data-copy-target]');
+    if (!btns.length) return;
+    btns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var src = document.getElementById(btn.getAttribute('data-copy-target'));
+            if (!src) return;
+            var text = (src.innerText || src.textContent || '').trim();
+            var label = btn.querySelector('.prompt-copy-label');
+            var done = function (ok) {
+                if (!label) return;
+                var was = label.textContent;
+                label.textContent = ok ? 'Copied' : 'Press Ctrl+C';
+                btn.classList.toggle('copied', ok);
+                setTimeout(function () {
+                    label.textContent = was;
+                    btn.classList.remove('copied');
+                }, 1800);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+                return;
+            }
+            // No async clipboard (older browser, or a non-secure origin):
+            // select the text so the visitor can still copy it themselves.
+            try {
+                var r = document.createRange();
+                r.selectNodeContents(src);
+                var sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(r);
+                done(document.execCommand('copy'));
+            } catch (e) { done(false); }
+        });
+    });
+})();
