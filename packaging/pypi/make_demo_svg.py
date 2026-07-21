@@ -106,31 +106,38 @@ def render(path, title, lines):
 
 
 # --------------------------------------------------------------- demo 1
-# pip install, then the Python API. Output verbatim from a real run.
+# The actual new-user path: one command, from nothing to real rows.
+# Captured verbatim from a pip-installed duckle with DUCKLE_DUCKDB_BIN unset.
 INSTALL = [
     ("cmd", "pip install duckle"),
-    ("dim", "Downloading duckdb_cli-1.5.4-py3-none-win_amd64.whl (12.9 MB)"),
     ("ok",  "Successfully installed duckdb-cli-1.5.4 duckle-0.5.7"),
     ("out", ""),
-    ("cmd", "cat job.py"),
-    ("key", "import duckle"),
-    ("key", "from duckle import col"),
+    ("cmd", "duckle quickstart"),
     ("out", ""),
-    ("out", '(duckle.read_csv("orders.csv")'),
-    ("out", "    .where(col.amount >= 20)"),
-    ("out", "    .derive(total=\"round(amount * 1.2, 2)\", tag=\"f'{region}-{id}'\")"),
-    ("out", '    .write_parquet("out.parquet")'),
-    ("out", "    .run())"),
+    ("key", "Duckle quickstart"),
     ("out", ""),
-    ("cmd", "python job.py"),
+    ("dim", "  created  orders.csv  (8 rows of sample data)"),
+    ("dim", "  created  pipelines/quickstart.json"),
+    ("out", ""),
+    ("out", "Running pipelines/quickstart.json ..."),
+    ("out", ""),
     ("out", "status   : ok"),
-    ("dim", "duration : 394 ms"),
-    ("ok",  "  csv        ok (4 rows)"),
-    ("ok",  "  filter     ok (3 rows)"),
-    ("ok",  "  pyexpr     ok (3 rows)"),
-    ("ok",  "  parquet    ok (3 rows)"),
+    ("dim", "duration : 563 ms"),
+    ("ok",  "  csv        ok (8 rows)"),
+    ("ok",  "  filter     ok (5 rows)"),
+    ("ok",  "  derive     ok (5 rows)"),
+    ("ok",  "  out        ok (5 rows)"),
     ("out", ""),
-    ("dim", "# Python built the plan. DuckDB moved the rows."),
+    ("out", "out.csv:"),
+    ("out", ""),
+    ("dim", "  id,region,customer,amount,total,tag"),
+    ("out", "  2,EU,Globex,25,30.0,EU-Globex"),
+    ("out", "  3,US,Initech,40,48.0,US-Initech"),
+    ("out", "  4,UK,Umbrella,30,36.0,UK-Umbrella"),
+    ("out", "  6,EU,Soylent,55,66.0,EU-Soylent"),
+    ("out", "  7,UK,Vehement,22,26.4,UK-Vehement"),
+    ("out", ""),
+    ("dim", "# One command. Scaffolded, compiled to SQL, executed by DuckDB."),
 ]
 
 # --------------------------------------------------------------- demo 2

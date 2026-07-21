@@ -67,20 +67,25 @@ jobs:
       matrix:
         include:
           # Linux is built against musl and linked fully static, so the binary
-          # has no libc dependency at all and legitimately satisfies both the
-          # manylinux and musllinux tags. Building natively on ubuntu-24.04
-          # instead would link glibc 2.39 and could not honestly claim
-          # manylinux_2_17, which is the whole point of the tag.
+          # has no libc dependency and runs on any glibc version. Building
+          # natively on ubuntu-24.04 would link glibc 2.39 and could not
+          # honestly claim manylinux_2_17, which is the point of the tag.
+          #
+          # The tag deliberately does NOT include musllinux, even though the
+          # binary would run there. duckdb-cli publishes no musllinux wheel, so
+          # claiming it would let resolution pick our wheel on Alpine and then
+          # fail on the dependency, which is a worse experience than a clean
+          # "no matching distribution". Revisit if duckdb-cli ever ships musl.
           - os: ubuntu-24.04
             name: linux-x64
             image: messense/rust-musl-cross:x86_64-musl
             triple: x86_64-unknown-linux-musl
-            plat: manylinux_2_17_x86_64.manylinux2014_x86_64.musllinux_1_2_x86_64
+            plat: manylinux_2_17_x86_64.manylinux2014_x86_64
           - os: ubuntu-24.04
             name: linux-arm64
             image: messense/rust-musl-cross:aarch64-musl
             triple: aarch64-unknown-linux-musl
-            plat: manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_2_aarch64
+            plat: manylinux_2_17_aarch64.manylinux2014_aarch64
           - os: macos-14
             name: macos-arm64
             triple: aarch64-apple-darwin

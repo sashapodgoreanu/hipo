@@ -8,11 +8,18 @@
 
 ```sh
 pip install duckle
+duckle quickstart
 ```
 
-<img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-install.svg" alt="Terminal: pip install duckle, then a job.py that reads a CSV, filters, derives columns and writes Parquet, running in 394 ms" width="660"/>
+<img src="https://raw.githubusercontent.com/slothflowlabs/duckle/main/docs/assets/pypi-demo-install.svg" alt="Terminal: pip install duckle then duckle quickstart, which scaffolds sample data and a pipeline, runs it, and prints the resulting rows" width="660"/>
 
-That installs a ~20 MB native binary plus the DuckDB CLI. No JVM, no Docker, no server, no account.
+`quickstart` scaffolds sample data and a pipeline, runs it, and shows you the rows. One command from nothing to a result, because the engine ships in the install: a ~20 MB native binary plus the DuckDB CLI. No JVM, no Docker, no server, no account.
+
+No install at all, if you have [uv](https://docs.astral.sh/uv/):
+
+```sh
+uvx duckle@latest quickstart
+```
 
 ---
 
@@ -92,6 +99,16 @@ duckle --pipeline my.json       # run one
 ```
 
 Note: `validate` does not yet catch every missing required property, so a clean validate is not proof that a run will succeed.
+
+## Agent-ready out of the box
+
+The same install puts an MCP server on your PATH, so an AI agent gets a governed way to work with data rather than a shell:
+
+```json
+{ "mcpServers": { "duckle": { "command": "duckle-mcp" } } }
+```
+
+19 tools, including `list_components`, `get_component_schema`, `create_pipeline`, `validate_pipeline`, `run_pipeline`, `pipeline_lineage`, `trust_report` and `schema_drift`. An agent can discover a connector, author a pipeline, compile-check it before anything executes, run it, and get column-level lineage back.
 
 ## Code and canvas are the same file
 

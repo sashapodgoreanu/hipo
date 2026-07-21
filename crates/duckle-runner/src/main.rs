@@ -34,6 +34,7 @@ duckle-runner - run a Duckle pipeline headlessly
 USAGE:
     duckle-runner --pipeline <file.json> [options]
     duckle-runner validate [<file.json> ...] [--json]
+    duckle-runner quickstart [--force]
 
 EXIT CODES (stable, safe to gate CI on):
     0    success
@@ -745,6 +746,165 @@ fn collect_input_fingerprints(doc: &PipelineDoc) -> Vec<manifest::InputFingerpri
 /// Run one side of a `review --data` comparison sink-safely: every sink node is
 /// removed before execution, so sources are read and transforms run but no
 /// destination is ever written. Returns each surviving node's row count.
+/// `quickstart` - scaffold a working pipeline, run it, and show the rows.
+///
+/// Deliberately goes all the way to a result. The comparable onboarding
+/// commands (create-next-app, dlthub-start, npm create astro) scaffold a
+/// folder and then hand you a second command to run; Duckle can finish the
+/// job in one because the engine ships in the same install. Someone typing
+/// `uvx duckle@latest quickstart` should see real rows, not a TODO.
+fn run_quickstart() -> ExitCode {
+    let mut force = false;
+    for arg in std::env::args().skip(2) {
+        match arg.as_str() {
+            "--force" | "-f" => force = true,
+            other => {
+                eprintln!("duckle quickstart: unknown flag {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let csv = Path::new("orders.csv");
+    let pipeline = Path::new("pipelines").join("quickstart.json");
+    let out = Path::new("out.csv");
+
+    if !force {
+        for p in [csv, pipeline.as_path()] {
+            if p.exists() {
+                eprintln!(
+                    "duckle quickstart: {} already exists. Re-run with --force to overwrite.",
+                    p.display()
+                );
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    println!("\nDuckle quickstart\n");
+
+    let sample = "id,region,customer,amount\n\
+                  1,EU,Acme,10\n\
+                  2,EU,Globex,25\n\
+                  3,US,Initech,40\n\
+                  4,UK,Umbrella,30\n\
+                  5,US,Hooli,15\n\
+                  6,EU,Soylent,55\n\
+                  7,UK,Vehement,22\n\
+                  8,APAC,Massive,8\n";
+    if let Err(e) = std::fs::write(csv, sample) {
+        eprintln!("duckle quickstart: writing {}: {e}", csv.display());
+        return ExitCode::from(2);
+    }
+    println!("  created  {}  (8 rows of sample data)", csv.display());
+
+    // The same JSON the desktop canvas reads, so this file opens visually.
+    let doc = serde_json::json!({
+        "name": "quickstart",
+        "nodes": [
+            { "id": "csv", "type": "source", "position": {"x": 0, "y": 0},
+              "data": { "label": "Orders CSV", "componentId": "src.csv",
+                        "properties": { "path": "orders.csv" } } },
+            { "id": "filter", "type": "transform", "position": {"x": 220, "y": 0},
+              "data": { "label": "Amount >= 20", "componentId": "xf.filter",
+                        "properties": { "predicate": { "mode": "python",
+                                                       "expr": "amount >= 20" } } } },
+            { "id": "derive", "type": "transform", "position": {"x": 440, "y": 0},
+              "data": { "label": "Add total", "componentId": "xf.pyexpr",
+                        "properties": { "columns": [
+                            { "name": "total", "expr": "round(amount * 1.2, 2)" },
+                            { "name": "tag", "expr": "f'{region}-{customer}'" }
+                        ] } } },
+            { "id": "out", "type": "sink", "position": {"x": 660, "y": 0},
+              "data": { "label": "Result CSV", "componentId": "snk.csv",
+                        "properties": { "path": "out.csv" } } }
+        ],
+        "edges": [
+            { "id": "e1", "source": "csv", "target": "filter", "sourceHandle": "main",
+              "targetHandle": "main", "data": { "connectionType": "main" } },
+            { "id": "e2", "source": "filter", "target": "derive", "sourceHandle": "main",
+              "targetHandle": "main", "data": { "connectionType": "main" } },
+            { "id": "e3", "source": "derive", "target": "out", "sourceHandle": "main",
+              "targetHandle": "main", "data": { "connectionType": "main" } }
+        ]
+    });
+    if let Err(e) = std::fs::create_dir_all("pipelines")
+        .and_then(|_| std::fs::write(&pipeline, serde_json::to_string_pretty(&doc).unwrap_or_default()))
+    {
+        eprintln!("duckle quickstart: writing {}: {e}", pipeline.display());
+        return ExitCode::from(2);
+    }
+    println!("  created  {}", pipeline.display());
+
+    // Run it by re-invoking this same executable, so what happens here is
+    // exactly what the user gets when they run the command themselves.
+    println!("\nRunning {} ...\n", pipeline.display());
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("duckle quickstart: locating this executable: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // Anchor the workspace to the current directory. Without it the workspace
+    // defaults to the pipeline file's parent, so a first run would tuck its
+    // logs away under pipelines/logs/ rather than beside the output.
+    //
+    // Output is captured rather than streamed so the child's banner line can
+    // be dropped: it names the binary as "duckle-runner", which is not a
+    // command a pip user has. The run takes well under a second, so nothing
+    // is lost by not streaming.
+    let out_res = std::process::Command::new(exe)
+        .arg("--pipeline")
+        .arg(&pipeline)
+        .arg("--workspace")
+        .arg(".")
+        .output();
+    let output = match out_res {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("duckle quickstart: running the pipeline: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    for stream in [&output.stdout, &output.stderr] {
+        for line in String::from_utf8_lossy(stream).lines() {
+            if line.starts_with("duckle-runner: ") && line.contains("(workspace") {
+                continue;
+            }
+            println!("{line}");
+        }
+    }
+    if !output.status.success() {
+        eprintln!(
+            "\nduckle quickstart: the pipeline did not complete. If the DuckDB engine is \
+             missing, install it with `pip install duckdb-cli` or set DUCKLE_DUCKDB_BIN."
+        );
+        return ExitCode::from(1);
+    }
+
+    // Show the actual rows. Reading the file back keeps this dependency-free
+    // and proves the pipeline really wrote something.
+    if let Ok(text) = std::fs::read_to_string(out) {
+        println!("\n{}:\n", out.display());
+        for line in text.lines().take(8) {
+            println!("  {line}");
+        }
+    }
+
+    println!(
+        "\nNext:\n\
+         \x20 duckle validate            compile-check every pipeline (no engine needed)\n\
+         \x20 duckle --pipeline {}\n\
+         \x20 open {} in the Duckle studio to edit it visually\n\
+         \n\
+         Docs: https://duckle.org   Components: duckle-mcp exposes them to AI agents\n",
+        pipeline.display(),
+        pipeline.display()
+    );
+    ExitCode::from(0)
+}
+
 /// `validate` - compile every pipeline without touching a source or a sink.
 ///
 /// This is the CI gate: it needs no DuckDB binary, no credentials and no
@@ -1214,6 +1374,10 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         };
+    }
+    // `quickstart` -> scaffold a working pipeline, run it, show the rows.
+    if std::env::args().nth(1).as_deref() == Some("quickstart") {
+        return run_quickstart();
     }
     // `validate` -> compile-only CI gate. No engine binary, no credentials,
     // no network: it never opens a source or writes a sink.
