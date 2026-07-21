@@ -3,6 +3,7 @@
 //! Controller provisioning is lazy, the sidecar path stays private, and every
 //! scheduled run uses the same packaged runner route as desktop and headless.
 
+use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 #[cfg(windows)]
 use duckle_db_runner::model::{RunCancellation, RunId, RunnerFailureReason, WorkerLease};
 use duckle_db_runner::resources::{
@@ -31,11 +32,15 @@ pub(crate) fn configure_engine_for_workspace(
     if let Err(error) = &resources {
         tracing::warn!(reason = %error, "scheduler runner resources rejected");
     }
-    resources
+    let engine = resources
         .ok()
         .and_then(|resources| controller_for_workspace(workspace, &resources.requested))
         .map(|controller| base.with_official_runner_controller(controller))
-        .unwrap_or(base)
+        .unwrap_or(base);
+
+    // Fixed internal adapter for the old engine API. Runtime configuration
+    // cannot select a different backend.
+    engine.with_runner_selection(EntryPointClass::Production, &CutoverGate::Approved)
 }
 
 pub(crate) fn workspace_resources(
