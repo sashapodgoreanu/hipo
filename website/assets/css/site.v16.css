@@ -586,3 +586,11 @@ pre code { background: none; border: none; padding: 0; color: var(--code-ink); }
     .prompt-card { padding: 18px 16px 16px; }
     .prompt-text { font-size: .94rem; }
 }
+
+/* Non-button links in the download block follow the brand orange rather than
+   the site-wide gold --link, so this section reads in one accent colour
+   alongside the Download button and the code chips. Scoped deliberately: the
+   gold is used for links across every page, and changing it globally is a
+   different decision from making this block consistent. */
+#download a:not(.btn) { color: var(--lemon); }
+#download a:not(.btn):hover { text-decoration: underline; }
