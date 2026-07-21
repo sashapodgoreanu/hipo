@@ -1,13 +1,10 @@
-//! Headless ownership boundary for the official database runner.
+//! Headless ownership boundary for the database runner.
 //!
-//! CLI, management-console, and web entry points build their engines through
-//! this module. The concrete pool is intentionally lazy: attaching a controller
-//! before cutover must not provision warm workers while production selection is
-//! still on the compatibility route.
+//! CLI, management-console, and web entry points share one controller per
+//! workspace. There is no backend selector: every run is assigned through
+//! WorkerPoolControl and the packaged Quack sidecar.
 
-use duckle_db_runner::cutover::{
-    configured_entry_point_class, packaged_cutover_gate, CutoverGate,
-};
+use duckle_db_runner::cutover::{CutoverGate, EntryPointClass};
 #[cfg(windows)]
 use duckle_db_runner::model::{
     RunCancellation, RunId, RunnerFailureReason, WorkerLease,
@@ -27,48 +24,33 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(windows)]
-static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<LazyHeadlessController>>>> =
-    OnceLock::new();
-static GATE_DIAGNOSTIC_REPORTED: OnceLock<()> = OnceLock::new();
+static CONTROLLERS: OnceLock<Mutex<HashMap<PathBuf, Arc<HeadlessController>>>> = OnceLock::new();
 
 /// Build a headless engine using the single controller owned by this workspace
-/// process. Repeated manual, scheduled, and browser runs resolve the same
-/// controller rather than creating an entry-point-specific allocation path.
-///
-/// The packaged evidence gate retains CLI compatibility until an approved
-/// manifest is embedded in the build. The controller and its worker pool are
-/// lazy, so merely constructing this engine never starts a sidecar process.
-pub(crate) fn engine_for_workspace(duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
-    let base = DuckdbEngine::new(duckdb);
+/// process. The legacy DuckDB path argument is ignored until the remaining CLI
+/// plumbing is physically removed from the caller signatures.
+pub(crate) fn engine_for_workspace(_legacy_duckdb: PathBuf, workspace: &Path) -> DuckdbEngine {
+    let base = DuckdbEngine::new(PathBuf::new());
     let resources = workspace_resources(workspace);
     if let Err(error) = &resources {
         eprintln!("duckle-runner: {error}");
     }
-    let with_controller = resources
+
+    let engine = resources
         .ok()
         .and_then(|resources| controller_for_workspace(workspace, &resources.requested))
         .map(|controller| base.with_official_runner_controller(controller))
         .unwrap_or(base);
-    let gate = packaged_cutover_gate();
-    report_gate_once(&gate);
-    with_controller.with_runner_selection(configured_entry_point_class(), &gate)
+
+    // Transitional engine API: the selector is fixed to the only route and no
+    // longer reads build classes, environment variables, or evidence.
+    engine.with_runner_selection(EntryPointClass::Production, &CutoverGate::Approved)
 }
 
 pub(crate) fn workspace_resources(
     workspace: &Path,
 ) -> Result<WorkspaceRunnerResources, WorkspaceRunnerResourcesError> {
     resolve_workspace_runner_resources(workspace, HostResourceLimits::default())
-}
-
-fn report_gate_once(gate: &CutoverGate) {
-    if let CutoverGate::Rejected { missing_or_failed } = gate {
-        GATE_DIAGNOSTIC_REPORTED.get_or_init(|| {
-            eprintln!(
-                "duckle-runner: official runner gate rejected ({})",
-                missing_or_failed.join(",")
-            );
-        });
-    }
 }
 
 #[cfg(windows)]
@@ -94,10 +76,7 @@ fn controller_for_workspace(
         return Some(existing);
     }
 
-    let controller = Arc::new(LazyHeadlessController::new(
-        sidecar_path,
-        profile.clone(),
-    ));
+    let controller = Arc::new(HeadlessController::new(sidecar_path, profile.clone()));
     let mut registry = controllers
         .lock()
         .expect("headless controller registry poisoned");
@@ -116,8 +95,6 @@ fn controller_for_workspace(
     _workspace: &Path,
     _profile: &RunnerResourcesProfile,
 ) -> Option<Arc<dyn OfficialRunnerController>> {
-    // Packaging is present for all approved targets, while platform-specific
-    // process containment is still gated. Never substitute a direct spawn.
     None
 }
 
@@ -129,24 +106,19 @@ fn sidecar_name() -> &'static str {
     }
 }
 
+/// The packaged sidecar must be adjacent to the headless runner. Runtime
+/// environment overrides are intentionally unsupported.
 fn resolve_sidecar_path() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("DUCKLE_DB_SIDECAR_BIN") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(directory) = executable.parent() {
-            candidates.push(directory.join(sidecar_name()));
-            if let Some(engines_directory) = directory.parent() {
-                candidates.push(
-                    engines_directory
-                        .join("db-sidecar")
-                        .join(sidecar_name()),
-                );
-            }
-        }
-    }
-    candidates.into_iter().find_map(absolute_existing_file)
+    let executable = std::env::current_exe().ok()?;
+    let directory = executable.parent()?;
+    [
+        directory.join(sidecar_name()),
+        directory
+            .parent()
+            .map(|engines| engines.join("db-sidecar").join(sidecar_name()))?,
+    ]
+    .into_iter()
+    .find_map(absolute_existing_file)
 }
 
 fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
@@ -162,14 +134,14 @@ fn absolute_existing_file(path: PathBuf) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-struct LazyHeadlessController {
+struct HeadlessController {
     sidecar_path: PathBuf,
     requested_profile: Mutex<RunnerResourcesProfile>,
     pool: OnceLock<Result<Arc<WorkerPoolControl>, RunnerFailureReason>>,
 }
 
 #[cfg(windows)]
-impl LazyHeadlessController {
+impl HeadlessController {
     fn new(sidecar_path: PathBuf, requested_profile: RunnerResourcesProfile) -> Self {
         Self {
             sidecar_path,
@@ -231,7 +203,7 @@ impl LazyHeadlessController {
 }
 
 #[cfg(windows)]
-impl OfficialRunnerController for LazyHeadlessController {
+impl OfficialRunnerController for HeadlessController {
     fn acquire(
         &self,
         run_id: RunId,
@@ -299,15 +271,17 @@ mod tests {
     use duckle_duckdb_engine::ExecutionRoute;
 
     #[test]
-    fn production_headless_engine_stays_compatible_before_cutover() {
-        let engine = engine_for_workspace(PathBuf::from("duckdb"), Path::new("."));
-        assert_eq!(engine.execution_route(), ExecutionRoute::CliCompatibility);
+    fn headless_engine_has_only_the_quack_route() {
+        let engine = engine_for_workspace(PathBuf::from("ignored"), Path::new("."));
+        assert_eq!(engine.execution_route(), ExecutionRoute::OfficialRunner);
     }
 
     #[test]
-    fn relative_sidecar_override_is_normalized_only_when_it_exists() {
-        let missing = PathBuf::from("definitely-missing-duckle-sidecar");
-        assert!(absolute_existing_file(missing).is_none());
+    fn missing_relative_sidecar_is_rejected() {
+        assert!(absolute_existing_file(PathBuf::from(
+            "definitely-missing-duckle-sidecar"
+        ))
+        .is_none());
     }
 
     #[test]
