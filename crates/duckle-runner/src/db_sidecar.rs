@@ -96,7 +96,10 @@ fn lock_is_stale(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn acquire_extension_stage_lock(path: &Path, bytes: &[u8]) -> Result<Option<ExtensionStageLock>, String> {
+fn acquire_extension_stage_lock(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<Option<ExtensionStageLock>, String> {
     let lock_path = path.with_extension("lock");
     let deadline = std::time::Instant::now() + EXTENSION_STAGE_LOCK_TIMEOUT;
 
@@ -130,32 +133,46 @@ fn acquire_extension_stage_lock(path: &Path, bytes: &[u8]) -> Result<Option<Exte
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "runner_unavailable".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "runner_unavailable".to_string())?;
     std::fs::create_dir_all(parent).map_err(|_| "runner_unavailable".to_string())?;
 
     let Some(_lock) = acquire_extension_stage_lock(path, bytes)? else {
         return Ok(());
     };
+
     // Re-check after acquiring the cross-process lock. A competing sidecar may
     // have completed between the caller's first read and lock acquisition.
     if file_matches(path, bytes) {
         return Ok(());
     }
 
+    // Never delete or replace an extension already present in DuckDB's cache.
+    // A different file at this versioned path is a package/cache mismatch and
+    // must fail closed rather than changing a file another process may have loaded.
+    if path.exists() {
+        return Err("runner_unavailable".to_string());
+    }
+
     let sequence = EXTENSION_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temp = path.with_extension(format!("part{}-{sequence}", std::process::id()));
     std::fs::write(&temp, bytes).map_err(|_| "runner_unavailable".to_string())?;
-    if std::fs::rename(&temp, path).is_err() {
-        // Windows rename does not replace an existing destination. Only the lock
-        // owner may enter this replacement window, so sibling warm workers cannot
-        // delete/recreate the extension underneath one another during LOAD quack.
-        let _ = std::fs::remove_file(path);
-        std::fs::rename(&temp, path).map_err(|_| {
+
+    match std::fs::rename(&temp, path) {
+        Ok(()) => Ok(()),
+        Err(_) if file_matches(path, bytes) => {
+            // Another process won the create race with the same verified bytes.
             let _ = std::fs::remove_file(&temp);
-            "runner_unavailable".to_string()
-        })?;
+            Ok(())
+        }
+        Err(_) => {
+            // Preserve whatever appeared at the final path. Only our private
+            // temporary file is removed; the cached extension is never touched.
+            let _ = std::fs::remove_file(&temp);
+            Err("runner_unavailable".to_string())
+        }
     }
-    Ok(())
 }
 
 fn stage_embedded_extension() -> Result<PathBuf, String> {
@@ -244,8 +261,25 @@ mod tests {
             worker.join().unwrap();
         }
 
-        assert_eq!(std::fs::read(path.as_ref()).unwrap(), payload.as_ref().as_slice());
+        assert_eq!(
+            std::fs::read(path.as_ref()).unwrap(),
+            payload.as_ref().as_slice()
+        );
         assert!(!path.with_extension("lock").exists());
+    }
+
+    #[test]
+    fn existing_different_extension_is_never_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("quack.duckdb_extension");
+        let existing = b"existing-extension";
+        std::fs::write(&path, existing).unwrap();
+
+        assert_eq!(
+            write_atomic(&path, b"embedded-extension"),
+            Err("runner_unavailable".to_string())
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), existing);
     }
 
     #[test]
