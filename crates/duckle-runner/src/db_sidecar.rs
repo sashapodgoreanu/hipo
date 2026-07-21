@@ -7,11 +7,15 @@
 //! the provider-private bootstrap protocol starts the loopback-only server.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const EMBEDDED_QUACK_EXTENSION: &[u8] =
     include_bytes!(env!("DUCKLE_EMBEDDED_QUACK_EXTENSION"));
 const DUCKDB_VERSION: &str = env!("DUCKLE_RUNNER_DUCKDB_VERSION");
 const QUACK_EXTENSION_FILE: &str = env!("DUCKLE_QUACK_EXTENSION_FILE");
+const EXTENSION_STAGE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const EXTENSION_STAGE_LOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+static EXTENSION_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn write_failure_marker(code: &str) {
     use std::io::Write;
@@ -68,12 +72,83 @@ fn extension_cache_path() -> Result<PathBuf, String> {
         .join(QUACK_EXTENSION_FILE))
 }
 
+struct ExtensionStageLock {
+    path: PathBuf,
+}
+
+impl Drop for ExtensionStageLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn file_matches(path: &Path, bytes: &[u8]) -> bool {
+    std::fs::read(path)
+        .map(|existing| existing == bytes)
+        .unwrap_or(false)
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+        .map(|age| age >= EXTENSION_STAGE_LOCK_STALE_AFTER)
+        .unwrap_or(false)
+}
+
+fn acquire_extension_stage_lock(path: &Path, bytes: &[u8]) -> Result<Option<ExtensionStageLock>, String> {
+    let lock_path = path.with_extension("lock");
+    let deadline = std::time::Instant::now() + EXTENSION_STAGE_LOCK_TIMEOUT;
+
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => return Ok(Some(ExtensionStageLock { path: lock_path })),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another freshly-started warm/on-demand worker may already have
+                // completed the identical staging operation. In that case there
+                // is nothing left to serialize and, importantly, nothing to
+                // replace while another connection is executing LOAD quack.
+                if file_matches(path, bytes) {
+                    return Ok(None);
+                }
+                if lock_is_stale(&lock_path) {
+                    let _ = std::fs::remove_file(&lock_path);
+                    continue;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err("runner_unavailable".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(_) => return Err("runner_unavailable".to_string()),
+        }
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or_else(|| "runner_unavailable".to_string())?;
     std::fs::create_dir_all(parent).map_err(|_| "runner_unavailable".to_string())?;
-    let temp = path.with_extension(format!("part{}", std::process::id()));
+
+    let Some(_lock) = acquire_extension_stage_lock(path, bytes)? else {
+        return Ok(());
+    };
+    // Re-check after acquiring the cross-process lock. A competing sidecar may
+    // have completed between the caller's first read and lock acquisition.
+    if file_matches(path, bytes) {
+        return Ok(());
+    }
+
+    let sequence = EXTENSION_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("part{}-{sequence}", std::process::id()));
     std::fs::write(&temp, bytes).map_err(|_| "runner_unavailable".to_string())?;
     if std::fs::rename(&temp, path).is_err() {
+        // Windows rename does not replace an existing destination. Only the lock
+        // owner may enter this replacement window, so sibling warm workers cannot
+        // delete/recreate the extension underneath one another during LOAD quack.
         let _ = std::fs::remove_file(path);
         std::fs::rename(&temp, path).map_err(|_| {
             let _ = std::fs::remove_file(&temp);
@@ -88,10 +163,7 @@ fn stage_embedded_extension() -> Result<PathBuf, String> {
         return Err("runner_unavailable".to_string());
     }
     let path = extension_cache_path()?;
-    let same = std::fs::read(&path)
-        .map(|existing| existing == EMBEDDED_QUACK_EXTENSION)
-        .unwrap_or(false);
-    if !same {
+    if !file_matches(&path, EMBEDDED_QUACK_EXTENSION) {
         write_atomic(&path, EMBEDDED_QUACK_EXTENSION)?;
     }
 
@@ -140,6 +212,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn approved_extension_cache_is_versioned_and_platform_scoped() {
@@ -151,6 +224,28 @@ mod tests {
         assert!(text.contains("extensions"));
         assert!(text.contains("v1.5.4"));
         assert!(text.ends_with(QUACK_EXTENSION_FILE));
+    }
+
+    #[test]
+    fn concurrent_identical_staging_keeps_one_complete_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = Arc::new(directory.path().join("quack.duckdb_extension"));
+        let payload = Arc::new(vec![0x51; 128 * 1024]);
+        let mut workers = Vec::new();
+
+        for _ in 0..8 {
+            let path = path.clone();
+            let payload = payload.clone();
+            workers.push(std::thread::spawn(move || {
+                write_atomic(&path, &payload).unwrap();
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        assert_eq!(std::fs::read(path.as_ref()).unwrap(), payload.as_ref().as_slice());
+        assert!(!path.with_extension("lock").exists());
     }
 
     #[test]
