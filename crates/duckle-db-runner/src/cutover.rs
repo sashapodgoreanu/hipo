@@ -43,6 +43,9 @@ impl EntryPointClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunnerSelection {
     Official,
+    /// Retained only so older exhaustive matches compile. `select_runner` never
+    /// returns this value and no runtime configuration can request it.
+    Compatibility,
 }
 
 /// Retained for source compatibility. Build and runtime environment variables
