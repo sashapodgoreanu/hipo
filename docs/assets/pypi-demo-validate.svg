@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="333" viewBox="0 0 660 333" role="img" aria-label="duckle validate  -  the CI gate">
+<style>
+.m{font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:13.5px;white-space:pre}
+.p{fill:#f5d90a;font-weight:700}
+.c{fill:#c9d5e1;font-weight:600}
+.out{fill:#c9d5e1}
+.dim{fill:#7d8ea1}
+.ok{fill:#5bc8f5}
+.err{fill:#f2555a}
+.key{fill:#f5d90a}
+.cur{animation:blink 1.06s steps(1,end) infinite}
+@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+</style>
+<rect width="660" height="333" rx="9" fill="#0f1720"/>
+<rect width="660" height="30" rx="9" fill="#18222e"/>
+<rect y="21" width="660" height="9" fill="#18222e"/>
+<circle cx="19" cy="15" r="5" fill="#f2555a"/>
+<circle cx="37" cy="15" r="5" fill="#f59f0a"/>
+<circle cx="55" cy="15" r="5" fill="#5bc8f5"/>
+<text x="237" y="19.5" class="m dim" font-size="11.5">duckle validate  -  the CI gate</text>
+<text x="18" y="65" class="m"><tspan class="p">$</tspan> <tspan class="c">duckle validate</tspan></text>
+<text x="18" y="86" class="m err">FAIL&#160;&#160;pipelines/broken.json</text>
+<text x="18" y="107" class="m dim">&#160;&#160;&#160;&#160;&#160;&#160;config:&#160;Filter&#160;(xf.filter&#160;/&#160;filter):&#160;missing&#160;main&#160;input</text>
+<text x="18" y="128" class="m ok">ok&#160;&#160;&#160;&#160;pipelines/orders.json&#160;&#160;(4&#160;stages)</text>
+<text x="18" y="170" class="m out">2&#160;pipeline(s)&#160;checked,&#160;1&#160;failed</text>
+<text x="18" y="212" class="m"><tspan class="p">$</tspan> <tspan class="c">echo $?</tspan></text>
+<text x="18" y="233" class="m key">1</text>
+<text x="18" y="275" class="m dim">#&#160;0&#160;clean&#160;|&#160;1&#160;a&#160;real&#160;finding&#160;|&#160;2&#160;the&#160;runner&#160;could&#160;not&#160;start</text>
+<text x="18" y="296" class="m dim">#&#160;No&#160;DuckDB,&#160;no&#160;credentials,&#160;no&#160;network:&#160;validate&#160;only&#160;compiles.</text>
+<rect class="cur" x="18" y="306" width="8" height="15" fill="#f5d90a"/>
+</svg>

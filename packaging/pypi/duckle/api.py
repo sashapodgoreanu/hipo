@@ -48,6 +48,19 @@ def _nid():
     return "n_" + uuid.uuid4().hex[:8]
 
 
+def _slug(component):
+    """A readable node id stem from a component id: src.csv -> csv.
+
+    The runner prints node ids in its per-stage run output, so a random
+    `n_7f3c4fa0` makes a run log unreadable. Deriving the id from the
+    component keeps that output legible ("csv ok (4 rows)") and makes a saved
+    pipeline diffable, since ids stay stable across regenerations of the same
+    chain rather than changing on every build.
+    """
+    stem = component.split(".", 1)[-1].replace(".", "_")
+    return "".join(c if (c.isalnum() or c == "_") else "_" for c in stem) or "node"
+
+
 class Pipeline:
     """An immutable-ish builder over a Duckle pipeline graph.
 
@@ -81,7 +94,13 @@ class Pipeline:
     # ---------------------------------------------------------- graph building
 
     def _add(self, kind, component, properties, label=None, connect=True):
-        node_id = _nid()
+        # Readable, collision-free id: csv, filter, filter_2, ...
+        stem = _slug(component)
+        node_id = stem
+        n = 1
+        while any(x["id"] == node_id for x in self._nodes):
+            n += 1
+            node_id = "{}_{}".format(stem, n)
         self._nodes.append({
             "id": node_id,
             "type": kind,

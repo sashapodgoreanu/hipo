@@ -17,6 +17,7 @@ Example platform tags:
 """
 
 import argparse
+import re
 import os
 import shutil
 import subprocess
@@ -24,6 +25,64 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+
+# Where repo-relative links have to point once the README is served by PyPI.
+RAW_BASE = "https://raw.githubusercontent.com/slothflowlabs/duckle/main/"
+BLOB_BASE = "https://github.com/slothflowlabs/duckle/blob/main/"
+# Top-level directories the README links into.
+REPO_DIRS = "docs|website|crates|apps|frontend|packaging|scripts|benchmarks"
+
+
+def absolutize_links(text):
+    """Rewrite repo-relative links so the README renders away from GitHub.
+
+    PyPI serves the description standalone, so `src="docs/assets/x.png"`
+    resolves against pypi.org and 404s. Images point at raw.githubusercontent
+    (which serves real image content types) and document links at the blob
+    view (which is what a reader actually wants to land on). Anchor links like
+    `#whats-new-in-v056` are left alone; PyPI keeps heading anchors.
+    """
+    n = 0
+
+    def sub(pattern, repl, s):
+        nonlocal n
+        s, k = re.subn(pattern, repl, s)
+        n += k
+        return s
+
+    # HTML <img src="docs/...">
+    text = sub(
+        r'(<img[^>]*\ssrc=")(?:\./)?(' + REPO_DIRS + r')/',
+        lambda m: m.group(1) + RAW_BASE + m.group(2) + "/",
+        text,
+    )
+    # HTML <a href="docs/...">
+    text = sub(
+        r'(<a[^>]*\shref=")(?:\./)?(' + REPO_DIRS + r')/',
+        lambda m: m.group(1) + BLOB_BASE + m.group(2) + "/",
+        text,
+    )
+    # Markdown image ![alt](docs/...)
+    text = sub(
+        r'(!\[[^\]]*\]\()(?:\./)?(' + REPO_DIRS + r')/',
+        lambda m: m.group(1) + RAW_BASE + m.group(2) + "/",
+        text,
+    )
+    # Markdown link [text](docs/...) - after images, so the ! form is taken first.
+    text = sub(
+        r'(?<!!)(\[[^\]]*\]\()(?:\./)?(' + REPO_DIRS + r')/',
+        lambda m: m.group(1) + BLOB_BASE + m.group(2) + "/",
+        text,
+    )
+    # Root-level files and dirs the README points at: CONTRIBUTING.md,
+    # SPONSORS.md, samples/, .github/workflows/, .gitlab-ci.yml.
+    text = sub(
+        r'(?<!!)(\[[^\]]*\]\()(?:\./)?((?:\.github|\.gitlab-ci\.yml|samples|[A-Z][A-Za-z0-9_]*\.md)(?:[/#][^)]*)?)\)',
+        lambda m: m.group(1) + BLOB_BASE + m.group(2) + ")",
+        text,
+    )
+    return text, n
 
 
 def main():
@@ -54,6 +113,19 @@ def main():
 
         size_mb = os.path.getsize(dest) / (1024 * 1024)
         print("staged {} ({:.1f} MB)".format(target_name, size_mb))
+
+        # The package README is the PyPI page. It is written with absolute
+        # URLs already, but run the rewriter anyway so a repo-relative link
+        # added later cannot silently ship as a 404 on pypi.org.
+        pkg_readme = os.path.join(stage, "README.md")
+        if os.path.isfile(pkg_readme):
+            with open(pkg_readme, encoding="utf-8") as fh:
+                body = fh.read()
+            body, rewritten = absolutize_links(body)
+            with open(pkg_readme, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(body)
+            print("README.md {:.0f} KB, {} relative link(s) absolutized".format(
+                len(body.encode("utf-8")) / 1024, rewritten))
 
         cmd = [
             sys.executable, "-m", "build", "--wheel",
