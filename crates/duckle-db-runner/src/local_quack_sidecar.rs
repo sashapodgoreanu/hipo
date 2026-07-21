@@ -4,11 +4,16 @@
 //! pipe. The parent keeps the Quack endpoint and client secret inside this
 //! module; `WorkerPoolControl`, IPC and the executor see only `RunDatabase`.
 
-use crate::bootstrap::{read_authenticated_readiness, write_authenticated_readiness, BootstrapMessage};
-use crate::local_process_provider::{LaunchedLocalSidecar, LocalSidecarLaunch, LocalSidecarLauncher, ManagedSidecar};
+use crate::bootstrap::{
+    read_authenticated_readiness, write_authenticated_readiness, BootstrapMessage,
+};
+use crate::local_process_provider::{
+    LaunchedLocalSidecar, LocalSidecarLaunch, LocalSidecarLauncher, ManagedSidecar,
+};
 use crate::model::{RunCancellation, RunnerFailureReason};
 use crate::resources::ResolvedRunnerResources;
 use crate::run_database::{QuackTransport, RunDatabase};
+use crate::sidecar_diagnostics::{append_sidecar_diagnostic, SidecarDiagnosticCode};
 use duckdb::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,6 +35,7 @@ pub struct WindowsLocalSidecarLauncher {
 impl WindowsLocalSidecarLauncher {
     pub fn new(program: PathBuf) -> Result<Self, RunnerFailureReason> {
         if !program.is_absolute() {
+            append_sidecar_diagnostic(&program, SidecarDiagnosticCode::ParentProgramInvalid);
             return Err(RunnerFailureReason::RunnerUnavailable);
         }
         Ok(Self { program })
@@ -42,33 +48,56 @@ impl LocalSidecarLauncher for WindowsLocalSidecarLauncher {
         &self,
         request: LocalSidecarLaunch,
     ) -> Result<LaunchedLocalSidecar, RunnerFailureReason> {
+        append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ParentLaunchStarted);
+
         if request.cancellation.is_cancelled() {
+            append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ParentCancelled);
             return Err(RunnerFailureReason::Cancelled);
         }
 
-        let mut process = crate::windows_bootstrap::spawn_sidecar(&self.program, &[])
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+        let mut process = match crate::windows_bootstrap::spawn_sidecar(&self.program, &[]) {
+            Ok(process) => process,
+            Err(_) => {
+                append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ParentSpawnFailed);
+                return Err(RunnerFailureReason::RunnerUnavailable);
+            }
+        };
+
         if process.send_bootstrap(&request.bootstrap).is_err() {
+            append_sidecar_diagnostic(
+                &self.program,
+                SidecarDiagnosticCode::ParentBootstrapSendFailed,
+            );
             let _ = process.terminate_tree();
             return Err(RunnerFailureReason::RunnerUnavailable);
         }
 
-        let readiness = match read_authenticated_readiness(process.control_reader(), &request.bootstrap) {
+        let readiness = match read_authenticated_readiness(
+            process.control_reader(),
+            &request.bootstrap,
+        ) {
             Ok(readiness) => readiness,
             Err(_) => {
+                append_sidecar_diagnostic(
+                    &self.program,
+                    SidecarDiagnosticCode::ParentReadinessFailed,
+                );
                 let _ = process.terminate_tree();
                 return Err(RunnerFailureReason::RunnerUnavailable);
             }
         };
 
         if request.cancellation.is_cancelled() {
+            append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ParentCancelled);
             let _ = process.terminate_tree();
             return Err(RunnerFailureReason::Cancelled);
         }
 
+        append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ParentReadinessOk);
         Ok(LaunchedLocalSidecar::new(
             Box::new(WindowsManagedSidecar {
                 process,
+                program: self.program.clone(),
                 readiness_endpoint: readiness.endpoint(),
                 bootstrap: request.bootstrap,
                 profile: request.effective_profile,
@@ -81,6 +110,7 @@ impl LocalSidecarLauncher for WindowsLocalSidecarLauncher {
 #[cfg(windows)]
 struct WindowsManagedSidecar {
     process: crate::windows_bootstrap::SpawnedSidecar,
+    program: PathBuf,
     readiness_endpoint: std::net::SocketAddr,
     bootstrap: BootstrapMessage,
     profile: ResolvedRunnerResources,
@@ -92,37 +122,89 @@ impl WindowsManagedSidecar {
         &self,
         cancellation: RunCancellation,
     ) -> Result<RunDatabase, RunnerFailureReason> {
+        append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ClientOpenStarted);
+
         if cancellation.is_cancelled() {
+            append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ParentCancelled);
             return Err(RunnerFailureReason::Cancelled);
         }
 
-        let connection = Connection::open_in_memory()
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-        connection
-            .execute_batch("LOAD quack;")
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+        let connection = match Connection::open_in_memory() {
+            Ok(connection) => connection,
+            Err(_) => {
+                append_sidecar_diagnostic(
+                    &self.program,
+                    SidecarDiagnosticCode::ClientConnectionOpenFailed,
+                );
+                return Err(RunnerFailureReason::RunnerUnavailable);
+            }
+        };
+
+        if connection.execute_batch("LOAD quack;").is_err() {
+            append_sidecar_diagnostic(
+                &self.program,
+                SidecarDiagnosticCode::ClientQuackLoadFailed,
+            );
+            return Err(RunnerFailureReason::RunnerUnavailable);
+        }
 
         if let Some(threads) = self.profile.cpu_threads {
-            connection
+            if connection
                 .execute_batch(&format!("SET threads = {threads};"))
-                .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+                .is_err()
+            {
+                append_sidecar_diagnostic(
+                    &self.program,
+                    SidecarDiagnosticCode::ClientProfileApplyFailed,
+                );
+                return Err(RunnerFailureReason::RunnerUnavailable);
+            }
         }
 
         let uri = format!("quack:{}", self.readiness_endpoint);
-        connection
+        if connection
             .execute(
                 "CREATE TEMPORARY SECRET duckle_runner_quack_credentials (TYPE quack, SCOPE ?, TOKEN ?)",
                 params![uri, bootstrap_token(&self.bootstrap)],
             )
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
-        connection
+            .is_err()
+        {
+            append_sidecar_diagnostic(
+                &self.program,
+                SidecarDiagnosticCode::ClientSecretCreateFailed,
+            );
+            return Err(RunnerFailureReason::RunnerUnavailable);
+        }
+
+        if connection
             .execute_batch(&format!(
                 "ATTACH {} AS {REMOTE_ALIAS} (TYPE quack);",
                 sql_literal(&uri)
             ))
-            .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+            .is_err()
+        {
+            append_sidecar_diagnostic(
+                &self.program,
+                SidecarDiagnosticCode::ClientAttachFailed,
+            );
+            return Err(RunnerFailureReason::RunnerUnavailable);
+        }
 
-        let transport = QuackTransport::from_attached_connection(connection, REMOTE_ALIAS.into())?;
+        let transport = match QuackTransport::from_attached_connection(
+            connection,
+            REMOTE_ALIAS.into(),
+        ) {
+            Ok(transport) => transport,
+            Err(reason) => {
+                append_sidecar_diagnostic(
+                    &self.program,
+                    SidecarDiagnosticCode::ClientTransportFailed,
+                );
+                return Err(reason);
+            }
+        };
+
+        append_sidecar_diagnostic(&self.program, SidecarDiagnosticCode::ClientAttachOk);
         Ok(RunDatabase::new(Arc::new(transport), cancellation))
     }
 }
@@ -191,13 +273,14 @@ fn run_windows_sidecar_from_bootstrap(
     mut control_writer: std::fs::File,
 ) -> Result<(), RunnerFailureReason> {
     let profile = bootstrap.effective_profile();
-    let temp_directory = std::env::temp_dir().join(format!("duckle-db-runner-{}", bootstrap.worker_id()));
+    let temp_directory =
+        std::env::temp_dir().join(format!("duckle-db-runner-{}", bootstrap.worker_id()));
     std::fs::create_dir_all(&temp_directory)
         .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     let cleanup = TempDirectoryGuard(temp_directory.clone());
 
-    let connection = Connection::open_in_memory()
-        .map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
+    let connection =
+        Connection::open_in_memory().map_err(|_| RunnerFailureReason::RunnerUnavailable)?;
     apply_and_verify_profile(&connection, profile, &temp_directory)?;
     connection
         .execute_batch("LOAD quack;")
@@ -375,7 +458,10 @@ fn setting_bytes_match(value: &str, expected: u64) -> bool {
 }
 
 fn parse_duckdb_bytes(value: &str) -> Option<u64> {
-    let compact: String = value.chars().filter(|character| !character.is_whitespace()).collect();
+    let compact: String = value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
     let unit_start = compact
         .char_indices()
         .find(|(_, character)| !character.is_ascii_digit() && *character != '.')
@@ -409,7 +495,10 @@ fn parse_duckdb_bytes(value: &str) -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn inherited_handle(args: &[std::ffi::OsString], flag: &str) -> Result<usize, RunnerFailureReason> {
+fn inherited_handle(
+    args: &[std::ffi::OsString],
+    flag: &str,
+) -> Result<usize, RunnerFailureReason> {
     let mut values = args.iter().map(|value| value.to_string_lossy());
     while let Some(value) = values.next() {
         if value == flag {
@@ -461,7 +550,9 @@ mod tests {
         .unwrap();
         let token = bootstrap_token(&bootstrap);
         assert_eq!(token.len(), 64);
-        assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+        assert!(token
+            .chars()
+            .all(|character| character.is_ascii_hexdigit()));
     }
 
     #[test]
