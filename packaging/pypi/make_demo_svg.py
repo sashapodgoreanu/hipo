@@ -116,8 +116,7 @@ def render(path, title, lines):
 # sentence into their agent and the agent does the rest. Everything the agent
 # prints is verbatim from a real `uvx duckle quickstart` run.
 INSTALL = [
-    ("key", "> Run uvx duckle quickstart to build my first data pipeline"),
-    ("key", "  and run it"),
+    ("key", "> Run uvx duckle@latest quickstart to build my first pipeline and run it"),
     ("out", ""),
     ("dim", "  Running uvx duckle quickstart ..."),
     ("out", ""),

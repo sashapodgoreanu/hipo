@@ -10,9 +10,9 @@
 
 Paste this into Claude Code, Cursor, or Codex. The agent does the rest.
 
-> Run `uvx duckle quickstart` to build my first data pipeline and run it, then add duckle as an MCP server with `claude mcp add duckle -- uvx duckle mcp` so you can build more.
+> Run `uvx duckle@latest quickstart` to build my first pipeline and run it
 
-Nothing to install first. The agent fetches Duckle and the DuckDB engine on demand, runs a real pipeline, shows you the rows, and then has 19 tools for building the next one.
+Nothing to install first. The agent fetches Duckle and the DuckDB engine on demand, runs a real pipeline, and shows you the rows.
 
 Prefer to drive it yourself:
 
