@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidecarDiagnosticCode {
+    DesktopProfileInvalid,
+    DesktopSidecarMissing,
+    DesktopControllerReady,
+    DesktopProfileApplyFailed,
+    DesktopPoolCreateStarted,
+    DesktopPoolCreateFailed,
+    DesktopPoolReady,
     ParentLaunchStarted,
     ParentProgramInvalid,
     ParentSpawnFailed,
@@ -27,7 +34,14 @@ pub enum SidecarDiagnosticCode {
 }
 
 impl SidecarDiagnosticCode {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 22] = [
+        Self::DesktopProfileInvalid,
+        Self::DesktopSidecarMissing,
+        Self::DesktopControllerReady,
+        Self::DesktopProfileApplyFailed,
+        Self::DesktopPoolCreateStarted,
+        Self::DesktopPoolCreateFailed,
+        Self::DesktopPoolReady,
         Self::ParentLaunchStarted,
         Self::ParentProgramInvalid,
         Self::ParentSpawnFailed,
@@ -47,6 +61,13 @@ impl SidecarDiagnosticCode {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::DesktopProfileInvalid => "desktop.profile_invalid",
+            Self::DesktopSidecarMissing => "desktop.sidecar_missing",
+            Self::DesktopControllerReady => "desktop.controller_ready",
+            Self::DesktopProfileApplyFailed => "desktop.profile_apply_failed",
+            Self::DesktopPoolCreateStarted => "desktop.pool_create_started",
+            Self::DesktopPoolCreateFailed => "desktop.pool_create_failed",
+            Self::DesktopPoolReady => "desktop.pool_ready",
             Self::ParentLaunchStarted => "parent.launch_started",
             Self::ParentProgramInvalid => "parent.program_invalid",
             Self::ParentSpawnFailed => "parent.spawn_failed",
@@ -70,8 +91,29 @@ pub fn diagnostic_log_path(program: &Path) -> PathBuf {
     program.with_extension("log")
 }
 
+pub fn desktop_sidecar_program_path() -> PathBuf {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("io.duckle.app")
+        .join("engines")
+        .join("db-sidecar")
+        .join("duckle-db-sidecar.exe")
+}
+
+pub fn append_desktop_diagnostic(
+    program: Option<&Path>,
+    code: SidecarDiagnosticCode,
+) {
+    let fallback = desktop_sidecar_program_path();
+    append_sidecar_diagnostic(program.unwrap_or(&fallback), code);
+}
+
 pub fn append_sidecar_diagnostic(program: &Path, code: SidecarDiagnosticCode) {
     let path = diagnostic_log_path(program);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let timestamp_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -94,7 +136,11 @@ mod tests {
     fn diagnostic_codes_are_static_and_non_sensitive() {
         for code in SidecarDiagnosticCode::ALL {
             let value = code.as_str();
-            assert!(value.starts_with("parent.") || value.starts_with("client."));
+            assert!(
+                value.starts_with("desktop.")
+                    || value.starts_with("parent.")
+                    || value.starts_with("client.")
+            );
             assert!(!value.contains(['\\', '/', ':', '=', ' ']));
             assert!(!value.contains("token"));
             assert!(!value.contains("sql"));
