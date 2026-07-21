@@ -2,6 +2,25 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Duckle: start Tauri dev with debug logs",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\debug.ps1"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
       "label": "tauri: frontend dev server",
       "type": "shell",
       "command": "npm --prefix frontend run dev",
@@ -21,7 +40,17 @@
       "label": "tauri: build desktop debug",
       "type": "shell",
       "command": "cargo",
-      "args": ["build", "-p", "duckle-desktop"],
+      "args": [
+        "build",
+        "-p",
+        "duckle-runner",
+        "--bins",
+        "&&",
+        "cargo",
+        "build",
+        "-p",
+        "duckle-desktop"
+      ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$rustc",
       "group": "build"
