@@ -2,22 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Duckle: debug backend",
+      "name": "Duckle: attach desktop (run debug.ps1 first)",
       "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}\\target\\debug\\duckle.exe",
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "environment": [
-        { "name": "DUCKLE_DUCKDB_BIN", "value": "${workspaceFolder}\\.duckdb-cli-v1.5.3\\duckdb.exe" },
-        { "name": "RUST_BACKTRACE", "value": "1" },
-        { "name": "RUST_LOG", "value": "info" }
-      ],
-      "preLaunchTask": "tauri: build desktop debug",
-      "dependsOn": "tauri: frontend dev server",
-      "dependsOrder": "parallel",
-      "stopAtEntry": false,
-      "console": "integratedTerminal"
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    },
+    {
+      "name": "Duckle: attach database sidecar",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
     }
   ]
 }
