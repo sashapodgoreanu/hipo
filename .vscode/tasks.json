@@ -39,17 +39,11 @@
     {
       "label": "tauri: build desktop debug",
       "type": "shell",
-      "command": "cargo",
+      "command": "powershell",
       "args": [
-        "build",
-        "-p",
-        "duckle-runner",
-        "--bins",
-        "&&",
-        "cargo",
-        "build",
-        "-p",
-        "duckle-desktop"
+        "-NoProfile",
+        "-Command",
+        "cargo build -p duckle-runner --bins; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; cargo build -p duckle-desktop; exit $LASTEXITCODE"
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$rustc",
