@@ -3,16 +3,15 @@
 //! Packaged local database sidecar entrypoint.
 //!
 //! The Quack extension is embedded only after build-time checksum validation.
-//! At process start it is staged into DuckDB's versioned extension cache, then
-//! the provider-private bootstrap protocol starts the loopback-only server.
+//! At process start it is staged into a private versioned directory beside the
+//! sidecar, then the provider-private bootstrap protocol starts the loopback-only
+//! server. DuckDB's global user extension cache is never modified.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const EMBEDDED_QUACK_EXTENSION: &[u8] =
     include_bytes!(env!("DUCKLE_EMBEDDED_QUACK_EXTENSION"));
-const DUCKDB_VERSION: &str = env!("DUCKLE_RUNNER_DUCKDB_VERSION");
-const QUACK_EXTENSION_FILE: &str = env!("DUCKLE_QUACK_EXTENSION_FILE");
 const EXTENSION_STAGE_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const EXTENSION_STAGE_LOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 static EXTENSION_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -41,35 +40,12 @@ fn write_failure_marker(code: &str) {
     }
 }
 
-fn duckdb_home() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-}
-
-fn repository_platform() -> Option<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => Some("windows_amd64"),
-        ("macos", "x86_64") => Some("osx_amd64"),
-        ("linux", "x86_64") => Some("linux_amd64"),
-        _ => None,
-    }
-}
-
-fn extension_cache_path() -> Result<PathBuf, String> {
-    let home = duckdb_home().ok_or_else(|| "runner_unavailable".to_string())?;
-    let platform = repository_platform().ok_or_else(|| "runner_unavailable".to_string())?;
-    Ok(home
-        .join(".duckdb")
-        .join("extensions")
-        .join(format!("v{DUCKDB_VERSION}"))
-        .join(platform)
-        .join(QUACK_EXTENSION_FILE))
+fn extension_path() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe().map_err(|_| "runner_unavailable".to_string())?;
+    let platform = duckle_db_runner::bundle::BundlePlatform::current()
+        .ok_or_else(|| "runner_unavailable".to_string())?;
+    duckle_db_runner::bundle::packaged_extension_path(&executable, platform)
+        .map_err(|_| "runner_unavailable".to_string())
 }
 
 struct ExtensionStageLock {
@@ -112,9 +88,7 @@ fn acquire_extension_stage_lock(
             Ok(_) => return Ok(Some(ExtensionStageLock { path: lock_path })),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Another freshly-started warm/on-demand worker may already have
-                // completed the identical staging operation. In that case there
-                // is nothing left to serialize and, importantly, nothing to
-                // replace while another connection is executing LOAD quack.
+                // completed the identical private staging operation.
                 if file_matches(path, bytes) {
                     return Ok(None);
                 }
@@ -148,9 +122,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         return Ok(());
     }
 
-    // Never delete or replace an extension already present in DuckDB's cache.
-    // A different file at this versioned path is a package/cache mismatch and
-    // must fail closed rather than changing a file another process may have loaded.
+    // Never delete or replace an extension already present at the private,
+    // versioned package path. A mismatch fails closed and leaves the file intact.
     if path.exists() {
         return Err("runner_unavailable".to_string());
     }
@@ -168,7 +141,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         }
         Err(_) => {
             // Preserve whatever appeared at the final path. Only our private
-            // temporary file is removed; the cached extension is never touched.
+            // temporary file is removed.
             let _ = std::fs::remove_file(&temp);
             Err("runner_unavailable".to_string())
         }
@@ -179,7 +152,7 @@ fn stage_embedded_extension() -> Result<PathBuf, String> {
     if EMBEDDED_QUACK_EXTENSION.is_empty() {
         return Err("runner_unavailable".to_string());
     }
-    let path = extension_cache_path()?;
+    let path = extension_path()?;
     if !file_matches(&path, EMBEDDED_QUACK_EXTENSION) {
         write_atomic(&path, EMBEDDED_QUACK_EXTENSION)?;
     }
@@ -195,12 +168,12 @@ fn stage_embedded_extension() -> Result<PathBuf, String> {
 
 #[cfg(windows)]
 fn run() -> Result<(), String> {
-    let _extension = stage_embedded_extension().map_err(|reason| {
+    let extension = stage_embedded_extension().map_err(|reason| {
         write_failure_marker("sidecar.extension_stage_failed");
         reason
     })?;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    duckle_db_runner::local_quack_sidecar::run_windows_sidecar(&args).map_err(|_| {
+    duckle_db_runner::local_quack_sidecar::run_windows_sidecar(&args, &extension).map_err(|_| {
         write_failure_marker("sidecar.bootstrap_or_quack_failed");
         "runner_unavailable".to_string()
     })
@@ -232,15 +205,16 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn approved_extension_cache_is_versioned_and_platform_scoped() {
-        if repository_platform().is_none() || duckdb_home().is_none() {
+    fn approved_extension_path_is_private_versioned_and_platform_scoped() {
+        if duckle_db_runner::bundle::BundlePlatform::current().is_none() {
             return;
         }
-        let path = extension_cache_path().unwrap();
+        let path = extension_path().unwrap();
         let text = path.to_string_lossy();
         assert!(text.contains("extensions"));
         assert!(text.contains("v1.5.4"));
-        assert!(text.ends_with(QUACK_EXTENSION_FILE));
+        assert!(text.ends_with(duckle_db_runner::bundle::QUACK_EXTENSION_FILE));
+        assert!(!text.contains(".duckdb"));
     }
 
     #[test]
